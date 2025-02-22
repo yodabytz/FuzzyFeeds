@@ -17,7 +17,7 @@ FuzzyFeeds is an IRC bot that aggregates RSS and Atom feeds in real-time. It all
 1. **Clone the Repository:**
 
    ```bash
-   git clone https://github.com/yourusername/FuzzyFeeds.git
+   git clone https://github.com/yodabytz/FuzzyFeeds.git
    cd FuzzyFeeds
 
 ## Install Dependencies:
