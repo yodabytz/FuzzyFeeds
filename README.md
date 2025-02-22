@@ -76,3 +76,16 @@ Display help information.
 
 !restart / !quit
 Restart or gracefully shut down the bot (admin only).
+
+## GitHub Feed:
+To monitor your GitHub activity (e.g., repository creation or updates), add the following Atom feed:
+```
+https://github.com/yodabytz.atom
+```
+Use the !addfeed command to add this feed to a channel.
+
+## Contributing
+Contributions are welcome! Please fork the repository and submit pull requests. For major changes, open an issue first to discuss what you would like to change.
+
+## License
+This project is licensed under the MIT License.
