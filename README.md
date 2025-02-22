@@ -78,7 +78,7 @@ Display help information.
 Restart or gracefully shut down the bot (admin only).
 
 ## GitHub Feed:
-To monitor your GitHub activity (e.g., repository creation or updates), add the following Atom feed:
+To monitor FuzzyFeeds' GitHub activity (e.g., repository creation or updates), add the following Atom feed:
 ```
 https://github.com/yodabytz.atom](https://github.com/yodabytz/FuzzyFeeds/commits/main.atom
 ```
