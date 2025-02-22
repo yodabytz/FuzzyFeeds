@@ -1,0 +1,16 @@
+{
+  "addfeed": "!addfeed <feed_name> <URL> - Admin only: Add an RSS feed to this channel.",
+  "removefeed": "!removefeed <feed_name> - Admin only: Remove an RSS feed from this channel.",
+  "listfeeds": "!listfeeds - List RSS feeds for this channel.",
+  "latest": "!latest <feed_name> - Show the latest entry (title and link) for the specified feed.",
+  "setinterval": "!setinterval <minutes> - Admin only: Set feed check interval for this channel.",
+  "subscribe": "!subscribe <feed_name> <URL> - Subscribe privately to a feed.",
+  "unsubscribe": "!unsubscribe <feed_name> - Unsubscribe from a feed.",
+  "mysubscriptions": "!mysubscriptions - List your private subscriptions.",
+  "reloadconfig": "!reloadconfig - Admin only: Reload configuration and persistent data.",
+  "stats": "!stats - Show usage statistics (number of feeds, subscriptions, etc.).",
+  "restart": "!restart - Admin only: Restart the bot.",
+  "quit": "!quit - Admin only: Disconnect the bot gracefully.",
+  "help": "!help [command] - Show help (if a command is specified, show detailed help for that command).",
+  "search": "!search <query> - Search the web for RSS feeds matching the query and display the top 5 results."
+}
