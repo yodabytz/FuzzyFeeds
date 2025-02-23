@@ -34,48 +34,61 @@ Edit config.py to set your IRC server details, channels, admin credentials, SSL 
 python main.py
 ```
 
-## IRC Commands:
-!addfeed <feed_name> <URL>
-Admin only. Add an RSS/Atom feed to the channel.
+## IRC Commands
 
-!removefeed <feed_name>
-Admin only. Remove a feed from the channel.
+- `!addfeed <feed_name> <URL>`  
+  *Admin only.* Add an RSS/Atom feed to the channel.
 
-!listfeeds
-List all feeds for the channel.
+- `!delfeed <feed_name>`  
+  *Admin only.* Delete a feed from the channel.
 
-!latest <feed_name>
-Show the latest entry (title and link) for the specified feed.
+- `!listfeeds`  
+  List all feeds for the channel.
 
-!setinterval <minutes>
-Admin only. Set the feed check interval for the channel.
+- `!latest <feed_name>`  
+  Show the latest entry (title and link) for the specified feed.
 
-!subscribe <feed_name> <URL>
-Subscribe privately to a feed.
+- `!setinterval <minutes>`  
+  *Admin only.* Set the feed check interval for the channel.
 
-!unsubscribe <feed_name>
-Unsubscribe from a feed.
+- `!addsub <feed_name> <URL>`  
+  Subscribe privately to a feed.
 
-!mysubscriptions
-List your private subscriptions.
+- `!unsub <feed_name>`  
+  Unsubscribe from a feed.
 
-!join <#channel> [adminnick]
-Main admin only. Join a channel. Optionally assign a channel admin.
+- `!mysubs`  
+  List your private subscriptions.
 
-!part <#channel>
-Leave a channel and clear its configuration.
+- `!getfeed <title_or_domain>`  
+  Search the internet for a feed matching the title or domain and show the latest entry.
 
-!stats
-Display uptime, channel feed counts, and user subscription counts publicly in the channel.
+- `!join <#channel> [adminnick]`  
+  *Main admin only.* Join a channel. Optionally assign a channel admin.
 
-!admin
-Show all channel admin assignments.
+- `!part <#channel>`  
+  Leave a channel and clear its configuration.
 
-!help [command]
-Display help information.
+- `!stats`  
+  Display uptime, channel feed counts, and user subscription counts publicly in the channel.
 
-!restart / !quit
-Restart or gracefully shut down the bot (admin only).
+- `!admin`  
+  Show all channel admin assignments.
+
+- `!setsetting <key> <value>`  
+  Set a personal setting.
+
+- `!getsetting <key>`  
+  Get a personal setting.
+
+- `!settings`  
+  List all your personal settings.
+
+- `!help [command]`  
+  Display help information.
+
+- `!restart` / `!quit`  
+  Restart or gracefully shut down the bot (*Admin only*).
 
 ## GitHub Feed:
 To monitor FuzzyFeeds' GitHub activity (e.g., repository creation or updates), add the following Atom feed:
