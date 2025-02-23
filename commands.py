@@ -157,6 +157,26 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
             send_message(irc, response_target, f"Feed '{feed_name}' not found in {target}.")
         return
 
+    # New command: !latestsub for user subscriptions.
+    elif message.startswith("!latestsub "):
+        parts = message.split(" ", 1)
+        if len(parts) < 2 or not parts[1].strip():
+            send_private_message(irc, user, "Usage: !latestsub <feed_name>")
+            return
+        feed_name = parts[1].strip()
+        uname = user.lower()
+        if uname in feed.subscriptions and feed_name in feed.subscriptions[uname]:
+            url = feed.subscriptions[uname][feed_name]
+            title, link = feed.fetch_latest_article(url)
+            if title and link:
+                send_message(irc, response_target, f"Latest from your subscription '{feed_name}': {title}")
+                send_message(irc, response_target, f"Link: {link}")
+            else:
+                send_message(irc, response_target, f"No entry available for {feed_name}.")
+        else:
+            send_private_message(irc, user, f"You are not subscribed to feed '{feed_name}'.")
+        return
+
     elif message.startswith("!setinterval "):
         if not effective_op:
             send_message(irc, response_target, "Not authorized to use !setinterval.")
