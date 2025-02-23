@@ -104,19 +104,20 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
         send_message(irc, response_target, f"Feed added: {feed_name} ({feed_url})")
         return
 
-    elif message.startswith("!removefeed "):
+    elif message.startswith("!delfeed "):
+        # Changed command: previously !removefeed
         if not effective_op:
-            send_message(irc, response_target, "Not authorized to use !removefeed.")
+            send_message(irc, response_target, "Not authorized to use !delfeed.")
             return
         parts = message.split(" ", 1)
         if len(parts) < 2:
-            send_message(irc, response_target, "Usage: !removefeed <feed_name>")
+            send_message(irc, response_target, "Usage: !delfeed <feed_name>")
             return
         feed_name = parts[1].strip()
         if target in feed.channel_feeds and feed_name in feed.channel_feeds[target]:
             del feed.channel_feeds[target][feed_name]
             feed.save_feeds()
-            send_message(irc, response_target, f"Feed removed: {feed_name}")
+            send_message(irc, response_target, f"Feed deleted: {feed_name}")
         else:
             send_message(irc, response_target, f"Feed '{feed_name}' not found in {target}.")
         return
@@ -157,8 +158,8 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
             send_message(irc, response_target, f"Feed '{feed_name}' not found in {target}.")
         return
 
-    # New command: !latestsub for user subscriptions.
     elif message.startswith("!latestsub "):
+        # New command for latest article from a subscribed feed.
         parts = message.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
             send_private_message(irc, user, "Usage: !latestsub <feed_name>")
@@ -205,6 +206,27 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
             return
         lines = [f"{title} {url}" for title, url in results]
         send_multiline_message(irc, response_target, "\n".join(lines))
+        return
+
+    elif message.startswith("!getfeed "):
+        # New command: searches the internet for a feed matching the title or domain and shows the latest article.
+        parts = message.split(" ", 1)
+        if len(parts) < 2 or not parts[1].strip():
+            send_message(irc, response_target, "Usage: !getfeed <title_or_domain>")
+            return
+        query = parts[1].strip()
+        results = search_feeds(query)
+        if not results:
+            send_message(irc, response_target, "No matching feed found.")
+            return
+        # Use the first valid feed.
+        feed_title, feed_url = results[0]
+        title, link = feed.fetch_latest_article(feed_url)
+        if title and link:
+            send_message(irc, response_target, f"Latest from {feed_title}: {title}")
+            send_message(irc, response_target, f"Link: {link}")
+        else:
+            send_message(irc, response_target, f"No entry available for feed {feed_title}.")
         return
 
     elif message.startswith("!join "):
@@ -267,10 +289,11 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
         send_message(irc, response_target, f"Left {channel_to_part} and cleared its configuration.")
         return
 
-    elif message.startswith("!subscribe "):
+    elif message.startswith("!addsub "):
+        # Changed command: previously !subscribe
         parts = message.split(" ", 2)
         if len(parts) < 3:
-            send_private_message(irc, user, "Usage: !subscribe <feed_name> <URL>")
+            send_private_message(irc, user, "Usage: !addsub <feed_name> <URL>")
             return
         feed_name = parts[1].strip()
         feed_url = parts[2].strip()
@@ -282,10 +305,11 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
         send_private_message(irc, user, f"Subscribed to feed: {feed_name} ({feed_url})")
         return
 
-    elif message.startswith("!unsubscribe "):
+    elif message.startswith("!unsub "):
+        # Changed command: previously !unsubscribe
         parts = message.split(" ", 1)
         if len(parts) < 2:
-            send_private_message(irc, user, "Usage: !unsubscribe <feed_name>")
+            send_private_message(irc, user, "Usage: !unsub <feed_name>")
             return
         feed_name = parts[1].strip()
         uname = user.lower()
@@ -297,7 +321,8 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
             send_private_message(irc, user, f"Not subscribed to feed '{feed_name}'.")
         return
 
-    elif message.startswith("!mysubscriptions"):
+    elif message.startswith("!mysubs"):
+        # Changed command: previously !mysubscriptions
         uname = user.lower()
         if uname in feed.subscriptions and feed.subscriptions[uname]:
             lines = [f"{name}: {url}" for name, url in feed.subscriptions[uname].items()]
