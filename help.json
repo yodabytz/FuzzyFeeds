@@ -9,6 +9,7 @@
   "unsub": "!unsub <feed_name> - Unsubscribe from a feed.",
   "mysubs": "!mysubs - List your private subscriptions.",
   "getfeed": "!getfeed <title_or_domain> - Search the internet for a feed matching the title or domain and show the latest entry.",
+  "genfeed": "!genfeed <website_url> - Generate an RSS feed for the given website using the rss.app API.",
   "join": "!join <#channel> [adminnick] - Join a channel, optionally assigning a channel admin (Main admin only).",
   "part": "!part <#channel> - Leave a channel and clear its configuration.",
   "admin": "!admin - List all channel admin assignments.",
