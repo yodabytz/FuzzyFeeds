@@ -68,10 +68,9 @@ def search_feeds(query):
 last_command_time = {}
 
 def handle_commands(irc, user, hostmask, target, message, is_op_flag):
-    # For channel commands, we use the channel (target) directly.
-    # Subscription commands use the user's name (ignoring channel).
+    # Preserve original message; use lower-case for command matching.
     msg = message.strip()
-    lmsg = msg.lower()  # for command matching only
+    lmsg = msg.lower()
     logging.info("Received command from %s in %s: %s", user, target, msg)
     
     # Rate limiting: 2-second cooldown per user.
@@ -88,21 +87,20 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
                     (target.startswith("#") and target in channel_admins and user.lower() == channel_admins[target].lower()))
     logging.info("Effective op status for %s in %s is %s", user, target, effective_op)
     
-    # For channel commands, ensure target is a channel.
-    if not target.startswith("#") and lmsg.startswith(("!addfeed", "!delfeed", "!listfeeds", "!latest", "!genfeed", "!setinterval", "!search", "!join", "!part", "!admin", "!stats", "!reloadconfig", "!quit", "!restart")):
+    # For channel feed commands, ensure command is run in a channel.
+    if not target.startswith("#") and lmsg.startswith(("!addfeed", "!delfeed", "!listfeeds", "!latest", "!genfeed", "!setinterval", "!search", "!join", "!part", "!admin", "!stats", "!reloadconfig", "!quit", "!restart", "!getfeed")):
         send_private_message(irc, user, "Please run this command in the channel where the feed is configured.")
         return
 
     # Use channel-specific key for channel commands.
     channel_key = target
 
-    # --- Channel Feed Commands (tied to channel_key) ---
     if lmsg.startswith("!addfeed "):
         parts = msg.split(" ", 2)
         if len(parts) < 3:
             send_message(irc, channel_key, "Usage: !addfeed <feed_name> <URL>")
             return
-        feed_name = parts[1].strip()  # preserve case
+        feed_name = parts[1].strip()  # Preserve case
         feed_url = parts[2].strip()
         if channel_key not in feed.channel_feeds:
             feed.channel_feeds[channel_key] = {}
@@ -119,7 +117,7 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
         if len(parts) < 2:
             send_message(irc, channel_key, "Usage: !delfeed <feed_name>")
             return
-        feed_name = parts[1].strip()  # preserve case
+        feed_name = parts[1].strip()  # Preserve case
         if channel_key in feed.channel_feeds and feed_name in feed.channel_feeds[channel_key]:
             del feed.channel_feeds[channel_key][feed_name]
             feed.save_feeds()
@@ -141,7 +139,7 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
         if len(parts) < 2:
             send_message(irc, channel_key, "Usage: !latest <feed_name>")
             return
-        feed_name = parts[1].strip()  # preserve case
+        feed_name = parts[1].strip()  # Preserve case
         if channel_key in feed.channel_feeds and feed_name in feed.channel_feeds[channel_key]:
             title, link = feed.fetch_latest_article(feed.channel_feeds[channel_key][feed_name])
             if title and link:
@@ -151,6 +149,27 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
                 send_message(irc, channel_key, f"No entry available for {feed_name}.")
         else:
             send_message(irc, channel_key, f"Feed '{feed_name}' not found in {channel_key}.")
+        return
+
+    elif lmsg.startswith("!getfeed "):
+        # New command: search for a feed by title or domain.
+        parts = msg.split(" ", 1)
+        if len(parts) < 2 or not parts[1].strip():
+            send_message(irc, channel_key, "Usage: !getfeed <title_or_domain>")
+            return
+        query = parts[1].strip()
+        results = search_feeds(query)
+        if not results:
+            send_message(irc, channel_key, "No matching feed found.")
+            return
+        # Use the first matching feed.
+        feed_title, feed_url = results[0]
+        title, link = feed.fetch_latest_article(feed_url)
+        if title and link:
+            send_message(irc, channel_key, f"Latest from {feed_title}: {title}")
+            send_message(irc, channel_key, f"Link: {link}")
+        else:
+            send_message(irc, channel_key, f"No entry available for feed {feed_title}.")
         return
 
     elif lmsg.startswith("!genfeed "):
@@ -266,13 +285,13 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
         send_message(irc, channel_key, f"Left {channel_to_part} and cleared its configuration.")
         return
 
-    # --- Subscription Commands (tied to user, not channel) ---
+    # --- Subscription Commands (global per user) ---
     elif lmsg.startswith("!addsub "):
         parts = msg.split(" ", 2)
         if len(parts) < 3:
             send_private_message(irc, user, "Usage: !addsub <feed_name> <URL>")
             return
-        feed_name = parts[1].strip()  # preserve case
+        feed_name = parts[1].strip()  # Preserve case
         feed_url = parts[2].strip()
         uname = user  # subscriptions keyed by username
         if uname not in feed.subscriptions:
@@ -287,7 +306,7 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
         if len(parts) < 2:
             send_private_message(irc, user, "Usage: !unsub <feed_name>")
             return
-        feed_name = parts[1].strip()  # preserve case
+        feed_name = parts[1].strip()  # Preserve case
         uname = user
         if uname in feed.subscriptions and feed_name in feed.subscriptions[uname]:
             del feed.subscriptions[uname][feed_name]
@@ -311,7 +330,7 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
         if len(parts) < 2 or not parts[1].strip():
             send_private_message(irc, user, "Usage: !latestsub <feed_name>")
             return
-        feed_name = parts[1].strip()  # preserve case
+        feed_name = parts[1].strip()  # Preserve case
         uname = user
         if uname in feed.subscriptions and feed_name in feed.subscriptions[uname]:
             url = feed.subscriptions[uname][feed_name]
