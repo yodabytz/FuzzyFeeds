@@ -1,45 +1,51 @@
 #!/usr/bin/env python3
-import os
 import time
-import datetime
-import requests  # For web searching and API calls
+import requests
+import feedparser
 import logging
+import fnmatch
+import json
 
-# Setup enhanced logging.
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-from config import admin, ops, admin_file, start_time
+from config import admin, ops, admins
 from irc import send_message, send_private_message, send_multiline_message
 import feed
 import persistence
-import channels  # For persistent channel management
-import feedparser  # For validating RSS/Atom feeds
-import users  # For persistent user settings
+import channels
+import users
 
-# Ensure admin.json exists.
-if not os.path.exists(admin_file):
-    persistence.save_json(admin_file, {})
-    logging.info(f"Created new admin mapping file: {admin_file}")
+logging.basicConfig(level=logging.INFO)
 
-# Load per-channel admin mapping from admin.json.
-channel_admins = persistence.load_json(admin_file, default={})
-if not isinstance(channel_admins, dict):
-    channel_admins = {}
-    persistence.save_json(admin_file, channel_admins)
+# ---------------- Help Functions ----------------
 
 def load_help_data():
-    return persistence.load_json("help.json", default={})
+    try:
+        with open("help.json", "r") as f:
+            data = json.load(f)
+        return data
+    except Exception as e:
+        logging.error("Error loading help.json: %s", e)
+        return {}
 
 help_data = load_help_data()
 
 def get_help(command=None):
+    """
+    Returns help text. If a command is provided, returns detailed help for that command;
+    otherwise returns a list of commands.
+    """
     if command:
-        return help_data.get(command, f"No detailed help available for '{command}'.")
+        return help_data.get(command.lower(), f"No detailed help available for '{command}'.")
     else:
         lines = [f"{cmd}: {desc}" for cmd, desc in help_data.items()]
         return "\n".join(lines)
 
+# ---------------- Feed Search Function ----------------
+
 def search_feeds(query):
+    """
+    Search for RSS/Atom feeds matching the query using Feedly's search API.
+    Returns a list of tuples: (feed_title, feed_url) (up to 5 results).
+    """
     url = "https://cloud.feedly.com/v3/search/feeds?query=" + query
     try:
         response = requests.get(url, timeout=10)
@@ -53,9 +59,9 @@ def search_feeds(query):
             feed_url = item.get("feedId", "")
             if feed_url.startswith("feed/"):
                 feed_url = feed_url[5:]
-            d = feedparser.parse(feed_url)
-            if d.bozo == 0 and d.feed.get("title"):
-                feed_title = d.feed.get("title")
+            parsed = feedparser.parse(feed_url)
+            if parsed.bozo == 0 and "title" in parsed.feed:
+                feed_title = parsed.feed.get("title")
                 valid_feeds.append((feed_title, feed_url))
             if len(valid_feeds) >= 5:
                 break
@@ -64,121 +70,177 @@ def search_feeds(query):
         logging.error("Error searching feeds: %s", e)
         return []
 
-# Simple rate limiting: user -> last command time.
-last_command_time = {}
+# ---------------- Wildcard Matching Helper ----------------
+
+def match_feed(feed_dict, pattern):
+    """
+    Given a dictionary of feeds (keys are feed names) and a pattern,
+    return:
+      - the single matching feed name if exactly one match,
+      - None if no match is found,
+      - or a list of matching feed names if multiple matches are found.
+    """
+    if "*" in pattern or "?" in pattern:
+        matches = [name for name in feed_dict.keys() if fnmatch.fnmatch(name, pattern)]
+        if len(matches) == 1:
+            return matches[0]
+        elif len(matches) == 0:
+            return None
+        else:
+            return matches  # multiple matches
+    else:
+        return pattern if pattern in feed_dict else None
+
+# ---------------- IRC Command Handler ----------------
 
 def handle_commands(irc, user, hostmask, target, message, is_op_flag):
-    # Preserve original message; use lower-case for command matching.
-    msg = message.strip()
-    lmsg = msg.lower()
-    logging.info("Received command from %s in %s: %s", user, target, msg)
+    """
+    Process IRC commands.
+    Parameters:
+      - irc: IRC connection/socket.
+      - user: sender's nick.
+      - hostmask: sender's hostmask.
+      - target: channel (or user) where command was issued.
+      - message: the full command message.
+      - is_op_flag: whether the sender is an operator.
+    """
+    logging.info(f"[commands.py] Received command from {user} in {target}: {message}")
     
-    # Rate limiting: 2-second cooldown per user.
-    if user in last_command_time:
-        if time.time() - last_command_time[user] < 2:
-            logging.info("Rate limiting command from %s", user)
-            return
-    last_command_time[user] = time.time()
-    
-    is_admin = (user.lower() == admin.lower())
-    effective_op = (is_op_flag or
-                    (user.lower() in [op.lower() for op in ops]) or
-                    is_admin or
-                    (target.startswith("#") and target in channel_admins and user.lower() == channel_admins[target].lower()))
-    logging.info("Effective op status for %s in %s is %s", user, target, effective_op)
-    
-    # For channel feed commands, ensure command is run in a channel.
-    if not target.startswith("#") and lmsg.startswith(("!addfeed", "!delfeed", "!listfeeds", "!latest", "!genfeed", "!setinterval", "!search", "!join", "!part", "!admin", "!stats", "!reloadconfig", "!quit", "!restart", "!getfeed")):
-        send_private_message(irc, user, "Please run this command in the channel where the feed is configured.")
-        return
+    is_admin_flag = (user.lower() == admin.lower())
+    effective_op = is_op_flag or (user.lower() in [op.lower() for op in ops]) or is_admin_flag
 
-    # Use channel-specific key for channel commands.
-    channel_key = target
+    # Determine if the command should be responded to privately.
+    private_commands = ["!help", "!reloadconfig", "!stats", "!subscribe", "!unsubscribe", "!mysubscriptions", "!quit"]
+    response_target = user if target == user or any(message.startswith(cmd) for cmd in private_commands) else target
 
-    if lmsg.startswith("!addfeed "):
-        parts = msg.split(" ", 2)
+    lower_message = message.lower()
+
+    # --- Command Branches ---
+
+    # !addfeed
+    if lower_message.startswith("!addfeed"):
+        parts = message.split(" ", 2)
         if len(parts) < 3:
-            send_message(irc, channel_key, "Usage: !addfeed <feed_name> <URL>")
+            send_message(irc, response_target, "Usage: !addfeed <feed_name> <URL>")
             return
-        feed_name = parts[1].strip()  # Preserve case
+        feed_name = parts[1].strip()
         feed_url = parts[2].strip()
-        if channel_key not in feed.channel_feeds:
-            feed.channel_feeds[channel_key] = {}
-        feed.channel_feeds[channel_key][feed_name] = feed_url
+        if target not in feed.channel_feeds:
+            feed.channel_feeds[target] = {}
+        feed.channel_feeds[target][feed_name] = feed_url
         feed.save_feeds()
-        send_message(irc, channel_key, f"Feed added: {feed_name} ({feed_url})")
-        return
+        send_message(irc, response_target, f"Feed added: {feed_name} ({feed_url})")
 
-    elif lmsg.startswith("!delfeed "):
+    # !delfeed with wildcard matching
+    elif lower_message.startswith("!delfeed"):
         if not effective_op:
-            send_message(irc, channel_key, "Not authorized to use !delfeed.")
+            send_private_message(irc, user, "Not authorized to use !delfeed.")
             return
-        parts = msg.split(" ", 1)
+        parts = message.split(" ", 1)
         if len(parts) < 2:
-            send_message(irc, channel_key, "Usage: !delfeed <feed_name>")
+            send_message(irc, response_target, "Usage: !delfeed <feed_name or pattern>")
             return
-        feed_name = parts[1].strip()  # Preserve case
-        if channel_key in feed.channel_feeds and feed_name in feed.channel_feeds[channel_key]:
-            del feed.channel_feeds[channel_key][feed_name]
-            feed.save_feeds()
-            send_message(irc, channel_key, f"Feed deleted: {feed_name}")
-        else:
-            send_message(irc, channel_key, f"Feed '{feed_name}' not found in {channel_key}.")
-        return
+        pattern = parts[1].strip()
+        if target not in feed.channel_feeds:
+            send_message(irc, response_target, "No feeds found for this channel.")
+            return
+        matched = match_feed(feed.channel_feeds[target], pattern)
+        if matched is None:
+            send_message(irc, response_target, f"No feeds match '{pattern}'.")
+            return
+        if isinstance(matched, list):
+            send_message(irc, response_target, f"Multiple feeds match '{pattern}': {', '.join(matched)}. Please be more specific.")
+            return
+        # matched is a single feed name.
+        del feed.channel_feeds[target][matched]
+        feed.save_feeds()
+        send_message(irc, response_target, f"Feed removed: {matched}")
 
-    elif lmsg.startswith("!listfeeds"):
-        if channel_key in feed.channel_feeds and feed.channel_feeds[channel_key]:
-            lines = [f"{name}: {url}" for name, url in feed.channel_feeds[channel_key].items()]
-            send_multiline_message(irc, channel_key, "\n".join(lines))
+    # !listfeeds
+    elif lower_message.startswith("!listfeeds"):
+        if target in feed.channel_feeds and feed.channel_feeds[target]:
+            lines = [f"{name}: {url}" for name, url in feed.channel_feeds[target].items()]
+            send_multiline_message(irc, response_target, "\n".join(lines))
         else:
-            send_message(irc, channel_key, "No feeds found for this channel.")
-        return
+            send_message(irc, response_target, "No feeds found for this channel.")
 
-    elif lmsg.startswith("!latest "):
-        parts = msg.split(" ", 1)
+    # !latest with wildcard matching
+    elif lower_message.startswith("!latest"):
+        parts = message.split(" ", 1)
         if len(parts) < 2:
-            send_message(irc, channel_key, "Usage: !latest <feed_name>")
+            send_message(irc, response_target, "Usage: !latest <feed_name or pattern>")
             return
-        feed_name = parts[1].strip()  # Preserve case
-        if channel_key in feed.channel_feeds and feed_name in feed.channel_feeds[channel_key]:
-            title, link = feed.fetch_latest_article(feed.channel_feeds[channel_key][feed_name])
-            if title and link:
-                send_message(irc, channel_key, f"Latest from {feed_name}: {title}")
-                send_message(irc, channel_key, f"Link: {link}")
-            else:
-                send_message(irc, channel_key, f"No entry available for {feed_name}.")
+        pattern = parts[1].strip()
+        if target not in feed.channel_feeds:
+            send_message(irc, response_target, "No feeds found for this channel.")
+            return
+        matched = match_feed(feed.channel_feeds[target], pattern)
+        if matched is None:
+            send_message(irc, response_target, f"No feed matches '{pattern}'.")
+            return
+        if isinstance(matched, list):
+            send_message(irc, response_target, f"Multiple feeds match '{pattern}': {', '.join(matched)}. Please be more specific.")
+            return
+        feed_name = matched
+        title, link = feed.fetch_latest_article(feed.channel_feeds[target][feed_name])
+        if title and link:
+            send_message(irc, response_target, f"Latest from {feed_name}: {title}")
+            send_message(irc, response_target, f"Link: {link}")
         else:
-            send_message(irc, channel_key, f"Feed '{feed_name}' not found in {channel_key}.")
-        return
+            send_message(irc, response_target, f"No entry available for {feed_name}.")
 
-    elif lmsg.startswith("!getfeed "):
-        # New command: search for a feed by title or domain.
-        parts = msg.split(" ", 1)
+    # !getfeed with wildcard matching not typically needed, but we leave it similar to !latest.
+    elif lower_message.startswith("!getfeed"):
+        parts = message.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
-            send_message(irc, channel_key, "Usage: !getfeed <title_or_domain>")
+            send_message(irc, response_target, "Usage: !getfeed <title_or_domain>")
             return
         query = parts[1].strip()
         results = search_feeds(query)
         if not results:
-            send_message(irc, channel_key, "No matching feed found.")
+            send_message(irc, response_target, "No matching feed found.")
             return
-        # Use the first matching feed.
         feed_title, feed_url = results[0]
         title, link = feed.fetch_latest_article(feed_url)
         if title and link:
-            send_message(irc, channel_key, f"Latest from {feed_title}: {title}")
-            send_message(irc, channel_key, f"Link: {link}")
+            send_message(irc, response_target, f"Latest from {feed_title}: {title}")
+            send_message(irc, response_target, f"Link: {link}")
         else:
-            send_message(irc, channel_key, f"No entry available for feed {feed_title}.")
-        return
+            send_message(irc, response_target, f"No entry available for feed {feed_title}.")
 
-    elif lmsg.startswith("!genfeed "):
-        parts = msg.split(" ", 1)
+    # !getadd with wildcard matching
+    elif lower_message.startswith("!getadd"):
+        parts = message.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
-            send_message(irc, channel_key, "Usage: !genfeed <website_url>")
+            send_message(irc, response_target, "Usage: !getadd <title_or_domain>")
+            return
+        query = parts[1].strip()
+        results = search_feeds(query)
+        if not results:
+            send_message(irc, response_target, "No matching feed found.")
+            return
+        selected = None
+        for title, url in results:
+            if title.lower() == query.lower():
+                selected = (title, url)
+                break
+        if not selected:
+            selected = results[0]
+        feed_title, feed_url = selected
+        if target not in feed.channel_feeds:
+            feed.channel_feeds[target] = {}
+        feed.channel_feeds[target][feed_title] = feed_url
+        feed.save_feeds()
+        send_message(irc, response_target, f"Feed '{feed_title}' added: {feed_url}")
+
+    # !genfeed
+    elif lower_message.startswith("!genfeed"):
+        parts = message.split(" ", 1)
+        if len(parts) < 2 or not parts[1].strip():
+            send_message(irc, response_target, "Usage: !genfeed <website_url>")
             return
         website_url = parts[1].strip()
-        API_ENDPOINT = "https://api.rss.app/v1/generate"  # Placeholder API endpoint
+        API_ENDPOINT = "https://api.rss.app/v1/generate"
         params = {"url": website_url}
         try:
             api_response = requests.get(API_ENDPOINT, params=params, timeout=10)
@@ -186,127 +248,84 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
                 result = api_response.json()
                 feed_url = result.get("feed_url")
                 if feed_url:
-                    send_message(irc, channel_key, f"Generated feed for {website_url}: {feed_url}")
+                    send_message(irc, response_target, f"Generated feed for {website_url}: {feed_url}")
                 else:
-                    send_message(irc, channel_key, "Feed generation failed: no feed_url in response.")
+                    send_message(irc, response_target, "Feed generation failed: no feed_url in response.")
             else:
-                send_message(irc, channel_key, f"Feed generation API error: {api_response.status_code}")
+                send_message(irc, response_target, f"Feed generation API error: {api_response.status_code}")
         except Exception as e:
-            send_message(irc, channel_key, f"Error generating feed: {e}")
-        return
+            send_message(irc, response_target, f"Error generating feed: {e}")
 
-    elif lmsg.startswith("!setinterval "):
-        if not effective_op:
-            send_message(irc, channel_key, "Not authorized to use !setinterval.")
-            return
-        parts = msg.split(" ", 1)
+    # !setinterval
+    elif lower_message.startswith("!setinterval"):
+        parts = message.split(" ", 1)
         if len(parts) < 2:
-            send_message(irc, channel_key, "Usage: !setinterval <minutes>")
+            send_message(irc, response_target, "Usage: !setinterval <minutes>")
             return
         try:
             minutes = int(parts[1].strip())
-            feed.channel_intervals[channel_key] = minutes * 60
-            send_message(irc, channel_key, f"Feed check interval set to {minutes} minutes for {channel_key}.")
+            if target not in feed.channel_intervals:
+                feed.channel_intervals[target] = 0
+            feed.channel_intervals[target] = minutes * 60
+            send_message(irc, response_target, f"Feed check interval set to {minutes} minutes for {target}.")
         except ValueError:
-            send_message(irc, channel_key, "Invalid number of minutes.")
-        return
+            send_message(irc, response_target, "Invalid number of minutes.")
 
-    elif lmsg.startswith("!search"):
-        parts = msg.split(" ", 1)
+    # !search
+    elif lower_message.startswith("!search"):
+        parts = message.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
-            send_message(irc, channel_key, "Usage: !search <query>")
+            send_message(irc, response_target, "Usage: !search <query>")
             return
         query = parts[1].strip()
         results = search_feeds(query)
         if not results:
-            send_message(irc, channel_key, "No valid feeds found.")
+            send_message(irc, response_target, "No valid feeds found.")
             return
         lines = [f"{title} {url}" for title, url in results]
-        send_multiline_message(irc, channel_key, "\n".join(lines))
-        return
+        send_multiline_message(irc, response_target, "\n".join(lines))
 
-    elif lmsg.startswith("!join "):
-        if not is_admin:
-            send_private_message(irc, user, "Only the main admin may use !join.")
+    # !join
+    elif lower_message.startswith("!join"):
+        if user.lower() not in [a.lower() for a in admins]:
+            send_private_message(irc, user, "Only a bot admin can use !join.")
             return
-        parts = msg.split()
+        parts = message.split(" ", 1)
         if len(parts) < 2:
-            send_message(irc, channel_key, "Usage: !join <#channel> or !join <#channel> adminnick")
+            send_message(irc, response_target, "Usage: !join <#channel>")
             return
         join_channel = parts[1].strip()
-        if not join_channel.startswith("#"):
-            join_channel = "#" + join_channel
-        if len(parts) == 3:
-            adminnick = parts[2].strip()
-            irc.send(f"JOIN {join_channel}\r\n".encode("utf-8"))
+        try:
             from channels import joined_channels, save_channels
             if join_channel not in joined_channels:
                 joined_channels.append(join_channel)
                 save_channels()
-            channel_admins[join_channel] = adminnick
-            persistence.save_json(admin_file, channel_admins)
-            send_message(irc, channel_key, f"Joined {join_channel} with admin {adminnick} as set by {user}.")
-            return
-        else:
-            irc.send(f"JOIN {join_channel}\r\n".encode("utf-8"))
-            from channels import joined_channels, save_channels
-            if join_channel not in joined_channels:
-                joined_channels.append(join_channel)
-                save_channels()
-            send_message(irc, channel_key, f"Joined {join_channel} as requested by {user}.")
-            return
+            send_message(irc, response_target, f"Joined channel: {join_channel}")
+        except Exception as e:
+            send_message(irc, response_target, f"Error joining channel: {e}")
 
-    elif lmsg.startswith("!part "):
-        parts = msg.split(" ", 1)
-        if len(parts) < 2:
-            send_message(irc, channel_key, "Usage: !part <#channel>")
-            return
-        channel_to_part = parts[1].strip()
-        if not channel_to_part.startswith("#"):
-            send_message(irc, channel_key, "Invalid channel name; must start with '#'")
-            return
-        is_allowed = (user.lower() == admin.lower() or 
-                      user.lower() in [op.lower() for op in ops] or 
-                      (channel_to_part in channel_admins and user.lower() == channel_admins[channel_to_part]))
-        if not is_allowed:
-            send_message(irc, channel_key, "Not authorized to part that channel.")
-            return
-        irc.send(f"PART {channel_to_part} :Requested by {user}\r\n".encode("utf-8"))
-        from channels import joined_channels, save_channels
-        if channel_to_part in joined_channels:
-            joined_channels.remove(channel_to_part)
-            save_channels()
-        if channel_to_part in feed.channel_feeds:
-            del feed.channel_feeds[channel_to_part]
-            feed.save_feeds()
-        if channel_to_part in channel_admins:
-            del channel_admins[channel_to_part]
-            persistence.save_json(admin_file, channel_admins)
-        send_message(irc, channel_key, f"Left {channel_to_part} and cleared its configuration.")
-        return
-
-    # --- Subscription Commands (global per user) ---
-    elif lmsg.startswith("!addsub "):
-        parts = msg.split(" ", 2)
+    # !addsub
+    elif lower_message.startswith("!addsub"):
+        parts = message.split(" ", 2)
         if len(parts) < 3:
             send_private_message(irc, user, "Usage: !addsub <feed_name> <URL>")
             return
-        feed_name = parts[1].strip()  # Preserve case
+        feed_name = parts[1].strip()
         feed_url = parts[2].strip()
-        uname = user  # subscriptions keyed by username
+        uname = user
         if uname not in feed.subscriptions:
             feed.subscriptions[uname] = {}
         feed.subscriptions[uname][feed_name] = feed_url
         feed.save_subscriptions()
         send_private_message(irc, user, f"Subscribed to feed: {feed_name} ({feed_url})")
-        return
 
-    elif lmsg.startswith("!unsub "):
-        parts = msg.split(" ", 1)
+    # !unsub
+    elif lower_message.startswith("!unsub"):
+        parts = message.split(" ", 1)
         if len(parts) < 2:
             send_private_message(irc, user, "Usage: !unsub <feed_name>")
             return
-        feed_name = parts[1].strip()  # Preserve case
+        feed_name = parts[1].strip()
         uname = user
         if uname in feed.subscriptions and feed_name in feed.subscriptions[uname]:
             del feed.subscriptions[uname][feed_name]
@@ -314,43 +333,44 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
             send_private_message(irc, user, f"Unsubscribed from feed: {feed_name}")
         else:
             send_private_message(irc, user, f"Not subscribed to feed '{feed_name}'.")
-        return
 
-    elif lmsg.startswith("!mysubs"):
+    # !mysubs
+    elif lower_message.startswith("!mysubs"):
         uname = user
         if uname in feed.subscriptions and feed.subscriptions[uname]:
             lines = [f"{name}: {url}" for name, url in feed.subscriptions[uname].items()]
             send_multiline_message(irc, user, "\n".join(lines))
         else:
             send_private_message(irc, user, "No subscriptions found.")
-        return
 
-    elif lmsg.startswith("!latestsub "):
-        parts = msg.split(" ", 1)
+    # !latestsub
+    elif lower_message.startswith("!latestsub"):
+        parts = message.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
             send_private_message(irc, user, "Usage: !latestsub <feed_name>")
             return
-        feed_name = parts[1].strip()  # Preserve case
+        feed_name = parts[1].strip()
         uname = user
         if uname in feed.subscriptions and feed_name in feed.subscriptions[uname]:
             url = feed.subscriptions[uname][feed_name]
             title, link = feed.fetch_latest_article(url)
             if title and link:
-                send_message(irc, target, f"Latest from your subscription '{feed_name}': {title}")
-                send_message(irc, target, f"Link: {link}")
+                send_message(irc, response_target, f"Latest from your subscription '{feed_name}': {title}")
+                send_message(irc, response_target, f"Link: {link}")
             else:
-                send_message(irc, target, f"No entry available for {feed_name}.")
+                send_message(irc, response_target, f"No entry available for {feed_name}.")
         else:
             send_private_message(irc, user, f"You are not subscribed to feed '{feed_name}'.")
-        return
 
-    elif lmsg.startswith("!setsetting "):
-        parts = msg.split(" ", 2)
+    # !setsetting
+    elif lower_message.startswith("!setsetting"):
+        parts = message.split(" ", 2)
         if len(parts) < 3:
             send_private_message(irc, user, "Usage: !setsetting <key> <value>")
             return
         key = parts[1].strip()
         value = parts[2].strip()
+        import users
         users.add_user(user)
         user_data = users.get_user(user)
         if "settings" not in user_data:
@@ -358,23 +378,25 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
         user_data["settings"][key] = value
         users.save_users()
         send_private_message(irc, user, f"Setting '{key}' set to '{value}'.")
-        return
 
-    elif lmsg.startswith("!getsetting "):
-        parts = msg.split(" ", 1)
+    # !getsetting
+    elif lower_message.startswith("!getsetting"):
+        parts = message.split(" ", 1)
         if len(parts) < 2:
             send_private_message(irc, user, "Usage: !getsetting <key>")
             return
         key = parts[1].strip()
+        import users
         users.add_user(user)
         user_data = users.get_user(user)
         if "settings" in user_data and key in user_data["settings"]:
             send_private_message(irc, user, f"{key}: {user_data['settings'][key]}")
         else:
             send_private_message(irc, user, f"No setting found for '{key}'.")
-        return
 
-    elif lmsg.startswith("!settings"):
+    # !settings
+    elif lower_message.startswith("!settings"):
+        import users
         users.add_user(user)
         user_data = users.get_user(user)
         if "settings" in user_data and user_data["settings"]:
@@ -382,18 +404,20 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
             send_multiline_message(irc, user, "\n".join(lines))
         else:
             send_private_message(irc, user, "No settings found.")
-        return
 
-    elif lmsg.startswith("!admin"):
-        if channel_admins:
-            lines = [f"{chan}: {adm}" for chan, adm in channel_admins.items()]
-            send_multiline_message(irc, target, "\n".join(lines))
-        else:
-            send_message(irc, target, "No channel admins set.")
-        return
+    # !admin
+    elif lower_message.startswith("!admin"):
+        try:
+            with open(persistence.admin_file, "r") as f:
+                data = f.read()
+            send_multiline_message(irc, response_target, data)
+        except Exception as e:
+            send_private_message(irc, user, f"Error reading admin info: {e}")
 
-    elif lmsg.startswith("!stats"):
-        uptime_seconds = int(time.time() - start_time)
+    # !stats
+    elif lower_message.startswith("!stats"):
+        import datetime
+        uptime_seconds = int(time.time() - __import__("config").start_time)
         uptime = str(datetime.timedelta(seconds=uptime_seconds))
         num_channel_feeds = sum(len(feeds) for feeds in feed.channel_feeds.values())
         num_channels = len(feed.channel_feeds)
@@ -403,50 +427,19 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
             f"Channel Feeds: {num_channel_feeds} across {num_channels} channels.",
             f"User Subscriptions: {num_user_subscriptions} total."
         ]
-        send_multiline_message(irc, target, "\n".join(lines))
-        return
+        send_multiline_message(irc, response_target, "\n".join(lines))
 
-    elif lmsg.startswith("!reloadconfig"):
-        if not is_admin:
-            send_private_message(irc, user, "Not authorized to use !reloadconfig.")
-            return
-        feed.load_feeds()
-        feed.load_subscriptions()
-        feed.load_last_feed_links()
-        global help_data
-        help_data = load_help_data()
-        send_private_message(irc, user, "Configuration reloaded.")
-        return
-
-    elif lmsg.startswith("!quit"):
-        if not is_admin:
-            send_private_message(irc, user, "Not authorized to use !quit.")
-            return
-        send_private_message(irc, user, "Quitting...")
-        irc.send("QUIT :Requested by admin\r\n".encode("utf-8"))
-        import sys
-        sys.exit(0)
-        return
-
-    elif lmsg.startswith("!help"):
-        parts = msg.split(" ", 1)
+    # !help
+    elif lower_message.startswith("!help"):
+        parts = message.split(" ", 1)
         if len(parts) == 2:
-            subcommand = parts[1].strip().lower()
-            detailed = get_help(subcommand)
-            send_private_message(irc, user, detailed)
+            help_text = get_help(parts[1].strip())
         else:
-            full_help = get_help()
-            send_multiline_message(irc, user, full_help)
-        return
-
-    elif lmsg.startswith("!restart"):
-        if not is_admin:
-            send_message(irc, target, "Not authorized to use !restart.")
-            return
-        send_message(irc, target, "Restarting...")
-        import os, sys
-        os.execl(sys.executable, sys.executable, *sys.argv)
-        return
+            help_text = get_help()
+        send_multiline_message(irc, user, help_text)
 
     else:
-        send_message(irc, target, "Unknown command. Use !help for a list.")
+        send_message(irc, response_target, "Unknown command. Use !help for a list.")
+
+# For IRC, handle_commands is called directly.
+
