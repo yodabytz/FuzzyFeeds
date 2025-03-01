@@ -1,4 +1,4 @@
-# FuzzyFeeds
+# FuzzyFeeds v0.9.0-beta
 
 FuzzyFeeds is an IRC bot that aggregates RSS and Atom feeds in real-time. It allows channel administrators to manage feeds, fetch the latest entries, and manage user subscriptions—with persistent storage, enhanced logging, rate limiting, and optional SSL support. Best used to monitor updates of GitHub Repos and users. Join us on [Discord](https://discord.gg/GWMetSSk) or Matrix #fuzzyfeeds:matrix.org
 
@@ -11,6 +11,8 @@ FuzzyFeeds is an IRC bot that aggregates RSS and Atom feeds in real-time. It all
 - **Enhanced Logging & Rate Limiting:** Built-in logging for troubleshooting and simple per-user rate limiting.
 - **SSL Support:** Secure IRC connections can be enabled via configuration.
 - **GitHub Integration:** Easily monitor GitHub activity using an Atom feed (e.g., `https://github.com/yodabytz.atom`).
+- **Matrix Integration:** Automatically posts new feed updates to Matrix rooms and responds to commands.
+- **Discord Integration:** Posts new feeds to Discord channels and allows users to interact with feed commands.
 
 ## Installation
 
@@ -27,29 +29,29 @@ pip install -r requirements.txt
 ```
 
 ## Configure the Bot:
-Edit config.py to set your IRC server details, channels, admin credentials, SSL usage, and persistence file paths.
+Edit config.py to set your IRC, Matrix, and/or Discord server details, channels, admin credentials, SSL usage, and persistence file paths.
 
 ## Usage:
 ```
 python main.py
 ```
 
-## IRC Commands
-
+## Commands
+```
 - `!addfeed <feed_name> <URL>`  
-  *Admin only.* Add an RSS/Atom feed to the channel.
+  *Admin only.* Add an RSS/Atom feed to the channel/room.
 
 - `!delfeed <feed_name>`  
-  *Admin only.* Delete a feed from the channel.
+  *Admin only.* Remove a feed from the channel/room.
 
 - `!listfeeds`  
-  List all feeds for the channel.
+  List all feeds in the current channel/room.
 
 - `!latest <feed_name>`  
   Show the latest entry (title and link) for the specified feed.
 
 - `!setinterval <minutes>`  
-  *Admin only.* Set the feed check interval for the channel.
+  *Admin only.* Set the feed check interval for the channel/room.
 
 - `!addsub <feed_name> <URL>`  
   Subscribe privately to a feed.
@@ -63,17 +65,26 @@ python main.py
 - `!getfeed <title_or_domain>`  
   Search the internet for a feed matching the title or domain and show the latest entry.
 
-- `!join <#channel> [adminnick]`  
-  *Main admin only.* Join a channel. Optionally assign a channel admin.
+- `!getadd <title_or_domain>`  
+  Search for a feed and automatically add it to the channel/room.
 
-- `!part <#channel>`  
-  Leave a channel and clear its configuration.
+- `!genfeed <website_url>`  
+  Generate an RSS feed for a given website.
+
+- `!search <query>`  
+  Search for feeds matching a query.
+
+- `!join <#channel or #room_alias>`  
+  *Admin only.* Join a new IRC channel or Matrix room.
+
+- `!part <#channel or #room_alias>`  
+  Leave a channel/room and clear its configuration.
 
 - `!stats`  
-  Display uptime, channel feed counts, and user subscription counts publicly in the channel.
+  Show bot statistics, including uptime, feed counts, and user subscriptions.
 
 - `!admin`  
-  Show all channel admin assignments.
+  Show all channel/room admin assignments.
 
 - `!setsetting <key> <value>`  
   Set a personal setting.
@@ -85,10 +96,11 @@ python main.py
   List all your personal settings.
 
 - `!help [command]`  
-  Display help information.
+  Show help for a specific command.
 
 - `!restart` / `!quit`  
   Restart or gracefully shut down the bot (*Admin only*).
+```
 
 ## GitHub Feed:
 To monitor FuzzyFeeds' GitHub activity (e.g., repository creation or updates), add the following Atom feed:
@@ -102,6 +114,3 @@ Contributions are welcome! Please fork the repository and submit pull requests. 
 
 ## License
 This project is licensed under the MIT License.
-
-## To be done
-Matrix, Discord, and Slack support
