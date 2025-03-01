@@ -36,3 +36,5 @@ def send_multiline_message(irc, user, message):
     # Splits the message by newline and sends each line as a private message.
     for line in message.splitlines():
         send_private_message(irc, user, line)
+
+
