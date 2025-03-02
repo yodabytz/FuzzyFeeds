@@ -24,3 +24,4 @@ def save_channels():
             json.dump(joined_channels, f, indent=4)
     except Exception as e:
         print(f"Error saving {channels_file}: {e}")
+
