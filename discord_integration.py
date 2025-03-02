@@ -4,20 +4,22 @@ import logging
 import json
 import asyncio
 from discord.ext import commands
-from config import discord_token, discord_channel_id
-from commands import search_feeds  # ✅ Import actual search function
-import feed  # ✅ Import feed handling functions
+from config import discord_token, discord_channel_id, admin, admins
+from commands import search_feeds
+import feed
+import time
+import datetime
+import config
 
 logging.basicConfig(level=logging.INFO)
 
-# Set up intents for message processing
+# Set up intents for message content
 intents = discord.Intents.default()
-intents.message_content = True  # Needed for text commands like !help
+intents.message_content = True
 
-# ✅ Define bot with prefix "!" and disable built-in help
+# Create the bot with the desired command prefix and disable built-in help
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
-# ✅ Load commands from help.json dynamically
 def load_help_data():
     try:
         with open("help.json", "r") as f:
@@ -26,54 +28,45 @@ def load_help_data():
         logging.error("Error loading help.json: %s", e)
         return {}
 
-help_data = load_help_data()  # Load commands on startup
+help_data = load_help_data()
 
 @bot.event
 async def on_ready():
     logging.info(f"Discord bot is ready as {bot.user}")
-    bot.loop.create_task(check_feeds_for_updates())  # ✅ Start the automatic feed update task
+    bot.loop.create_task(check_feeds_for_updates())
 
 @bot.event
 async def on_message(message):
-    # Ignore messages sent by the bot itself
     if message.author == bot.user:
         return
-
-    logging.info(f"Received message: {message.content}")  # ✅ Debugging line
-
-    # Ensure bot still processes commands
+    logging.info(f"Received message: {message.content}")
     await bot.process_commands(message)
 
-# ✅ Function to check feeds for updates and post new articles
 async def check_feeds_for_updates():
-    await bot.wait_until_ready()  # Ensure bot is connected before running loop
+    await bot.wait_until_ready()
     while not bot.is_closed():
         logging.info("Checking feeds for new articles...")
-        new_articles = feed.check_feeds(lambda channel, msg: msg)  # Get new articles
-
+        new_articles = feed.check_feeds(lambda channel, msg: msg)
         if new_articles:
-            channel = bot.get_channel(discord_channel_id)  # Get the channel where updates should be posted
+            # Convert discord_channel_id to integer for proper lookup
+            channel = bot.get_channel(int(discord_channel_id))
             if channel:
                 for msg in new_articles:
                     await channel.send(msg)
                     logging.info(f"Posted new article: {msg}")
             else:
                 logging.error(f"Could not find Discord channel with ID {discord_channel_id}")
+        await asyncio.sleep(300)
 
-        await asyncio.sleep(300)  # ✅ Check for new articles every 5 minutes
-
-# ✅ Register ALL Commands from `help.json` With Proper Functionality
 def register_commands():
     for cmd, desc in help_data.items():
-        if cmd.lower() == "help":  # ✅ Prevent "help" conflict
+        if cmd.lower() == "help":
             continue
 
         @bot.command(name=cmd)
         async def dynamic_command(ctx, *args, cmd=cmd):
-            """Handles commands dynamically"""
-            full_command = f"{cmd} {' '.join(args)}".strip()  # Supports commands with arguments
+            full_command = f"{cmd} {' '.join(args)}".strip()
             
-            # ✅ If command is "search", run actual search logic
             if cmd == "search":
                 if not args:
                     await ctx.send("Usage: `!search <query>` - Search for feeds matching a query.")
@@ -87,7 +80,6 @@ def register_commands():
                     await ctx.send(f"**Search results for `{query}`:**\n{response}")
                 return
 
-            # ✅ If command is "addfeed", add a feed
             if cmd == "addfeed":
                 if len(args) < 2:
                     await ctx.send("Usage: `!addfeed <feed_name> <URL>`")
@@ -101,7 +93,6 @@ def register_commands():
                 await ctx.send(f"Feed added: `{feed_name}` - {feed_url}")
                 return
 
-            # ✅ If command is "delfeed", delete a feed
             if cmd == "delfeed":
                 if len(args) < 1:
                     await ctx.send("Usage: `!delfeed <feed_name>`")
@@ -116,7 +107,6 @@ def register_commands():
                 await ctx.send(f"Feed `{feed_name}` removed successfully.")
                 return
 
-            # ✅ If command is "latest", fetch latest article
             if cmd == "latest":
                 if len(args) < 1:
                     await ctx.send("Usage: `!latest <feed_name>`")
@@ -133,7 +123,6 @@ def register_commands():
                     await ctx.send(f"No new entries available for `{feed_name}`.")
                 return
 
-            # ✅ If command is "listfeeds", list all feeds in the channel
             if cmd == "listfeeds":
                 channel_id = str(ctx.channel.id)
                 if channel_id not in feed.channel_feeds or not feed.channel_feeds[channel_id]:
@@ -143,35 +132,49 @@ def register_commands():
                 await ctx.send(f"**Feeds for this channel:**\n{response}")
                 return
 
-            # ✅ If command is "stats", display feed statistics
             if cmd == "stats":
-                num_channel_feeds = sum(len(feeds) for feeds in feed.channel_feeds.values())
-                num_channels = len(feed.channel_feeds)
-                num_user_subscriptions = sum(len(subs) for subs in feed.subscriptions.values())
-                await ctx.send(f"📊 **Bot Statistics:**\n- `{num_channel_feeds}` feeds across `{num_channels}` channels.\n- `{num_user_subscriptions}` user subscriptions.")
+                uptime_seconds = int(time.time() - config.start_time)
+                uptime = str(datetime.timedelta(seconds=uptime_seconds))
+                is_admin_flag = (ctx.author.name.lower() == config.admin.lower() or ctx.author.name.lower() in [a.lower() for a in config.admins])
+                if is_admin_flag:
+                    # Classify feed channels by integration type using shared global data:
+                    irc_keys = [k for k in feed.channel_feeds if k.startswith("#")]
+                    discord_keys = [k for k in feed.channel_feeds if k.isdigit()]
+                    matrix_keys = [k for k in feed.channel_feeds if k.startswith("!")]
+                    irc_feed_count = sum(len(feed.channel_feeds[k]) for k in irc_keys)
+                    discord_feed_count = sum(len(feed.channel_feeds[k]) for k in discord_keys)
+                    matrix_feed_count = sum(len(feed.channel_feeds[k]) for k in matrix_keys)
+                    response = (f"📊 **Global Bot Statistics:**\n"
+                                f"- Global Uptime: {uptime}\n"
+                                f"- IRC Global Feeds: {irc_feed_count} across {len(irc_keys)} channels\n"
+                                f"- Discord Global Feeds: {discord_feed_count} across {len(discord_keys)} channels\n"
+                                f"- Matrix Global Feeds: {matrix_feed_count} across {len(matrix_keys)} rooms\n"
+                                f"- User Subscriptions: {sum(len(subs) for subs in feed.subscriptions.values())} total (from {len(feed.subscriptions)} users)")
+                else:
+                    channel_id = str(ctx.channel.id)
+                    num_channel_feeds = len(feed.channel_feeds[channel_id]) if channel_id in feed.channel_feeds else 0
+                    response = (f"📊 **Server Statistics for {ctx.channel.name}:**\n"
+                                f"- Uptime: {uptime}\n"
+                                f"- {num_channel_feeds} feeds.")
+                await ctx.send(response)
                 return
 
-            # ✅ Default: Return help text for unknown commands
             if cmd in help_data:
                 await ctx.send(f"`!{cmd}` - {help_data[cmd]}")
             else:
                 await ctx.send(f"Unknown command: `!{full_command}`")
 
-register_commands()  # Call function to register all commands
+register_commands()
 
-# ✅ Custom Help Command: !help (Lists all loaded commands)
 @bot.command(name="help")
 async def help_command(ctx):
-    """Displays the available commands"""
     help_text = "**Available Commands:**\n"
     for cmd, desc in help_data.items():
         help_text += f"`!{cmd}` - {desc}\n"
     await ctx.send(help_text)
 
-# ✅ Debugging Command: !debug (Checks if the bot is working)
 @bot.command(name="debug")
 async def debug(ctx):
-    """Checks if the bot is online"""
     await ctx.send(f"I am online and working! My user: {bot.user}")
 
 def run_discord_bot():
