@@ -8,6 +8,7 @@ from matrix_integration import start_matrix_bot
 from discord_integration import bot, run_discord_bot
 from config import enable_discord, admin, ops, admins
 import commands
+import subprocess
 
 logging.basicConfig(level=logging.INFO)
 
@@ -87,6 +88,32 @@ def start_matrix():
 def start_discord():
     if enable_discord:
         run_discord_bot()
+
+def start_dashboard():
+    # Start the dashboard webserver in a separate process
+    subprocess.Popen(["python", "dashboard.py"])
+
+if __name__ == "__main__":
+    # Start Matrix bot in a separate thread
+    matrix_thread = threading.Thread(target=start_matrix, daemon=True)
+    matrix_thread.start()
+
+    # Start Discord bot in a separate thread
+    discord_thread = threading.Thread(target=start_discord, daemon=True)
+    discord_thread.start()
+
+    # Start IRC bot in a separate thread
+    irc_thread = threading.Thread(target=start_irc, daemon=True)
+    irc_thread.start()
+
+    # Start the dashboard webserver
+    dashboard_thread = threading.Thread(target=start_dashboard, daemon=True)
+    dashboard_thread.start()
+
+    # Keep main process alive
+    while True:
+        time.sleep(1)
+
 
 if __name__ == "__main__":
     # Start Matrix bot in a separate thread
