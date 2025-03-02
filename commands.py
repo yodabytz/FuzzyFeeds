@@ -7,7 +7,7 @@ import fnmatch
 import json
 import datetime
 
-from config import admin, ops, admins
+from config import admin, ops, admins, admin_file
 from irc import send_message, send_private_message, send_multiline_message
 import feed
 import persistence
@@ -307,7 +307,6 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
                 save_channels()
             # Update admin mapping in admin.json
             import os
-            from config import admin_file
             if os.path.exists(admin_file):
                 with open(admin_file, "r") as f:
                     admin_mapping = json.load(f)
@@ -421,15 +420,29 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
         else:
             send_private_message(irc, user, "No settings found.")
         
-    # !admin
+    # !admin - revised to show integration details
     elif lower_message.startswith("!admin"):
         try:
-            with open(persistence.admin_file, "r") as f:
-                data = f.read()
-            send_multiline_message(irc, response_target, data)
+            with open(admin_file, "r") as f:
+                admin_mapping = json.load(f)
+            # If the sender is a bot admin, show all details grouped by integration type.
+            if user.lower() == admin.lower() or user.lower() in [a.lower() for a in admins]:
+                irc_admins = {k: v for k, v in admin_mapping.items() if k.startswith("#")}
+                discord_admins = {k: v for k, v in admin_mapping.items() if k.isdigit()}
+                matrix_admins = {k: v for k, v in admin_mapping.items() if k.startswith("!")}
+                output = "IRC:\n" + "\n".join([f"{chan}: {adm}" for chan, adm in irc_admins.items()]) + "\n"
+                output += "Matrix:\n" + "\n".join([f"{chan}: {adm}" for chan, adm in matrix_admins.items()]) + "\n"
+                output += "Discord:\n" + "\n".join([f"{chan}: {adm}" for chan, adm in discord_admins.items()])
+            else:
+                # Non-bot admin sees only current channel's admin info.
+                if target in admin_mapping:
+                    output = f"Admin for {target}: {admin_mapping[target]}"
+                else:
+                    output = f"No admin info available for {target}."
+            send_multiline_message(irc, response_target, output)
         except Exception as e:
             send_private_message(irc, user, f"Error reading admin info: {e}")
-        
+
     # !stats - always output to the channel!
     elif lower_message.startswith("!stats"):
         # Override response_target to always be the channel.
@@ -472,6 +485,4 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
         
     else:
         send_message(irc, response_target, "Unknown command. Use !help for a list.")
-
-# For IRC, handle_commands is called directly.
 
