@@ -5,6 +5,7 @@ import feedparser
 import logging
 import fnmatch
 import json
+import datetime
 
 from config import admin, ops, admins
 from irc import send_message, send_private_message, send_multiline_message
@@ -109,9 +110,10 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
     is_admin_flag = (user.lower() == admin.lower())
     effective_op = is_op_flag or (user.lower() in [op.lower() for op in ops]) or is_admin_flag
 
-    # Determine if the command should be responded to privately.
-    private_commands = ["!help", "!reloadconfig", "!stats", "!subscribe", "!unsubscribe", "!mysubscriptions", "!quit"]
-    response_target = user if target == user or any(message.startswith(cmd) for cmd in private_commands) else target
+    # For most commands, determine response target based on context.
+    # However, we'll override for !stats so that output always goes to the channel.
+    private_commands = ["!help", "!reloadconfig", "!subscribe", "!unsubscribe", "!mysubscriptions", "!quit"]
+    response_target = user if (target == user or any(message.startswith(cmd) for cmd in private_commands)) else target
 
     lower_message = message.lower()
 
@@ -151,7 +153,6 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
         if isinstance(matched, list):
             send_message(irc, response_target, f"Multiple feeds match '{pattern}': {', '.join(matched)}. Please be more specific.")
             return
-        # matched is a single feed name.
         del feed.channel_feeds[target][matched]
         feed.save_feeds()
         send_message(irc, response_target, f"Feed removed: {matched}")
@@ -189,7 +190,7 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
         else:
             send_message(irc, response_target, f"No entry available for {feed_name}.")
 
-    # !getfeed with wildcard matching not typically needed, but we leave it similar to !latest.
+    # !getfeed with wildcard matching
     elif lower_message.startswith("!getfeed"):
         parts = message.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
@@ -285,22 +286,37 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
         lines = [f"{title} {url}" for title, url in results]
         send_multiline_message(irc, response_target, "\n".join(lines))
 
-    # !join
+    # !join - revised: usage: !join <#channel> <adminname>
     elif lower_message.startswith("!join"):
         if user.lower() not in [a.lower() for a in admins]:
             send_private_message(irc, user, "Only a bot admin can use !join.")
             return
-        parts = message.split(" ", 1)
-        if len(parts) < 2:
-            send_message(irc, response_target, "Usage: !join <#channel>")
+        parts = message.split()
+        if len(parts) < 3:
+            send_message(irc, response_target, "Usage: !join <#channel> <adminname>")
             return
         join_channel = parts[1].strip()
+        join_admin = parts[2].strip()
+        if not join_channel.startswith("#"):
+            send_message(irc, response_target, "Error: Channel must start with '#'")
+            return
         try:
             from channels import joined_channels, save_channels
             if join_channel not in joined_channels:
                 joined_channels.append(join_channel)
                 save_channels()
-            send_message(irc, response_target, f"Joined channel: {join_channel}")
+            # Update admin mapping in admin.json
+            import os
+            from config import admin_file
+            if os.path.exists(admin_file):
+                with open(admin_file, "r") as f:
+                    admin_mapping = json.load(f)
+            else:
+                admin_mapping = {}
+            admin_mapping[join_channel] = join_admin
+            with open(admin_file, "w") as f:
+                json.dump(admin_mapping, f, indent=4)
+            send_message(irc, response_target, f"Joined channel: {join_channel} with admin: {join_admin}")
         except Exception as e:
             send_message(irc, response_target, f"Error joining channel: {e}")
 
@@ -378,7 +394,7 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
         user_data["settings"][key] = value
         users.save_users()
         send_private_message(irc, user, f"Setting '{key}' set to '{value}'.")
-
+        
     # !getsetting
     elif lower_message.startswith("!getsetting"):
         parts = message.split(" ", 1)
@@ -393,7 +409,7 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
             send_private_message(irc, user, f"{key}: {user_data['settings'][key]}")
         else:
             send_private_message(irc, user, f"No setting found for '{key}'.")
-
+        
     # !settings
     elif lower_message.startswith("!settings"):
         import users
@@ -404,7 +420,7 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
             send_multiline_message(irc, user, "\n".join(lines))
         else:
             send_private_message(irc, user, "No settings found.")
-
+        
     # !admin
     elif lower_message.startswith("!admin"):
         try:
@@ -413,22 +429,38 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
             send_multiline_message(irc, response_target, data)
         except Exception as e:
             send_private_message(irc, user, f"Error reading admin info: {e}")
-
-    # !stats
+        
+    # !stats - always output to the channel!
     elif lower_message.startswith("!stats"):
-        import datetime
+        # Override response_target to always be the channel.
+        response_target = target
         uptime_seconds = int(time.time() - __import__("config").start_time)
         uptime = str(datetime.timedelta(seconds=uptime_seconds))
-        num_channel_feeds = sum(len(feeds) for feeds in feed.channel_feeds.values())
-        num_channels = len(feed.channel_feeds)
-        num_user_subscriptions = sum(len(subs) for subs in feed.subscriptions.values())
-        lines = [
-            f"Uptime: {uptime}",
-            f"Channel Feeds: {num_channel_feeds} across {num_channels} channels.",
-            f"User Subscriptions: {num_user_subscriptions} total."
-        ]
-        send_multiline_message(irc, response_target, "\n".join(lines))
-
+        # If the sender is a bot admin, display global stats split by integration type.
+        if user.lower() == __import__("config").admin.lower() or user.lower() in [a.lower() for a in __import__("config").admins]:
+            # Classify channels:
+            irc_keys = [k for k in feed.channel_feeds if k.startswith("#")]
+            discord_keys = [k for k in feed.channel_feeds if k.isdigit()]
+            matrix_keys = [k for k in feed.channel_feeds if k.startswith("!")]
+            irc_feed_count = sum(len(feed.channel_feeds[k]) for k in irc_keys)
+            discord_feed_count = sum(len(feed.channel_feeds[k]) for k in discord_keys)
+            matrix_feed_count = sum(len(feed.channel_feeds[k]) for k in matrix_keys)
+            response_lines = [
+                f"Global Uptime: {uptime}",
+                f"IRC Global Feeds: {irc_feed_count} across {len(irc_keys)} channels",
+                f"Discord Global Feeds: {discord_feed_count} across {len(discord_keys)} channels",
+                f"Matrix Global Feeds: {matrix_feed_count} across {len(matrix_keys)} rooms",
+                f"User Subscriptions: {sum(len(subs) for subs in feed.subscriptions.values())} total (from {len(feed.subscriptions)} users)"
+            ]
+        else:
+            # Non-admin users see only stats for their current channel.
+            num_channel_feeds = len(feed.channel_feeds[target]) if target in feed.channel_feeds else 0
+            response_lines = [
+                f"Uptime: {uptime}",
+                f"Channel '{target}' Feeds: {num_channel_feeds}"
+            ]
+        send_multiline_message(irc, response_target, "\n".join(response_lines))
+        
     # !help
     elif lower_message.startswith("!help"):
         parts = message.split(" ", 1)
@@ -437,7 +469,7 @@ def handle_commands(irc, user, hostmask, target, message, is_op_flag):
         else:
             help_text = get_help()
         send_multiline_message(irc, user, help_text)
-
+        
     else:
         send_message(irc, response_target, "Unknown command. Use !help for a list.")
 
