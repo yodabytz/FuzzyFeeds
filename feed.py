@@ -128,7 +128,9 @@ def check_feeds(send_message_func):
     Only post articles that have been published after the last check time.
     Announce any new entries via send_message_func by sending two separate messages:
     one for the title and one for the link, then record their links.
+    Returns a list of messages that were generated.
     """
+    messages = []
     current_time = time.time()
     for chan in channels:
         feeds_to_check = channel_feeds.get(chan, {})
@@ -146,8 +148,17 @@ def check_feeds(send_message_func):
                     title = entry.title.strip() if entry.title else "No Title"
                     link = entry.link.strip() if entry.link else ""
                     if link and link not in last_feed_links:
-                        send_message_func(chan, f"New Feed from {feed_name}: {title}")
-                        send_message_func(chan, f"Link: {link}")
+                        title_msg = f"New Feed from {feed_name}: {title}"
+                        link_msg = f"Link: {link}"
+                        send_message_func(chan, title_msg)
+                        send_message_func(chan, link_msg)
+                        messages.append(title_msg)
+                        messages.append(link_msg)
                         save_last_feed_link(link)
             last_check_times[chan] = current_time
+    return messages
 
+if __name__ == "__main__":
+    # For testing purposes only.
+    load_feeds()
+    load_last_feed_links()
