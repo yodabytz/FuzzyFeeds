@@ -66,16 +66,16 @@ class MatrixBot:
         while True:
             logging.info("Matrix: Checking feeds for new articles...")
             current = time.time()
-            # Iterate only over Matrix rooms (self.rooms)
+            # Iterate over Matrix rooms
             for room in self.rooms:
                 feeds_to_check = feed.channel_feeds.get(room, {})
                 interval = feed.channel_intervals.get(room, feed.default_interval)
                 last_checked = feed.last_check_times.get(room, 0)
                 if current - last_checked >= interval:
                     for feed_name, feed_url in feeds_to_check.items():
-                        d = feedparser.parse(feed_url)
-                        if d.entries:
-                            entry = d.entries[0]
+                        parsed = feedparser.parse(feed_url)
+                        if parsed.entries:
+                            entry = parsed.entries[0]
                             published_time = None
                             if hasattr(entry, 'published_parsed') and entry.published_parsed:
                                 published_time = time.mktime(entry.published_parsed)
@@ -86,6 +86,7 @@ class MatrixBot:
                             link = entry.link.strip() if entry.link else ""
                             if link and link not in feed.last_feed_links:
                                 await self.send_message(room, f"New Feed from {feed_name}: {title}\nLink: {link}")
+                                logging.info(f"Matrix: Article posted to {room}: {title}")
                                 feed.save_last_feed_link(link)
                     feed.last_check_times[room] = current
             await asyncio.sleep(300)  # Wait 5 minutes
