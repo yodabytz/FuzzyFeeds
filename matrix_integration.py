@@ -86,9 +86,11 @@ class MatrixBot:
                                 pub_time = None
                                 if hasattr(entry, 'published_parsed') and entry.published_parsed:
                                     pub_time = time.mktime(entry.published_parsed)
-                                # Only include entries newer than the last check
-                                if pub_time and pub_time > last_checked:
-                                    new_entries.append((pub_time, entry))
+                                elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+                                    pub_time = time.mktime(entry.updated_parsed)
+                                # If no valid timestamp, assume it's new (using current time)
+                                if pub_time is None or pub_time > last_checked:
+                                    new_entries.append((pub_time or current, entry))
                             new_entries.sort(key=lambda x: x[0])  # Oldest first
                             for pub_time, entry in new_entries:
                                 title = entry.title.strip() if entry.title else "No Title"
@@ -334,7 +336,7 @@ class MatrixBot:
                 user_data["settings"][key] = value
                 users.save_users()
                 await self.send_message(room_key, f"Setting '{key}' set to '{value}'.")
-
+        
         elif cmd == "!getsetting":
             if len(parts) < 2:
                 await self.send_message(room_key, "Usage: !getsetting <key>")
@@ -346,7 +348,7 @@ class MatrixBot:
                     await self.send_message(room_key, f"{key}: {user_data['settings'][key]}")
                 else:
                     await self.send_message(room_key, f"No setting found for '{key}'.")
-
+        
         elif cmd == "!settings":
             users.add_user(sender)
             user_data = users.get_user(sender)
@@ -355,7 +357,7 @@ class MatrixBot:
                 await self.send_message(room_key, response)
             else:
                 await self.send_message(room_key, "No settings found.")
-
+        
         else:
             await self.send_message(room_key, "Unknown command. Use !help for a list.")
 
