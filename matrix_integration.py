@@ -75,19 +75,23 @@ class MatrixBot:
                     for feed_name, feed_url in feeds_to_check.items():
                         parsed = feedparser.parse(feed_url)
                         if parsed.entries:
-                            entry = parsed.entries[0]
-                            published_time = None
-                            if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                                published_time = time.mktime(entry.published_parsed)
-                            # Only process entries published after the last check
-                            if published_time is None or published_time <= last_checked:
-                                continue
-                            title = entry.title.strip() if entry.title else "No Title"
-                            link = entry.link.strip() if entry.link else ""
-                            if link and link not in feed.last_feed_links:
-                                await self.send_message(room, f"New Feed from {feed_name}: {title}\nLink: {link}")
-                                logging.info(f"Matrix: Article posted to {room}: {title}")
-                                feed.save_last_feed_link(link)
+                            # Collect all entries that are newer than last_checked
+                            new_entries = []
+                            for entry in parsed.entries:
+                                published_time = None
+                                if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                                    published_time = time.mktime(entry.published_parsed)
+                                if published_time and published_time > last_checked:
+                                    new_entries.append((published_time, entry))
+                            # Sort entries by publication time (oldest first)
+                            new_entries.sort(key=lambda x: x[0])
+                            for pub_time, entry in new_entries:
+                                title = entry.title.strip() if entry.title else "No Title"
+                                link = entry.link.strip() if entry.link else ""
+                                if link and link not in feed.last_feed_links:
+                                    await self.send_message(room, f"New Feed from {feed_name}: {title}\nLink: {link}")
+                                    logging.info(f"Matrix: Article posted to {room}: {title}")
+                                    feed.save_last_feed_link(link)
                     feed.last_check_times[room] = current
             await asyncio.sleep(300)  # Wait 5 minutes
 
