@@ -9,7 +9,10 @@ import datetime
 import feedparser
 
 from nio import AsyncClient, LoginResponse, RoomMessageText
-from config import matrix_homeserver, matrix_user, matrix_password, matrix_rooms, admins, admin as config_admin, admin_file, start_time
+from config import (
+    matrix_homeserver, matrix_user, matrix_password, matrix_rooms,
+    admins, admin as config_admin, admin_file, start_time
+)
 import feed
 import persistence
 import users
@@ -29,7 +32,7 @@ class MatrixBot:
     def __init__(self, homeserver, user, password, rooms):
         self.client = AsyncClient(homeserver, user)
         self.password = password
-        self.rooms = rooms
+        self.rooms = rooms  # List of Matrix room IDs
         self.start_time = 0  # Set after initial sync
         self.processing_enabled = False
         self.client.add_event_callback(self.message_callback, RoomMessageText)
@@ -66,30 +69,33 @@ class MatrixBot:
         while True:
             logging.info("Matrix: Checking feeds for new articles...")
             current = time.time()
-            # Iterate over Matrix rooms
+            # Iterate over each Matrix room
             for room in self.rooms:
-                feeds_to_check = feed.channel_feeds.get(room, {})
-                interval = feed.channel_intervals.get(room, feed.default_interval)
+                feeds_in_room = feed.channel_feeds.get(room, {})
+                interval = feed.channel_intervals.get(room, getattr(feed, "default_interval", 300))
                 last_checked = feed.last_check_times.get(room, 0)
                 if current - last_checked >= interval:
-                    for feed_name, feed_url in feeds_to_check.items():
+                    for feed_name, feed_url in feeds_in_room.items():
                         parsed = feedparser.parse(feed_url)
+                        if parsed.bozo:
+                            logging.warning(f"Error parsing feed {feed_url}: {parsed.bozo_exception}")
+                            continue
                         if parsed.entries:
-                            # Collect all entries that are newer than last_checked
                             new_entries = []
                             for entry in parsed.entries:
-                                published_time = None
+                                pub_time = None
                                 if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                                    published_time = time.mktime(entry.published_parsed)
-                                if published_time and published_time > last_checked:
-                                    new_entries.append((published_time, entry))
-                            # Sort entries by publication time (oldest first)
-                            new_entries.sort(key=lambda x: x[0])
+                                    pub_time = time.mktime(entry.published_parsed)
+                                # Only include entries newer than the last check
+                                if pub_time and pub_time > last_checked:
+                                    new_entries.append((pub_time, entry))
+                            new_entries.sort(key=lambda x: x[0])  # Oldest first
                             for pub_time, entry in new_entries:
                                 title = entry.title.strip() if entry.title else "No Title"
                                 link = entry.link.strip() if entry.link else ""
                                 if link and link not in feed.last_feed_links:
-                                    await self.send_message(room, f"New Feed from {feed_name}: {title}\nLink: {link}")
+                                    message = f"New Feed from {feed_name}: {title}\nLink: {link}"
+                                    await self.send_message(room, message)
                                     logging.info(f"Matrix: Article posted to {room}: {title}")
                                     feed.save_last_feed_link(link)
                     feed.last_check_times[room] = current
@@ -385,7 +391,6 @@ class MatrixBot:
         await self.login()
         await self.join_rooms()
         await self.initial_sync()
-        # Set the feed check baseline for each Matrix room so only new feeds (after syncing) are processed.
         current = time.time()
         for room in self.rooms:
             feed.last_check_times[room] = current
