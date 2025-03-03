@@ -6,9 +6,10 @@ import json
 import fnmatch
 import requests
 import datetime
+import feedparser
 
 from nio import AsyncClient, LoginResponse, RoomMessageText
-from config import matrix_homeserver, matrix_user, matrix_password, matrix_rooms, admins, admin, admin_file, start_time
+from config import matrix_homeserver, matrix_user, matrix_password, matrix_rooms, admins, admin as config_admin, admin_file, start_time
 import feed
 import persistence
 import users
@@ -63,14 +64,31 @@ class MatrixBot:
 
     async def check_feeds_loop(self):
         while True:
-            def send_matrix_message(channel, msg):
-                if channel in self.rooms:
-                    asyncio.create_task(self.send_message(channel, msg))
-            try:
-                feed.check_feeds(send_matrix_message, channels_to_check=self.rooms)
-            except Exception as e:
-                logging.error(f"Error in Matrix feed checker: {e}")
-            await asyncio.sleep(300)
+            logging.info("Matrix: Checking feeds for new articles...")
+            current = time.time()
+            # Iterate only over Matrix rooms (self.rooms)
+            for room in self.rooms:
+                feeds_to_check = feed.channel_feeds.get(room, {})
+                interval = feed.channel_intervals.get(room, feed.default_interval)
+                last_checked = feed.last_check_times.get(room, 0)
+                if current - last_checked >= interval:
+                    for feed_name, feed_url in feeds_to_check.items():
+                        d = feedparser.parse(feed_url)
+                        if d.entries:
+                            entry = d.entries[0]
+                            published_time = None
+                            if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                                published_time = time.mktime(entry.published_parsed)
+                            # Only process entries published after the last check
+                            if published_time is None or published_time <= last_checked:
+                                continue
+                            title = entry.title.strip() if entry.title else "No Title"
+                            link = entry.link.strip() if entry.link else ""
+                            if link and link not in feed.last_feed_links:
+                                await self.send_message(room, f"New Feed from {feed_name}: {title}\nLink: {link}")
+                                feed.save_last_feed_link(link)
+                    feed.last_check_times[room] = current
+            await asyncio.sleep(300)  # Wait 5 minutes
 
     async def process_command(self, room, command, sender):
         room_key = room.room_id
@@ -88,7 +106,7 @@ class MatrixBot:
             try:
                 with open(admin_file, "r") as f:
                     admin_mapping = json.load(f)
-                if sender.lower() == admin.lower() or sender.lower() in [a.lower() for a in admins]:
+                if sender.lower() == config_admin.lower() or sender.lower() in [a.lower() for a in admins]:
                     irc_admins = {k: v for k, v in admin_mapping.items() if k.startswith("#")}
                     matrix_admins = {k: v for k, v in admin_mapping.items() if k.startswith("!")}
                     discord_admins = {k: v for k, v in admin_mapping.items() if k.isdigit() or k.lower() == "discord"}
@@ -131,8 +149,7 @@ class MatrixBot:
         elif cmd == "!stats":
             uptime_seconds = int(time.time() - self.start_time)
             uptime = str(datetime.timedelta(seconds=uptime_seconds))
-            from config import admin, admins
-            if sender.lower() == admin.lower() or sender.lower() in [a.lower() for a in admins]:
+            if sender.lower() == config_admin.lower() or sender.lower() in [a.lower() for a in admins]:
                 matrix_feed_count = sum(len(feed.channel_feeds[k]) for k in feed.channel_feeds if k.startswith("!"))
                 response = (f"Global Uptime: {uptime}\n"
                             f"Matrix Global Feeds: {matrix_feed_count} across {len(feed.channel_feeds)} rooms\n"
@@ -363,6 +380,10 @@ class MatrixBot:
         await self.login()
         await self.join_rooms()
         await self.initial_sync()
+        # Set the feed check baseline for each Matrix room so only new feeds (after syncing) are processed.
+        current = time.time()
+        for room in self.rooms:
+            feed.last_check_times[room] = current
         asyncio.create_task(self.check_feeds_loop())
         await self.sync_forever()
 
@@ -378,4 +399,3 @@ def start_matrix_bot():
 
 if __name__ == "__main__":
     start_matrix_bot()
-
