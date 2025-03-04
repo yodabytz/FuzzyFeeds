@@ -61,8 +61,7 @@ class MatrixBot:
         logging.info("Performing initial sync...")
         await self.client.sync(timeout=30000)
         await asyncio.sleep(GRACE_PERIOD)
-        # Do not update last_check_times here—retain the saved value (or 0) so that
-        # the first check posts the latest article.
+        # Retain the saved last_check_times (or 0) so that new articles are posted on first run.
         self.start_time = int(time.time() * 1000)
         self.processing_enabled = True
         logging.info("Initial sync complete; start_time set to %s", self.start_time)
@@ -70,29 +69,21 @@ class MatrixBot:
     async def check_feeds_loop(self):
         while True:
             logging.info("Matrix: Checking feeds for new articles...")
-            current = time.time()
             # Iterate over each Matrix room
             for room in self.rooms:
                 feeds_in_room = feed.channel_feeds.get(room, {})
                 interval = feed.channel_intervals.get(room, getattr(feed, "default_interval", 300))
                 last_checked = feed.last_check_times.get(room, 0)
-                if current - last_checked >= interval:
+                # Only check if the interval has passed
+                if time.time() - last_checked >= interval:
                     for feed_name, feed_url in feeds_in_room.items():
                         parsed = feedparser.parse(feed_url)
                         if parsed.bozo:
                             logging.warning(f"Error parsing feed {feed_url}: {parsed.bozo_exception}")
                             continue
                         if parsed.entries:
-                            # Use only the first (latest) entry as in IRC
+                            # Mimic IRC: look at only the latest entry
                             entry = parsed.entries[0]
-                            published_time = None
-                            if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                                published_time = time.mktime(entry.published_parsed)
-                            elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
-                                published_time = time.mktime(entry.updated_parsed)
-                            # If we have a valid timestamp and it's not newer than last check, skip
-                            if published_time is not None and published_time <= last_checked:
-                                continue
                             title = entry.title.strip() if entry.title else "No Title"
                             link = entry.link.strip() if entry.link else ""
                             if link and link not in feed.last_feed_links:
@@ -100,7 +91,8 @@ class MatrixBot:
                                 await self.send_message(room, message)
                                 logging.info(f"Matrix: Article posted to {room}: {title}")
                                 feed.save_last_feed_link(link)
-                    feed.last_check_times[room] = current
+                    # Update last check time regardless
+                    feed.last_check_times[room] = time.time()
             await asyncio.sleep(300)  # Wait 5 minutes
 
     async def process_command(self, room, command, sender):
@@ -392,7 +384,7 @@ class MatrixBot:
         await self.login()
         await self.join_rooms()
         await self.initial_sync()
-        # Do not reset last_check_times here, so that Matrix posts the latest article if not seen yet.
+        # Do not reset last_check_times on startup so that any new articles (even if older than now) can be posted.
         asyncio.create_task(self.check_feeds_loop())
         await self.sync_forever()
 
