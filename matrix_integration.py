@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3ddd
 import asyncio
 import logging
 import time
