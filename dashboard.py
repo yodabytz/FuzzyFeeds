@@ -4,20 +4,20 @@ import time
 import datetime
 import logging
 from flask import Flask, request, Response, render_template_string
-from config import start_time, dashboard_port
+from config import start_time, dashboard_port, dashboard_username, dashboard_password
 import feed
+# Import the global matrix_room_names from matrix_integration.
+try:
+    from matrix_integration import matrix_room_names
+except ImportError:
+    matrix_room_names = {}
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
-# Credentials for Basic Auth
-USERNAME = 'webuser'
-PASSWORD = 'p4zzw0rd'
-
 def check_auth(username, password):
-    return username == USERNAME and password == PASSWORD
+    return username == dashboard_username and password == dashboard_password
 
 def authenticate():
     return Response(
@@ -35,7 +35,6 @@ def requires_auth(f):
         return f(*args, **kwargs)
     return decorated
 
-# Detailed template with integration-specific sections
 template = """
 <!DOCTYPE html>
 <html lang="en">
@@ -46,8 +45,10 @@ template = """
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <style>
       body { padding-top: 60px; }
+      .container { max-width: 1200px; }
       .card { margin-bottom: 20px; }
-      .table td, .table th { vertical-align: middle; }
+      .table { table-layout: fixed; width: 100%; word-wrap: break-word; }
+      .table th, .table td { vertical-align: middle; overflow: hidden; text-overflow: ellipsis; }
       .footer { text-align: center; margin-top: 20px; color: #777; }
     </style>
 </head>
@@ -99,7 +100,7 @@ template = """
                     <thead>
                       <tr>
                         <th>Channel</th>
-                        <th># Feeds</th>
+                        <th style="width:80px;"># Feeds</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -126,14 +127,20 @@ template = """
                   <table class="table table-sm table-bordered">
                     <thead>
                       <tr>
-                        <th>Room ID</th>
-                        <th># Feeds</th>
+                        <th>Room</th>
+                        <th style="width:80px;"># Feeds</th>
                       </tr>
                     </thead>
                     <tbody>
                       {% for room, feeds in matrix_rooms.items() %}
                       <tr>
-                        <td>{{ room }}</td>
+                        <td>
+                          {% if matrix_room_names[room] is defined and matrix_room_names[room] %}
+                            {{ matrix_room_names[room] }}
+                          {% else %}
+                            {{ room }}
+                          {% endif %}
+                        </td>
                         <td>{{ feeds|length }}</td>
                       </tr>
                       {% endfor %}
@@ -155,7 +162,7 @@ template = """
                     <thead>
                       <tr>
                         <th>Channel ID</th>
-                        <th># Feeds</th>
+                        <th style="width:80px;"># Feeds</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -200,7 +207,7 @@ template = """
 @requires_auth
 def index():
     # Load the latest feeds and subscriptions from JSON files
-    feed.load_feeds()  # This will update feed.channel_feeds and feed.subscriptions
+    feed.load_feeds()  # This updates feed.channel_feeds and feed.subscriptions
 
     uptime_seconds = int(time.time() - start_time)
     uptime = str(datetime.timedelta(seconds=uptime_seconds))
@@ -211,7 +218,6 @@ def index():
     # Group channels by integration based on key prefix:
     irc_channels = {chan: feeds for chan, feeds in feed.channel_feeds.items() if chan.startswith("#")}
     matrix_rooms = {chan: feeds for chan, feeds in feed.channel_feeds.items() if chan.startswith("!")}
-    # For Discord, we assume keys that are numeric.
     discord_channels = {chan: feeds for chan, feeds in feed.channel_feeds.items() if chan.isdigit()}
 
     errors = "No errors reported."  # Replace with error log details if available.
@@ -226,9 +232,9 @@ def index():
                                   matrix_rooms=matrix_rooms,
                                   discord_channels=discord_channels,
                                   errors=errors,
-                                  current_year=current_year)
+                                  current_year=current_year,
+                                  matrix_room_names=matrix_room_names)
 
 if __name__ == '__main__':
     logging.info(f"Dashboard starting on port {dashboard_port} and binding to 0.0.0.0")
     app.run(host='0.0.0.0', port=dashboard_port)
-
