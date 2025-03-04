@@ -4,7 +4,7 @@ import logging
 import json
 import asyncio
 from discord.ext import commands
-from config import discord_token, discord_channel_id, admin, admins, admin_file
+from config import discord_token, discord_channel_id, admin, admins
 from commands import search_feeds
 import feed
 import time
@@ -30,10 +30,13 @@ def load_help_data():
 
 help_data = load_help_data()
 
+# Maintain a separate set for duplicate prevention in Discord
+discord_last_feed_links = set()
+
 @bot.event
 async def on_ready():
     logging.info(f"Discord bot is ready as {bot.user}")
-    # Start the feed-checking task
+    # Start the background feed checker
     bot.loop.create_task(check_feeds_for_updates())
 
 @bot.event
@@ -45,20 +48,36 @@ async def on_message(message):
 
 async def check_feeds_for_updates():
     await bot.wait_until_ready()
-    channel = bot.get_channel(int(discord_channel_id))
-    if channel is None:
-        logging.error(f"Could not find Discord channel with ID {discord_channel_id}")
-        return
     while not bot.is_closed():
-        logging.info("Checking feeds for new articles...")
-        # Define a callback that sends messages to the Discord channel
-        def send_discord_message(feed_channel, message):
-            # Since Discord uses a single channel (configured via discord_channel_id),
-            # we ignore feed_channel and post every new feed entry to the same channel.
-            asyncio.create_task(channel.send(message))
-        # Call the shared feed checker with our callback.
-        feed.check_feeds(send_discord_message)
-        await asyncio.sleep(300)
+        logging.info("Discord: Checking feeds for new articles...")
+        # Iterate over each channel in feed.channel_feeds
+        for channel_id, feeds_dict in feed.channel_feeds.items():
+            try:
+                # Attempt to convert the key to an integer (Discord channel IDs are numeric)
+                discord_channel_id_int = int(channel_id)
+            except ValueError:
+                logging.error(f"Discord: Channel ID '{channel_id}' is not numeric. Skipping this key.")
+                continue
+            logging.info(f"Discord: Channel {channel_id} has {len(feeds_dict)} feeds.")
+            for feed_name, feed_url in feeds_dict.items():
+                title, link = feed.fetch_latest_article(feed_url)
+                logging.info(f"Discord: For feed '{feed_name}', fetch_latest_article() returned Title: '{title}', Link: '{link}'")
+                if title and link:
+                    if link not in discord_last_feed_links:
+                        message_text = f"New Feed from {feed_name}: {title}\nLink: {link}"
+                        logging.info(f"Discord: Sending message to channel {channel_id}: {message_text}")
+                        channel = bot.get_channel(discord_channel_id_int)
+                        if channel:
+                            await channel.send(message_text)
+                            logging.info(f"Discord: Article posted to channel {channel_id}: {title}")
+                            discord_last_feed_links.add(link)
+                        else:
+                            logging.error(f"Discord: Could not find channel with ID {channel_id}")
+                    else:
+                        logging.info(f"Discord: Duplicate article (already posted): {link}")
+                else:
+                    logging.info(f"Discord: No valid article found for feed '{feed_name}' in channel {channel_id}.")
+        await asyncio.sleep(300)  # Check every 5 minutes
 
 def register_commands():
     for cmd, desc in help_data.items():
@@ -69,7 +88,7 @@ def register_commands():
         async def dynamic_command(ctx, *args, cmd=cmd):
             full_command = f"{cmd} {' '.join(args)}".strip()
             
-            if cmd.lower() == "search":
+            if cmd == "search":
                 if not args:
                     await ctx.send("Usage: `!search <query>` - Search for feeds matching a query.")
                     return
@@ -82,7 +101,7 @@ def register_commands():
                     await ctx.send(f"**Search results for `{query}`:**\n{response}")
                 return
 
-            if cmd.lower() == "addfeed":
+            if cmd == "addfeed":
                 if len(args) < 2:
                     await ctx.send("Usage: `!addfeed <feed_name> <URL>`")
                     return
@@ -95,7 +114,7 @@ def register_commands():
                 await ctx.send(f"Feed added: `{feed_name}` - {feed_url}")
                 return
 
-            if cmd.lower() == "delfeed":
+            if cmd == "delfeed":
                 if len(args) < 1:
                     await ctx.send("Usage: `!delfeed <feed_name>`")
                     return
@@ -109,7 +128,7 @@ def register_commands():
                 await ctx.send(f"Feed `{feed_name}` removed successfully.")
                 return
 
-            if cmd.lower() == "latest":
+            if cmd == "latest":
                 if len(args) < 1:
                     await ctx.send("Usage: `!latest <feed_name>`")
                     return
@@ -125,7 +144,7 @@ def register_commands():
                     await ctx.send(f"No new entries available for `{feed_name}`.")
                 return
 
-            if cmd.lower() == "listfeeds":
+            if cmd == "listfeeds":
                 channel_id = str(ctx.channel.id)
                 if channel_id not in feed.channel_feeds or not feed.channel_feeds[channel_id]:
                     await ctx.send("No feeds found for this channel.")
@@ -134,51 +153,17 @@ def register_commands():
                 await ctx.send(f"**Feeds for this channel:**\n{response}")
                 return
 
-            if cmd.lower() == "stats":
+            if cmd == "stats":
                 uptime_seconds = int(time.time() - config.start_time)
                 uptime = str(datetime.timedelta(seconds=uptime_seconds))
-                if ctx.author.name.lower() == config.admin.lower() or ctx.author.name.lower() in [a.lower() for a in config.admins]:
-                    irc_keys = [k for k in feed.channel_feeds if k.startswith("#")]
-                    discord_keys = [k for k in feed.channel_feeds if k.isdigit() or k.lower() == "discord"]
-                    matrix_keys = [k for k in feed.channel_feeds if k.startswith("!")]
-                    irc_feed_count = sum(len(feed.channel_feeds[k]) for k in irc_keys)
-                    discord_feed_count = sum(len(feed.channel_feeds[k]) for k in discord_keys)
-                    matrix_feed_count = sum(len(feed.channel_feeds[k]) for k in matrix_keys)
-                    response = (f"📊 **Global Bot Statistics:**\n"
-                                f"- Global Uptime: {uptime}\n"
-                                f"- IRC Global Feeds: {irc_feed_count} across {len(irc_keys)} channels\n"
-                                f"- Discord Global Feeds: {discord_feed_count} across {len(discord_keys)} channels\n"
-                                f"- Matrix Global Feeds: {matrix_feed_count} across {len(matrix_keys)} rooms\n"
-                                f"- User Subscriptions: {sum(len(subs) for subs in feed.subscriptions.values())} total (from {len(feed.subscriptions)} users)")
+                is_admin_flag = (ctx.author.name.lower() == config.admin.lower() or ctx.author.name.lower() in [a.lower() for a in config.admins])
+                if is_admin_flag:
+                    response = "Admin stats not implemented for Discord yet."
                 else:
                     channel_id = str(ctx.channel.id)
                     num_channel_feeds = len(feed.channel_feeds[channel_id]) if channel_id in feed.channel_feeds else 0
-                    response = (f"📊 **Server Statistics for {ctx.channel.name}:**\n"
-                                f"- Uptime: {uptime}\n"
-                                f"- {num_channel_feeds} feeds.")
+                    response = f"Uptime: {uptime}\nChannel '{ctx.channel.name}' Feeds: {num_channel_feeds}"
                 await ctx.send(response)
-                return
-
-            if cmd.lower() == "admin":
-                try:
-                    with open(admin_file, "r") as f:
-                        admin_mapping = json.load(f)
-                    if ctx.author.name.lower() == config.admin.lower() or ctx.author.name.lower() in [a.lower() for a in config.admins]:
-                        irc_admins = {k: v for k, v in admin_mapping.items() if k.startswith("#")}
-                        matrix_admins = {k: v for k, v in admin_mapping.items() if k.startswith("!")}
-                        discord_admins = {k: v for k, v in admin_mapping.items() if k.isdigit() or k.lower() == "discord"}
-                        response = "IRC:\n" + "\n".join([f"{chan}: {adm}" for chan, adm in irc_admins.items()]) + "\n"
-                        response += "Matrix:\n" + "\n".join([f"{chan}: {adm}" for chan, adm in matrix_admins.items()]) + "\n"
-                        response += "Discord:\n" + "\n".join([f"{chan}: {adm}" for chan, adm in discord_admins.items()])
-                    else:
-                        channel_id = str(ctx.channel.id)
-                        if channel_id in admin_mapping:
-                            response = f"Admin for this channel: {admin_mapping[channel_id]}"
-                        else:
-                            response = "No admin info available for this channel."
-                    await ctx.send(response)
-                except Exception as e:
-                    await ctx.send(f"Error reading admin info: {e}")
                 return
 
             if cmd in help_data:
@@ -204,4 +189,3 @@ def run_discord_bot():
 
 if __name__ == "__main__":
     run_discord_bot()
-
