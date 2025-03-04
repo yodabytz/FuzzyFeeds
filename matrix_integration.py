@@ -24,12 +24,12 @@ logging.basicConfig(level=logging.INFO)
 GRACE_PERIOD = 5
 POSTED_FILE = "matrix_posted.json"
 
+# Global dictionary to hold posted articles (loaded from file)
 def load_posted_articles():
     if os.path.exists(POSTED_FILE):
         try:
             with open(POSTED_FILE, "r") as f:
                 data = json.load(f)
-                # Stored as a list; convert to set for fast lookup
                 return set(data)
         except Exception as e:
             logging.error(f"Error loading {POSTED_FILE}: {e}")
@@ -38,11 +38,13 @@ def load_posted_articles():
 
 def save_posted_articles(posted_set):
     try:
-        # Convert set to list and save
         with open(POSTED_FILE, "w") as f:
             json.dump(list(posted_set), f, indent=4)
     except Exception as e:
         logging.error(f"Error saving {POSTED_FILE}: {e}")
+
+# Global dictionary to hold Matrix room display names.
+matrix_room_names = {}
 
 def match_feed(feed_dict, pattern):
     if "*" in pattern or "?" in pattern:
@@ -51,11 +53,6 @@ def match_feed(feed_dict, pattern):
     return pattern if pattern in feed_dict else None
 
 def get_feeds_for_room(room):
-    """
-    Given a Matrix room identifier (from config), try to find the corresponding
-    feed data in feed.channel_feeds. If an exact match isn’t found, try matching
-    after stripping leading '#' or '!' and comparing in lowercase.
-    """
     feeds = feed.channel_feeds.get(room)
     if feeds is not None:
         return feeds
@@ -63,7 +60,7 @@ def get_feeds_for_room(room):
     for key, val in feed.channel_feeds.items():
         if key.lstrip("#!").lower() == norm:
             return val
-    return {}  # Return empty if not found
+    return {}
 
 class MatrixBot:
     def __init__(self, homeserver, user, password, rooms):
@@ -72,7 +69,6 @@ class MatrixBot:
         self.rooms = rooms  # List of Matrix room IDs from config
         self.start_time = 0  # Set after initial sync
         self.processing_enabled = False
-        # Global duplicate prevention for Matrix: loaded from JSON file.
         self.posted_articles = load_posted_articles()
         self.client.add_event_callback(self.message_callback, RoomMessageText)
 
@@ -85,12 +81,21 @@ class MatrixBot:
             raise Exception("Matrix login failed")
 
     async def join_rooms(self):
+        global matrix_room_names
         for room in self.rooms:
             try:
                 response = await self.client.join(room)
                 if hasattr(response, "room_id"):
-                    logging.info(f"Joined Matrix room: {room}")
-                    await self.send_message(response.room_id, "🤖 FuzzyFeeds Bot is online! Type `!help` for commands.")
+                    # Fetch the room's display name using m.room.name
+                    try:
+                        state = await self.client.room_get_state_event(room, "m.room.name", "")
+                        display_name = state.get("name", room)
+                    except Exception as e:
+                        logging.warning(f"Could not fetch display name for {room}: {e}")
+                        display_name = room
+                    matrix_room_names[room] = display_name
+                    logging.info(f"Joined Matrix room: {room} (Display name: {display_name})")
+                    await self.send_message(room, f"🤖 FuzzyFeeds Bot is online! Type `!help` for commands. (Room: {display_name})")
                 else:
                     logging.error(f"Error joining room {room}: {response}")
             except Exception as e:
@@ -119,7 +124,7 @@ class MatrixBot:
                         logging.warning(f"Room {room}: Error parsing feed {feed_url}: {parsed.bozo_exception}")
                         continue
                     if parsed.entries:
-                        entry = parsed.entries[0]  # Latest entry
+                        entry = parsed.entries[0]
                         published_time = None
                         if hasattr(entry, 'published_parsed') and entry.published_parsed:
                             published_time = time.mktime(entry.published_parsed)
@@ -146,19 +151,16 @@ class MatrixBot:
                         logging.info(f"Room {room}: No entries found for feed '{feed_name}'.")
                 feed.last_check_times[room] = current
                 logging.info(f"Room {room}: Updated last check time to {current}")
-            await asyncio.sleep(300)  # Wait 5 minutes
+            await asyncio.sleep(300)
 
     async def process_command(self, room, command, sender):
         room_key = room.room_id
         parts = command.strip().split(" ", 2)
         cmd = parts[0].lower()
-
         if hasattr(room, "origin_server_ts") and room.origin_server_ts < self.start_time:
             logging.info(f"Ignoring old message in {room_key}: {command}")
             return
-
         logging.info(f"Processing command `{cmd}` from `{sender}` in `{room_key}`.")
-
         if cmd == "!listfeeds":
             feeds = get_feeds_for_room(room_key)
             if not feeds:
