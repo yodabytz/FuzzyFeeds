@@ -18,7 +18,7 @@ import persistence
 import users
 from commands import search_feeds, get_help
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 GRACE_PERIOD = 5
 
@@ -61,7 +61,6 @@ class MatrixBot:
         logging.info("Performing initial sync...")
         await self.client.sync(timeout=30000)
         await asyncio.sleep(GRACE_PERIOD)
-        # Retain the saved last_check_times (or 0) so that new articles are posted on first run.
         self.start_time = int(time.time() * 1000)
         self.processing_enabled = True
         logging.info("Initial sync complete; start_time set to %s", self.start_time)
@@ -69,30 +68,36 @@ class MatrixBot:
     async def check_feeds_loop(self):
         while True:
             logging.info("Matrix: Checking feeds for new articles...")
+            current = time.time()
             # Iterate over each Matrix room
             for room in self.rooms:
                 feeds_in_room = feed.channel_feeds.get(room, {})
                 interval = feed.channel_intervals.get(room, getattr(feed, "default_interval", 300))
                 last_checked = feed.last_check_times.get(room, 0)
-                # Only check if the interval has passed
-                if time.time() - last_checked >= interval:
+                logging.debug(f"Room {room}: last_checked={last_checked}, interval={interval}")
+                if current - last_checked >= interval:
                     for feed_name, feed_url in feeds_in_room.items():
+                        logging.debug(f"Room {room}: Checking feed '{feed_name}' at URL: {feed_url}")
                         parsed = feedparser.parse(feed_url)
                         if parsed.bozo:
                             logging.warning(f"Error parsing feed {feed_url}: {parsed.bozo_exception}")
                             continue
                         if parsed.entries:
-                            # Mimic IRC: look at only the latest entry
+                            # Use only the first (latest) entry as in IRC
                             entry = parsed.entries[0]
                             title = entry.title.strip() if entry.title else "No Title"
                             link = entry.link.strip() if entry.link else ""
+                            logging.debug(f"Parsed entry - Title: {title}, Link: {link}")
+                            # Check if this link has already been posted
                             if link and link not in feed.last_feed_links:
                                 message = f"New Feed from {feed_name}: {title}\nLink: {link}"
+                                logging.debug(f"Room {room}: Attempting to send message: {message}")
                                 await self.send_message(room, message)
                                 logging.info(f"Matrix: Article posted to {room}: {title}")
                                 feed.save_last_feed_link(link)
-                    # Update last check time regardless
-                    feed.last_check_times[room] = time.time()
+                        else:
+                            logging.debug(f"Feed {feed_url} has no entries.")
+                    feed.last_check_times[room] = current
             await asyncio.sleep(300)  # Wait 5 minutes
 
     async def process_command(self, room, command, sender):
@@ -106,6 +111,7 @@ class MatrixBot:
 
         logging.info(f"Processing command `{cmd}` from `{sender}` in `{room_key}`.")
 
+        # All command branches remain the same as previous versions.
         if cmd == "!admin":
             try:
                 with open(admin_file, "r") as f:
@@ -327,7 +333,7 @@ class MatrixBot:
                 user_data["settings"][key] = value
                 users.save_users()
                 await self.send_message(room_key, f"Setting '{key}' set to '{value}'.")
-
+        
         elif cmd == "!getsetting":
             if len(parts) < 2:
                 await self.send_message(room_key, "Usage: !getsetting <key>")
@@ -339,7 +345,7 @@ class MatrixBot:
                     await self.send_message(room_key, f"{key}: {user_data['settings'][key]}")
                 else:
                     await self.send_message(room_key, f"No setting found for '{key}'.")
-
+        
         elif cmd == "!settings":
             users.add_user(sender)
             user_data = users.get_user(sender)
@@ -348,7 +354,7 @@ class MatrixBot:
                 await self.send_message(room_key, response)
             else:
                 await self.send_message(room_key, "No settings found.")
-
+        
         else:
             await self.send_message(room_key, "Unknown command. Use !help for a list.")
 
@@ -364,6 +370,7 @@ class MatrixBot:
 
     async def send_message(self, room_id, message):
         try:
+            logging.debug(f"Attempting to send message to {room_id}: {message}")
             await self.client.room_send(
                 room_id,
                 message_type="m.room.message",
@@ -384,7 +391,7 @@ class MatrixBot:
         await self.login()
         await self.join_rooms()
         await self.initial_sync()
-        # Do not reset last_check_times on startup so that any new articles (even if older than now) can be posted.
+        # Do not reset last_check_times so that any new articles are posted.
         asyncio.create_task(self.check_feeds_loop())
         await self.sync_forever()
 
