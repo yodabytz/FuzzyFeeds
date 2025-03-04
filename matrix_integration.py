@@ -81,25 +81,21 @@ class MatrixBot:
                             logging.warning(f"Error parsing feed {feed_url}: {parsed.bozo_exception}")
                             continue
                         if parsed.entries:
-                            new_entries = []
-                            for entry in parsed.entries:
-                                pub_time = None
-                                if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                                    pub_time = time.mktime(entry.published_parsed)
-                                elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
-                                    pub_time = time.mktime(entry.updated_parsed)
-                                # If no valid timestamp, assume it's new (using current time)
-                                if pub_time is None or pub_time > last_checked:
-                                    new_entries.append((pub_time or current, entry))
-                            new_entries.sort(key=lambda x: x[0])  # Oldest first
-                            for pub_time, entry in new_entries:
-                                title = entry.title.strip() if entry.title else "No Title"
-                                link = entry.link.strip() if entry.link else ""
-                                if link and link not in feed.last_feed_links:
-                                    message = f"New Feed from {feed_name}: {title}\nLink: {link}"
-                                    await self.send_message(room, message)
-                                    logging.info(f"Matrix: Article posted to {room}: {title}")
-                                    feed.save_last_feed_link(link)
+                            # Use the first (latest) entry like in IRC
+                            entry = parsed.entries[0]
+                            published_time = None
+                            if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                                published_time = time.mktime(entry.published_parsed)
+                            # Skip if published time is available and not newer than last check
+                            if published_time is not None and published_time <= last_checked:
+                                continue
+                            title = entry.title.strip() if entry.title else "No Title"
+                            link = entry.link.strip() if entry.link else ""
+                            if link and link not in feed.last_feed_links:
+                                message = f"New Feed from {feed_name}: {title}\nLink: {link}"
+                                await self.send_message(room, message)
+                                logging.info(f"Matrix: Article posted to {room}: {title}")
+                                feed.save_last_feed_link(link)
                     feed.last_check_times[room] = current
             await asyncio.sleep(300)  # Wait 5 minutes
 
@@ -108,7 +104,6 @@ class MatrixBot:
         parts = command.strip().split(" ", 2)
         cmd = parts[0].lower()
 
-        # Ignore messages older than sync start time.
         if hasattr(room, "origin_server_ts") and room.origin_server_ts < self.start_time:
             logging.info(f"Ignoring old message in {room_key}: {command}")
             return
@@ -336,7 +331,7 @@ class MatrixBot:
                 user_data["settings"][key] = value
                 users.save_users()
                 await self.send_message(room_key, f"Setting '{key}' set to '{value}'.")
-        
+
         elif cmd == "!getsetting":
             if len(parts) < 2:
                 await self.send_message(room_key, "Usage: !getsetting <key>")
@@ -348,7 +343,7 @@ class MatrixBot:
                     await self.send_message(room_key, f"{key}: {user_data['settings'][key]}")
                 else:
                     await self.send_message(room_key, f"No setting found for '{key}'.")
-        
+
         elif cmd == "!settings":
             users.add_user(sender)
             user_data = users.get_user(sender)
@@ -357,7 +352,7 @@ class MatrixBot:
                 await self.send_message(room_key, response)
             else:
                 await self.send_message(room_key, "No settings found.")
-        
+
         else:
             await self.send_message(room_key, "Unknown command. Use !help for a list.")
 
