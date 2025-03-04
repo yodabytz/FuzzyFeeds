@@ -18,6 +18,7 @@ import persistence
 import users
 from commands import search_feeds, get_help
 
+# Set logging level to INFO to see key logs.
 logging.basicConfig(level=logging.INFO)
 
 GRACE_PERIOD = 5
@@ -35,7 +36,7 @@ class MatrixBot:
         self.rooms = rooms  # List of Matrix room IDs
         self.start_time = 0  # Set after initial sync
         self.processing_enabled = False
-        # Use a separate set for Matrix duplicate prevention
+        # Use a separate duplicate set for Matrix integration
         self.matrix_last_feed_links = set()
         self.client.add_event_callback(self.message_callback, RoomMessageText)
 
@@ -63,7 +64,7 @@ class MatrixBot:
         logging.info("Performing initial sync...")
         await self.client.sync(timeout=30000)
         await asyncio.sleep(GRACE_PERIOD)
-        # Do not reset last_check_times so that new articles are posted.
+        # Do not alter last_check_times here so that new articles (not yet posted) are detected.
         self.start_time = int(time.time() * 1000)
         self.processing_enabled = True
         logging.info("Initial sync complete; start_time set to %s", self.start_time)
@@ -71,27 +72,27 @@ class MatrixBot:
     async def check_feeds_loop(self):
         while True:
             logging.info("Matrix: Checking feeds for new articles...")
-            current = time.time()
-            # Iterate over each Matrix room
+            # For each room, iterate over its feeds and use the same fetch logic as the IRC !latest command.
             for room in self.rooms:
                 feeds_in_room = feed.channel_feeds.get(room, {})
-                interval = feed.channel_intervals.get(room, getattr(feed, "default_interval", 300))
-                last_checked = feed.last_check_times.get(room, 0)
-                logging.debug(f"Room {room}: last_checked={last_checked}, interval={interval}")
-                if current - last_checked >= interval:
-                    for feed_name, feed_url in feeds_in_room.items():
-                        logging.debug(f"Room {room}: Checking feed '{feed_name}' at URL: {feed_url}")
-                        # Use the same logic as the !latest command
-                        title, link = feed.fetch_latest_article(feed_url)
-                        logging.debug(f"Fetched from feed '{feed_name}': Title: {title}, Link: {link}")
-                        if title and link and link not in self.matrix_last_feed_links:
+                logging.info(f"Room {room}: Found {len(feeds_in_room)} feeds.")
+                for feed_name, feed_url in feeds_in_room.items():
+                    # Call the same fetch_latest_article() as used by !latest.
+                    title, link = feed.fetch_latest_article(feed_url)
+                    logging.info(f"Room {room}: For feed '{feed_name}', fetch_latest_article() returned Title: '{title}', Link: '{link}'")
+                    if title and link:
+                        if link not in self.matrix_last_feed_links:
                             message = f"New Feed from {feed_name}: {title}\nLink: {link}"
-                            logging.debug(f"Room {room}: Attempting to send message: {message}")
+                            logging.info(f"Room {room}: Attempting to send message: {message}")
                             await self.send_message(room, message)
                             logging.info(f"Matrix: Article posted to {room}: {title}")
                             self.matrix_last_feed_links.add(link)
-                    feed.last_check_times[room] = current
-            await asyncio.sleep(300)  # Wait 5 minutes
+                        else:
+                            logging.info(f"Room {room}: Article already posted (duplicate).")
+                    else:
+                        logging.info(f"Room {room}: No valid article found for feed '{feed_name}'.")
+            # Wait 5 minutes before checking again.
+            await asyncio.sleep(300)
 
     async def process_command(self, room, command, sender):
         room_key = room.room_id
@@ -104,6 +105,7 @@ class MatrixBot:
 
         logging.info(f"Processing command `{cmd}` from `{sender}` in `{room_key}`.")
 
+        # [Command handling branches remain identical to previous versions]
         if cmd == "!admin":
             try:
                 with open(admin_file, "r") as f:
@@ -383,7 +385,7 @@ class MatrixBot:
         await self.login()
         await self.join_rooms()
         await self.initial_sync()
-        # Do not reset last_check_times so that any new articles are posted.
+        # Do not reset last_check_times so that any new articles are published.
         asyncio.create_task(self.check_feeds_loop())
         await self.sync_forever()
 
