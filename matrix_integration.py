@@ -18,7 +18,7 @@ import persistence
 import users
 from commands import search_feeds, get_help
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 GRACE_PERIOD = 5
 
@@ -61,6 +61,7 @@ class MatrixBot:
         logging.info("Performing initial sync...")
         await self.client.sync(timeout=30000)
         await asyncio.sleep(GRACE_PERIOD)
+        # Do not reset last_check_times here so that new articles are posted
         self.start_time = int(time.time() * 1000)
         self.processing_enabled = True
         logging.info("Initial sync complete; start_time set to %s", self.start_time)
@@ -78,25 +79,15 @@ class MatrixBot:
                 if current - last_checked >= interval:
                     for feed_name, feed_url in feeds_in_room.items():
                         logging.debug(f"Room {room}: Checking feed '{feed_name}' at URL: {feed_url}")
-                        parsed = feedparser.parse(feed_url)
-                        if parsed.bozo:
-                            logging.warning(f"Error parsing feed {feed_url}: {parsed.bozo_exception}")
-                            continue
-                        if parsed.entries:
-                            # Use only the first (latest) entry as in IRC
-                            entry = parsed.entries[0]
-                            title = entry.title.strip() if entry.title else "No Title"
-                            link = entry.link.strip() if entry.link else ""
-                            logging.debug(f"Parsed entry - Title: {title}, Link: {link}")
-                            # Check if this link has already been posted
-                            if link and link not in feed.last_feed_links:
-                                message = f"New Feed from {feed_name}: {title}\nLink: {link}"
-                                logging.debug(f"Room {room}: Attempting to send message: {message}")
-                                await self.send_message(room, message)
-                                logging.info(f"Matrix: Article posted to {room}: {title}")
-                                feed.save_last_feed_link(link)
-                        else:
-                            logging.debug(f"Feed {feed_url} has no entries.")
+                        # Use the same logic as the !latest command
+                        title, link = feed.fetch_latest_article(feed_url)
+                        logging.debug(f"Fetched from feed '{feed_name}': Title: {title}, Link: {link}")
+                        if title and link and link not in feed.last_feed_links:
+                            message = f"New Feed from {feed_name}: {title}\nLink: {link}"
+                            logging.debug(f"Room {room}: Attempting to send message: {message}")
+                            await self.send_message(room, message)
+                            logging.info(f"Matrix: Article posted to {room}: {title}")
+                            feed.save_last_feed_link(link)
                     feed.last_check_times[room] = current
             await asyncio.sleep(300)  # Wait 5 minutes
 
@@ -111,7 +102,6 @@ class MatrixBot:
 
         logging.info(f"Processing command `{cmd}` from `{sender}` in `{room_key}`.")
 
-        # All command branches remain the same as previous versions.
         if cmd == "!admin":
             try:
                 with open(admin_file, "r") as f:
@@ -391,7 +381,7 @@ class MatrixBot:
         await self.login()
         await self.join_rooms()
         await self.initial_sync()
-        # Do not reset last_check_times so that any new articles are posted.
+        # Do not reset last_check_times so that any new articles (not already posted) are published.
         asyncio.create_task(self.check_feeds_loop())
         await self.sync_forever()
 
