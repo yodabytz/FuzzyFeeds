@@ -31,7 +31,10 @@ default_interval = 300  # Feed check interval in seconds (default: 5 minutes)
 # --- Integration Configuration ---
 
 # Dashboard (optional)
+start_time = time.time()
 dashboard_port = 8081  # Port for an optional analytics dashboard
+dashboard_username = "WEBUSER"
+dashboard_password = "PASSWORD"
 
 # Slack (optional)
 slack_token = ""  # Add your Slack token here
