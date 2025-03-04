@@ -61,6 +61,8 @@ class MatrixBot:
         logging.info("Performing initial sync...")
         await self.client.sync(timeout=30000)
         await asyncio.sleep(GRACE_PERIOD)
+        # Do not update last_check_times here—retain the saved value (or 0) so that
+        # the first check posts the latest article.
         self.start_time = int(time.time() * 1000)
         self.processing_enabled = True
         logging.info("Initial sync complete; start_time set to %s", self.start_time)
@@ -81,12 +83,14 @@ class MatrixBot:
                             logging.warning(f"Error parsing feed {feed_url}: {parsed.bozo_exception}")
                             continue
                         if parsed.entries:
-                            # Use the first (latest) entry like in IRC
+                            # Use only the first (latest) entry as in IRC
                             entry = parsed.entries[0]
                             published_time = None
                             if hasattr(entry, 'published_parsed') and entry.published_parsed:
                                 published_time = time.mktime(entry.published_parsed)
-                            # Skip if published time is available and not newer than last check
+                            elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+                                published_time = time.mktime(entry.updated_parsed)
+                            # If we have a valid timestamp and it's not newer than last check, skip
                             if published_time is not None and published_time <= last_checked:
                                 continue
                             title = entry.title.strip() if entry.title else "No Title"
@@ -388,9 +392,7 @@ class MatrixBot:
         await self.login()
         await self.join_rooms()
         await self.initial_sync()
-        current = time.time()
-        for room in self.rooms:
-            feed.last_check_times[room] = current
+        # Do not reset last_check_times here, so that Matrix posts the latest article if not seen yet.
         asyncio.create_task(self.check_feeds_loop())
         await self.sync_forever()
 
