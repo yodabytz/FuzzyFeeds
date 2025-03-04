@@ -35,6 +35,8 @@ class MatrixBot:
         self.rooms = rooms  # List of Matrix room IDs
         self.start_time = 0  # Set after initial sync
         self.processing_enabled = False
+        # Use a separate set for Matrix duplicate prevention
+        self.matrix_last_feed_links = set()
         self.client.add_event_callback(self.message_callback, RoomMessageText)
 
     async def login(self):
@@ -61,7 +63,7 @@ class MatrixBot:
         logging.info("Performing initial sync...")
         await self.client.sync(timeout=30000)
         await asyncio.sleep(GRACE_PERIOD)
-        # Do not reset last_check_times here so that new articles are posted
+        # Do not reset last_check_times so that new articles are posted.
         self.start_time = int(time.time() * 1000)
         self.processing_enabled = True
         logging.info("Initial sync complete; start_time set to %s", self.start_time)
@@ -82,12 +84,12 @@ class MatrixBot:
                         # Use the same logic as the !latest command
                         title, link = feed.fetch_latest_article(feed_url)
                         logging.debug(f"Fetched from feed '{feed_name}': Title: {title}, Link: {link}")
-                        if title and link and link not in feed.last_feed_links:
+                        if title and link and link not in self.matrix_last_feed_links:
                             message = f"New Feed from {feed_name}: {title}\nLink: {link}"
                             logging.debug(f"Room {room}: Attempting to send message: {message}")
                             await self.send_message(room, message)
                             logging.info(f"Matrix: Article posted to {room}: {title}")
-                            feed.save_last_feed_link(link)
+                            self.matrix_last_feed_links.add(link)
                     feed.last_check_times[room] = current
             await asyncio.sleep(300)  # Wait 5 minutes
 
@@ -381,7 +383,7 @@ class MatrixBot:
         await self.login()
         await self.join_rooms()
         await self.initial_sync()
-        # Do not reset last_check_times so that any new articles (not already posted) are published.
+        # Do not reset last_check_times so that any new articles are posted.
         asyncio.create_task(self.check_feeds_loop())
         await self.sync_forever()
 
