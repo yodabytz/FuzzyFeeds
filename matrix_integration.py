@@ -7,6 +7,7 @@ import fnmatch
 import requests
 import datetime
 import feedparser
+import os
 
 from nio import AsyncClient, LoginResponse, RoomMessageText
 from config import (
@@ -21,6 +22,27 @@ from commands import search_feeds, get_help
 logging.basicConfig(level=logging.INFO)
 
 GRACE_PERIOD = 5
+POSTED_FILE = "matrix_posted.json"
+
+def load_posted_articles():
+    if os.path.exists(POSTED_FILE):
+        try:
+            with open(POSTED_FILE, "r") as f:
+                data = json.load(f)
+                # Stored as a list; convert to set for fast lookup
+                return set(data)
+        except Exception as e:
+            logging.error(f"Error loading {POSTED_FILE}: {e}")
+            return set()
+    return set()
+
+def save_posted_articles(posted_set):
+    try:
+        # Convert set to list and save
+        with open(POSTED_FILE, "w") as f:
+            json.dump(list(posted_set), f, indent=4)
+    except Exception as e:
+        logging.error(f"Error saving {POSTED_FILE}: {e}")
 
 def match_feed(feed_dict, pattern):
     if "*" in pattern or "?" in pattern:
@@ -30,7 +52,7 @@ def match_feed(feed_dict, pattern):
 
 def get_feeds_for_room(room):
     """
-    Given a Matrix room identifier (as configured), try to find the corresponding
+    Given a Matrix room identifier (from config), try to find the corresponding
     feed data in feed.channel_feeds. If an exact match isn’t found, try matching
     after stripping leading '#' or '!' and comparing in lowercase.
     """
@@ -41,17 +63,17 @@ def get_feeds_for_room(room):
     for key, val in feed.channel_feeds.items():
         if key.lstrip("#!").lower() == norm:
             return val
-    return {}  # Return empty if no match
+    return {}  # Return empty if not found
 
 class MatrixBot:
     def __init__(self, homeserver, user, password, rooms):
         self.client = AsyncClient(homeserver, user)
         self.password = password
-        self.rooms = rooms  # List of Matrix room IDs (as set in config)
+        self.rooms = rooms  # List of Matrix room IDs from config
         self.start_time = 0  # Set after initial sync
         self.processing_enabled = False
-        # Use a separate duplicate set for Matrix integration
-        self.matrix_last_feed_links = set()
+        # Global duplicate prevention for Matrix: loaded from JSON file.
+        self.posted_articles = load_posted_articles()
         self.client.add_event_callback(self.message_callback, RoomMessageText)
 
     async def login(self):
@@ -78,7 +100,6 @@ class MatrixBot:
         logging.info("Performing initial sync...")
         await self.client.sync(timeout=30000)
         await asyncio.sleep(GRACE_PERIOD)
-        # Do not reset last_check_times so that only new articles are posted.
         self.start_time = int(time.time() * 1000)
         self.processing_enabled = True
         logging.info("Initial sync complete; start_time set to %s", self.start_time)
@@ -90,7 +111,6 @@ class MatrixBot:
             for room in self.rooms:
                 feeds_in_room = get_feeds_for_room(room)
                 logging.info(f"Room {room}: Found {len(feeds_in_room)} feeds.")
-                # Get the last check time (default to 0 if not set)
                 last_checked = feed.last_check_times.get(room, 0)
                 for feed_name, feed_url in feeds_in_room.items():
                     logging.info(f"Room {room}: Checking feed '{feed_name}' at URL: {feed_url}")
@@ -105,26 +125,25 @@ class MatrixBot:
                             published_time = time.mktime(entry.published_parsed)
                         elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
                             published_time = time.mktime(entry.updated_parsed)
-                        # Only post if published_time exists and is newer than last check
                         if published_time is not None and published_time <= last_checked:
                             logging.info(f"Room {room}: Feed '{feed_name}' entry is not new (published at {published_time}, last checked {last_checked}).")
                             continue
                         title = entry.title.strip() if entry.title else "No Title"
                         link = entry.link.strip() if entry.link else ""
                         if title and link:
-                            if link not in self.matrix_last_feed_links:
+                            if link not in self.posted_articles:
                                 message = f"New Feed from {feed_name}: {title}\nLink: {link}"
                                 logging.info(f"Room {room}: Sending message: {message}")
                                 await self.send_message(room, message)
                                 logging.info(f"Matrix: Article posted to {room}: {title}")
-                                self.matrix_last_feed_links.add(link)
+                                self.posted_articles.add(link)
+                                save_posted_articles(self.posted_articles)
                             else:
                                 logging.info(f"Room {room}: Duplicate article (already posted): {link}")
                         else:
                             logging.info(f"Room {room}: No valid article found for feed '{feed_name}'.")
                     else:
                         logging.info(f"Room {room}: No entries found for feed '{feed_name}'.")
-                # Update last check time for this room
                 feed.last_check_times[room] = current
                 logging.info(f"Room {room}: Updated last check time to {current}")
             await asyncio.sleep(300)  # Wait 5 minutes
@@ -140,7 +159,6 @@ class MatrixBot:
 
         logging.info(f"Processing command `{cmd}` from `{sender}` in `{room_key}`.")
 
-        # --- Command handling (only a few commands shown for brevity) ---
         if cmd == "!listfeeds":
             feeds = get_feeds_for_room(room_key)
             if not feeds:
