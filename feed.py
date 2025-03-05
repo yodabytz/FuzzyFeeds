@@ -16,8 +16,22 @@ last_check_times = {}   # { channel: last_check_timestamp }
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 
+# Rate Limiting Mechanism
+command_timestamps = {}
+
+def is_rate_limited(user, command, limit=10):
+    """Prevents spam by checking if a command was issued too frequently."""
+    now = time.time()
+    key = f"{user}_{command}"
+    
+    if key in command_timestamps and now - command_timestamps[key] < limit:
+        return True  # User is spamming
+
+    command_timestamps[key] = now
+    return False
+
 def load_feeds():
-    """Load feeds from feeds.json, and log only the number of feeds per channel."""
+    """Load feeds from feeds.json and log only the number of feeds per channel."""
     global channel_feeds
     if os.path.exists(feeds_file):
         try:
@@ -42,16 +56,6 @@ def save_feeds():
     except Exception as e:
         logging.error(f"[feed.py] Error saving {feeds_file}: {e}")
 
-def init_channel_times():
-    """Ensure each channel has a default interval and last check time."""
-    global channel_intervals, last_check_times
-    current_time = time.time()
-    for chan in channel_feeds:
-        if chan not in channel_intervals:
-            channel_intervals[chan] = default_interval
-        if chan not in last_check_times:
-            last_check_times[chan] = current_time
-
 def load_subscriptions():
     """Load user subscriptions and log counts instead of full details."""
     global subscriptions
@@ -67,7 +71,7 @@ def load_subscriptions():
         subscriptions = {}
 
 def save_subscriptions():
-    """Save subscriptions and log the number of users saved."""
+    """Save the subscriptions dictionary to subscriptions_file."""
     try:
         with open(subscriptions_file, "w") as f:
             json.dump(subscriptions, f, indent=4)
@@ -140,10 +144,17 @@ def check_feeds(send_message_func, channels_to_check=None):
             logging.info(f"[feed.py] Checking {len(feeds_to_check)} feeds in {chan}...")
 
             for feed_name, feed_url in feeds_to_check.items():
-                title, link = fetch_latest_feed(feed_url)
-                if title and link:
-                    send_message_func(chan, f"New Feed from {feed_name}: {title}")
-                    send_message_func(chan, f"Link: {link}")
-                    save_last_feed_link(link)
+                if is_rate_limited(chan, "feed_check", 10):
+                    logging.warning(f"Rate limit exceeded for {chan}, skipping feed check.")
+                    continue
+                
+                try:
+                    title, link = fetch_latest_feed(feed_url)
+                    if title and link:
+                        send_message_func(chan, f"New Feed from {feed_name}: {title}")
+                        send_message_func(chan, f"Link: {link}")
+                        save_last_feed_link(link)
+                except Exception as e:
+                    logging.error(f"[feed.py] Error fetching feed {feed_name}: {e}")
 
             last_check_times[chan] = current_time
