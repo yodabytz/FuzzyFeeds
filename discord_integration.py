@@ -13,11 +13,11 @@ import config
 
 logging.basicConfig(level=logging.INFO)
 
-# Set up intents for message content
+# Set up intents for message content.
 intents = discord.Intents.default()
 intents.message_content = True
 
-# Create the bot with the desired command prefix and disable built-in help
+# Create the bot with the desired command prefix and disable built-in help.
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 def load_help_data():
@@ -30,14 +30,14 @@ def load_help_data():
 
 help_data = load_help_data()
 
-# Maintain a separate set for duplicate prevention in Discord
-discord_last_feed_links = set()
+# Global flag to disable internal feed checking loop.
+feed_loop_enabled = False
 
 @bot.event
 async def on_ready():
     logging.info(f"Discord bot is ready as {bot.user}")
-    # Start the background feed checker
-    bot.loop.create_task(check_feeds_for_updates())
+    # Do not start the internal feed checking loop since centralized_polling is handling feed updates.
+    # (Internal loop disabled.)
 
 @bot.event
 async def on_message(message):
@@ -45,39 +45,6 @@ async def on_message(message):
         return
     logging.info(f"Received message: {message.content}")
     await bot.process_commands(message)
-
-async def check_feeds_for_updates():
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        logging.info("Discord: Checking feeds for new articles...")
-        # Iterate over each channel in feed.channel_feeds
-        for channel_id, feeds_dict in feed.channel_feeds.items():
-            try:
-                # Attempt to convert the key to an integer (Discord channel IDs are numeric)
-                discord_channel_id_int = int(channel_id)
-            except ValueError:
-                logging.error(f"Discord: Channel ID '{channel_id}' is not numeric. Skipping this key.")
-                continue
-            logging.info(f"Discord: Channel {channel_id} has {len(feeds_dict)} feeds.")
-            for feed_name, feed_url in feeds_dict.items():
-                title, link = feed.fetch_latest_article(feed_url)
-                logging.info(f"Discord: For feed '{feed_name}', fetch_latest_article() returned Title: '{title}', Link: '{link}'")
-                if title and link:
-                    if link not in discord_last_feed_links:
-                        message_text = f"New Feed from {feed_name}: {title}\nLink: {link}"
-                        logging.info(f"Discord: Sending message to channel {channel_id}: {message_text}")
-                        channel = bot.get_channel(discord_channel_id_int)
-                        if channel:
-                            await channel.send(message_text)
-                            logging.info(f"Discord: Article posted to channel {channel_id}: {title}")
-                            discord_last_feed_links.add(link)
-                        else:
-                            logging.error(f"Discord: Could not find channel with ID {channel_id}")
-                    else:
-                        logging.info(f"Discord: Duplicate article (already posted): {link}")
-                else:
-                    logging.info(f"Discord: No valid article found for feed '{feed_name}' in channel {channel_id}.")
-        await asyncio.sleep(300)  # Check every 5 minutes
 
 def register_commands():
     for cmd, desc in help_data.items():
@@ -184,8 +151,23 @@ async def help_command(ctx):
 async def debug(ctx):
     await ctx.send(f"I am online and working! My user: {bot.user}")
 
+def send_discord_message(channel, message):
+    # This function can be used by centralized_polling to send a message.
+    async def _send():
+        chan = bot.get_channel(int(channel))
+        if chan:
+            await chan.send(message)
+        else:
+            logging.error(f"Discord: Could not find channel with ID {channel}")
+    asyncio.run_coroutine_threadsafe(_send(), bot.loop)
+
+def disable_feed_loop():
+    global feed_loop_enabled
+    feed_loop_enabled = False
+
 def run_discord_bot():
     bot.run(discord_token)
 
 if __name__ == "__main__":
     run_discord_bot()
+
