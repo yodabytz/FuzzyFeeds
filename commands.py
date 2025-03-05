@@ -8,7 +8,6 @@ import json
 import datetime
 
 from config import admin, ops, admins, admin_file
-from irc import send_message, send_private_message, send_multiline_message
 import feed
 import persistence
 import channels
@@ -16,20 +15,14 @@ import users
 
 logging.basicConfig(level=logging.INFO)
 
-# ---------------- Security: Rate Limiting ----------------
+# Rate limiting and abuse control constants.
+RATE_LIMIT_SECONDS = 3
+BLOCK_DURATION = 300  # 5 minutes in seconds
+VIOLATION_THRESHOLD = 3
 
-command_timestamps = {}
-
-def is_rate_limited(user, command, limit=5):
-    """Prevents spam by checking if a command was issued too frequently."""
-    now = time.time()
-    key = f"{user}_{command}"
-    
-    if key in command_timestamps and now - command_timestamps[key] < limit:
-        return True  # User is spamming
-
-    command_timestamps[key] = now
-    return False
+# Global dictionaries for per-user rate control.
+last_command_timestamp = {}
+user_abuse = {}
 
 # ---------------- Help Functions ----------------
 
@@ -107,97 +100,377 @@ def match_feed(feed_dict, pattern):
     else:
         return pattern if pattern in feed_dict else None
 
-# ---------------- IRC Command Handler ----------------
+# ---------------- Centralized Command Handler ----------------
 
-def handle_commands(irc, user, hostmask, target, message, is_op_flag):
+def handle_centralized_command(integration, send_message_fn, send_private_message_fn, send_multiline_message_fn, user, target, message, is_op_flag):
     """
-    Process IRC commands securely.
-    Ensures only authorized users can execute commands.
-    """
-    logging.info(f"[commands.py] Received command from {user} in {target}: {message}")
+    Centralized command handler for all integrations.
 
-    is_admin_flag = (user.lower() == admin.lower() or user.lower() in [a.lower() for a in admins])
+    Parameters:
+      - integration: a string identifier ("irc", "matrix", "discord")
+      - send_message_fn: function(target: str, message: str) -> None
+          Used for sending a public message.
+      - send_private_message_fn: function(user: str, message: str) -> None
+          Used for sending a private reply.
+      - send_multiline_message_fn: function(target: str, message: str) -> None
+          Used for sending multi-line responses.
+      - user: the username of the sender.
+      - target: the destination identifier (channel, room, etc.) where the command was issued.
+      - message: the full command text.
+      - is_op_flag: Boolean indicating if the user is an operator.
+    """
+    now = time.time()
+    # Check for an active abuse block.
+    if user in user_abuse and now < user_abuse[user].get('block_until', 0):
+        send_private_message_fn(user, "You are temporarily blocked from sending commands due to abuse. Please wait 5 minutes.")
+        return
+    # Enforce the 3-second cooldown.
+    if user in last_command_timestamp and now - last_command_timestamp[user] < RATE_LIMIT_SECONDS:
+        abuse = user_abuse.get(user, {'violations': 0, 'block_until': 0})
+        abuse['violations'] += 1
+        user_abuse[user] = abuse
+        if abuse['violations'] >= VIOLATION_THRESHOLD:
+            abuse['block_until'] = now + BLOCK_DURATION
+            user_abuse[user] = abuse
+            send_private_message_fn(user, "You are sending commands too quickly. You have been blocked for 5 minutes.")
+            return
+        else:
+            send_private_message_fn(user, "You're sending commands too quickly. Please wait 3 seconds.")
+            return
+    last_command_timestamp[user] = now
+    # Reset violation count on successful command.
+    if user in user_abuse:
+        user_abuse[user]['violations'] = 0
+
+    logging.info(f"[commands.py] Received command from {user} in {target} via {integration}: {message}")
+    
+    is_admin_flag = (user.lower() == admin.lower())
     effective_op = is_op_flag or (user.lower() in [op.lower() for op in ops]) or is_admin_flag
 
-    # Rate limit all users
-    if is_rate_limited(user, message):
-        send_private_message(irc, user, "You're issuing commands too fast. Please wait.")
-        return
+    # Determine response target (private vs public).
+    private_commands = ["!help", "!reloadconfig", "!subscribe", "!unsubscribe", "!mysubscriptions", "!quit"]
+    response_target = user if (target == user or any(message.startswith(cmd) for cmd in private_commands)) else target
 
     lower_message = message.lower()
 
-    # --- Command Branches ---
-
-    if lower_message.startswith("!help"):
+    # Process command branches.
+    if lower_message.startswith("!addfeed"):
+        parts = message.split(" ", 2)
+        if len(parts) < 3:
+            send_message_fn(response_target, "Usage: !addfeed <feed_name> <URL>")
+            return
+        feed_name = parts[1].strip()
+        feed_url = parts[2].strip()
+        if target not in feed.channel_feeds:
+            feed.channel_feeds[target] = {}
+        feed.channel_feeds[target][feed_name] = feed_url
+        feed.save_feeds()
+        send_message_fn(response_target, f"Feed added: {feed_name} ({feed_url})")
+    elif lower_message.startswith("!delfeed"):
+        if not effective_op:
+            send_private_message_fn(user, "Not authorized to use !delfeed.")
+            return
+        parts = message.split(" ", 1)
+        if len(parts) < 2:
+            send_message_fn(response_target, "Usage: !delfeed <feed_name or pattern>")
+            return
+        pattern = parts[1].strip()
+        if target not in feed.channel_feeds:
+            send_message_fn(response_target, "No feeds found for this channel.")
+            return
+        matched = match_feed(feed.channel_feeds[target], pattern)
+        if matched is None:
+            send_message_fn(response_target, f"No feeds match '{pattern}'.")
+            return
+        if isinstance(matched, list):
+            send_message_fn(response_target, f"Multiple feeds match '{pattern}': {', '.join(matched)}. Please be more specific.")
+            return
+        del feed.channel_feeds[target][matched]
+        feed.save_feeds()
+        send_message_fn(response_target, f"Feed removed: {matched}")
+    elif lower_message.startswith("!listfeeds"):
+        if target in feed.channel_feeds and feed.channel_feeds[target]:
+            lines = [f"{name}: {url}" for name, url in feed.channel_feeds[target].items()]
+            send_multiline_message_fn(response_target, "\n".join(lines))
+        else:
+            send_message_fn(response_target, "No feeds found for this channel.")
+    elif lower_message.startswith("!latest"):
+        parts = message.split(" ", 1)
+        if len(parts) < 2:
+            send_message_fn(response_target, "Usage: !latest <feed_name or pattern>")
+            return
+        pattern = parts[1].strip()
+        if target not in feed.channel_feeds:
+            send_message_fn(response_target, "No feeds found for this channel.")
+            return
+        matched = match_feed(feed.channel_feeds[target], pattern)
+        if matched is None:
+            send_message_fn(response_target, f"No feed matches '{pattern}'.")
+            return
+        if isinstance(matched, list):
+            send_message_fn(response_target, f"Multiple feeds match '{pattern}': {', '.join(matched)}. Please be more specific.")
+            return
+        feed_name = matched
+        title, link = feed.fetch_latest_article(feed.channel_feeds[target][feed_name])
+        if title and link:
+            send_message_fn(response_target, f"Latest from {feed_name}: {title}")
+            send_message_fn(response_target, f"Link: {link}")
+        else:
+            send_message_fn(response_target, f"No entry available for {feed_name}.")
+    elif lower_message.startswith("!getfeed"):
+        parts = message.split(" ", 1)
+        if len(parts) < 2 or not parts[1].strip():
+            send_message_fn(response_target, "Usage: !getfeed <title_or_domain>")
+            return
+        query = parts[1].strip()
+        results = search_feeds(query)
+        if not results:
+            send_message_fn(response_target, "No matching feed found.")
+            return
+        feed_title, feed_url = results[0]
+        title, link = feed.fetch_latest_article(feed_url)
+        if title and link:
+            send_message_fn(response_target, f"Latest from {feed_title}: {title}")
+            send_message_fn(response_target, f"Link: {link}")
+        else:
+            send_message_fn(response_target, f"No entry available for feed {feed_title}.")
+    elif lower_message.startswith("!getadd"):
+        parts = message.split(" ", 1)
+        if len(parts) < 2 or not parts[1].strip():
+            send_message_fn(response_target, "Usage: !getadd <title_or_domain>")
+            return
+        query = parts[1].strip()
+        results = search_feeds(query)
+        if not results:
+            send_message_fn(response_target, "No matching feed found.")
+            return
+        selected = None
+        for title, url in results:
+            if title.lower() == query.lower():
+                selected = (title, url)
+                break
+        if not selected:
+            selected = results[0]
+        feed_title, feed_url = selected
+        if target not in feed.channel_feeds:
+            feed.channel_feeds[target] = {}
+        feed.channel_feeds[target][feed_title] = feed_url
+        feed.save_feeds()
+        send_message_fn(response_target, f"Feed '{feed_title}' added: {feed_url}")
+    elif lower_message.startswith("!genfeed"):
+        parts = message.split(" ", 1)
+        if len(parts) < 2 or not parts[1].strip():
+            send_message_fn(response_target, "Usage: !genfeed <website_url>")
+            return
+        website_url = parts[1].strip()
+        API_ENDPOINT = "https://api.rss.app/v1/generate"
+        params = {"url": website_url}
+        try:
+            api_response = requests.get(API_ENDPOINT, params=params, timeout=10)
+            if api_response.status_code == 200:
+                result = api_response.json()
+                feed_url = result.get("feed_url")
+                if feed_url:
+                    send_message_fn(response_target, f"Generated feed for {website_url}: {feed_url}")
+                else:
+                    send_message_fn(response_target, "Feed generation failed: no feed_url in response.")
+            else:
+                send_message_fn(response_target, f"Feed generation API error: {api_response.status_code}")
+        except Exception as e:
+            send_message_fn(response_target, f"Error generating feed: {e}")
+    elif lower_message.startswith("!setinterval"):
+        parts = message.split(" ", 1)
+        if len(parts) < 2:
+            send_message_fn(response_target, "Usage: !setinterval <minutes>")
+            return
+        try:
+            minutes = int(parts[1].strip())
+            if target not in feed.channel_intervals:
+                feed.channel_intervals[target] = 0
+            feed.channel_intervals[target] = minutes * 60
+            send_message_fn(response_target, f"Feed check interval set to {minutes} minutes for {target}.")
+        except ValueError:
+            send_message_fn(response_target, "Invalid number of minutes.")
+    elif lower_message.startswith("!search"):
+        parts = message.split(" ", 1)
+        if len(parts) < 2 or not parts[1].strip():
+            send_message_fn(response_target, "Usage: !search <query>")
+            return
+        query = parts[1].strip()
+        results = search_feeds(query)
+        if not results:
+            send_message_fn(response_target, "No valid feeds found.")
+            return
+        lines = [f"{title} {url}" for title, url in results]
+        send_multiline_message_fn(response_target, "\n".join(lines))
+    elif lower_message.startswith("!join"):
+        if user.lower() not in [a.lower() for a in admins]:
+            send_private_message_fn(user, "Only a bot admin can use !join.")
+            return
+        parts = message.split()
+        if len(parts) < 3:
+            send_message_fn(response_target, "Usage: !join <#channel> <adminname>")
+            return
+        join_channel = parts[1].strip()
+        join_admin = parts[2].strip()
+        if not join_channel.startswith("#"):
+            send_message_fn(response_target, "Error: Channel must start with '#'")
+            return
+        try:
+            from channels import joined_channels, save_channels
+            if join_channel not in joined_channels:
+                joined_channels.append(join_channel)
+                save_channels()
+            import os
+            if os.path.exists(admin_file):
+                with open(admin_file, "r") as f:
+                    admin_mapping = json.load(f)
+            else:
+                admin_mapping = {}
+            admin_mapping[join_channel] = join_admin
+            with open(admin_file, "w") as f:
+                json.dump(admin_mapping, f, indent=4)
+            send_message_fn(response_target, f"Joined channel: {join_channel} with admin: {join_admin}")
+        except Exception as e:
+            send_message_fn(response_target, f"Error joining channel: {e}")
+    elif lower_message.startswith("!addsub"):
+        parts = message.split(" ", 2)
+        if len(parts) < 3:
+            send_private_message_fn(user, "Usage: !addsub <feed_name> <URL>")
+            return
+        feed_name = parts[1].strip()
+        feed_url = parts[2].strip()
+        uname = user
+        if uname not in feed.subscriptions:
+            feed.subscriptions[uname] = {}
+        feed.subscriptions[uname][feed_name] = feed_url
+        feed.save_subscriptions()
+        send_private_message_fn(user, f"Subscribed to feed: {feed_name} ({feed_url})")
+    elif lower_message.startswith("!unsub"):
+        parts = message.split(" ", 1)
+        if len(parts) < 2:
+            send_private_message_fn(user, "Usage: !unsub <feed_name>")
+            return
+        feed_name = parts[1].strip()
+        uname = user
+        if uname in feed.subscriptions and feed_name in feed.subscriptions[uname]:
+            del feed.subscriptions[uname][feed_name]
+            feed.save_subscriptions()
+            send_private_message_fn(user, f"Unsubscribed from feed: {feed_name}")
+        else:
+            send_private_message_fn(user, f"Not subscribed to feed '{feed_name}'.")
+    elif lower_message.startswith("!mysubs"):
+        uname = user
+        if uname in feed.subscriptions and feed.subscriptions[uname]:
+            lines = [f"{name}: {url}" for name, url in feed.subscriptions[uname].items()]
+            send_multiline_message_fn(user, "\n".join(lines))
+        else:
+            send_private_message_fn(user, "No subscriptions found.")
+    elif lower_message.startswith("!latestsub"):
+        parts = message.split(" ", 1)
+        if len(parts) < 2 or not parts[1].strip():
+            send_private_message_fn(user, "Usage: !latestsub <feed_name>")
+            return
+        feed_name = parts[1].strip()
+        uname = user
+        if uname in feed.subscriptions and feed_name in feed.subscriptions[uname]:
+            url = feed.subscriptions[uname][feed_name]
+            title, link = feed.fetch_latest_article(url)
+            if title and link:
+                send_message_fn(response_target, f"Latest from your subscription '{feed_name}': {title}")
+                send_message_fn(response_target, f"Link: {link}")
+            else:
+                send_message_fn(response_target, f"No entry available for {feed_name}.")
+        else:
+            send_private_message_fn(user, f"You are not subscribed to feed '{feed_name}'.")
+    elif lower_message.startswith("!setsetting"):
+        parts = message.split(" ", 2)
+        if len(parts) < 3:
+            send_private_message_fn(user, "Usage: !setsetting <key> <value>")
+            return
+        key = parts[1].strip()
+        value = parts[2].strip()
+        import users
+        users.add_user(user)
+        user_data = users.get_user(user)
+        if "settings" not in user_data:
+            user_data["settings"] = {}
+        user_data["settings"][key] = value
+        users.save_users()
+        send_private_message_fn(user, f"Setting '{key}' set to '{value}'.")
+    elif lower_message.startswith("!getsetting"):
+        parts = message.split(" ", 1)
+        if len(parts) < 2:
+            send_private_message_fn(user, "Usage: !getsetting <key>")
+            return
+        key = parts[1].strip()
+        import users
+        users.add_user(user)
+        user_data = users.get_user(user)
+        if "settings" in user_data and key in user_data["settings"]:
+            send_private_message_fn(user, f"{key}: {user_data['settings'][key]}")
+        else:
+            send_private_message_fn(user, f"No setting found for '{key}'.")
+    elif lower_message.startswith("!settings"):
+        import users
+        users.add_user(user)
+        user_data = users.get_user(user)
+        if "settings" in user_data and user_data["settings"]:
+            lines = [f"{k}: {v}" for k, v in user_data["settings"].items()]
+            send_multiline_message_fn(user, "\n".join(lines))
+        else:
+            send_private_message_fn(user, "No settings found.")
+    elif lower_message.startswith("!admin"):
+        try:
+            with open(admin_file, "r") as f:
+                admin_mapping = json.load(f)
+            if user.lower() == admin.lower() or user.lower() in [a.lower() for a in admins]:
+                irc_admins = {k: v for k, v in admin_mapping.items() if k.startswith("#")}
+                discord_admins = {k: v for k, v in admin_mapping.items() if k.isdigit()}
+                matrix_admins = {k: v for k, v in admin_mapping.items() if k.startswith("!")}
+                output = "IRC:\n" + "\n".join([f"{chan}: {adm}" for chan, adm in irc_admins.items()]) + "\n"
+                output += "Matrix:\n" + "\n".join([f"{chan}: {adm}" for chan, adm in matrix_admins.items()]) + "\n"
+                output += "Discord:\n" + "\n".join([f"{chan}: {adm}" for chan, adm in discord_admins.items()])
+            else:
+                if target in admin_mapping:
+                    output = f"Admin for {target}: {admin_mapping[target]}"
+                else:
+                    output = f"No admin info available for {target}."
+            send_multiline_message_fn(response_target, output)
+        except Exception as e:
+            send_private_message_fn(user, f"Error reading admin info: {e}")
+    elif lower_message.startswith("!stats"):
+        response_target = target
+        uptime_seconds = int(time.time() - __import__("config").start_time)
+        uptime = str(datetime.timedelta(seconds=uptime_seconds))
+        if user.lower() == __import__("config").admin.lower() or user.lower() in [a.lower() for a in __import__("config").admins]:
+            irc_keys = [k for k in feed.channel_feeds if k.startswith("#")]
+            discord_keys = [k for k in feed.channel_feeds if k.isdigit()]
+            matrix_keys = [k for k in feed.channel_feeds if k.startswith("!")]
+            irc_feed_count = sum(len(feed.channel_feeds[k]) for k in irc_keys)
+            discord_feed_count = sum(len(feed.channel_feeds[k]) for k in discord_keys)
+            matrix_feed_count = sum(len(feed.channel_feeds[k]) for k in matrix_keys)
+            response_lines = [
+                f"Global Uptime: {uptime}",
+                f"IRC Global Feeds: {irc_feed_count} across {len(irc_keys)} channels",
+                f"Discord Global Feeds: {discord_feed_count} across {len(discord_keys)} channels",
+                f"Matrix Global Feeds: {matrix_feed_count} across {len(matrix_keys)} rooms",
+                f"User Subscriptions: {sum(len(subs) for subs in feed.subscriptions.values())} total (from {len(feed.subscriptions)} users)"
+            ]
+        else:
+            num_channel_feeds = len(feed.channel_feeds[target]) if target in feed.channel_feeds else 0
+            response_lines = [
+                f"Uptime: {uptime}",
+                f"Channel '{target}' Feeds: {num_channel_feeds}"
+            ]
+        send_multiline_message_fn(response_target, "\n".join(response_lines))
+    elif lower_message.startswith("!help"):
         parts = message.split(" ", 1)
         if len(parts) == 2:
             help_text = get_help(parts[1].strip())
         else:
             help_text = get_help()
-        send_multiline_message(irc, user, help_text)
-
-    elif lower_message.startswith("!search"):
-        parts = message.split(" ", 1)
-        if len(parts) < 2:
-            send_message(irc, target, "Usage: !search <query>")
-            return
-
-        query = parts[1].strip()
-        results = search_feeds(query)
-
-        if not results:
-            send_message(irc, target, f"No results found for '{query}'.")
-        else:
-            response = "\n".join([f"{title} - {url}" for title, url in results])
-            send_multiline_message(irc, target, f"Search results for '{query}':\n{response}")
-
-    elif lower_message.startswith("!stats"):
-        uptime_seconds = int(time.time() - __import__("config").start_time)
-        uptime = str(datetime.timedelta(seconds=uptime_seconds))
-
-        num_channel_feeds = len(feed.channel_feeds.get(target, {}))
-        response = f"Uptime: {uptime} | Channel '{target}' Feeds: {num_channel_feeds}"
-        send_message(irc, target, response)
-
-    elif lower_message.startswith("!addfeed"):
-        if not is_admin_flag:
-            send_private_message(irc, user, "Access denied. Only admins can add feeds.")
-            return
-
-        parts = message.split(" ", 2)
-        if len(parts) < 3:
-            send_message(irc, target, "Usage: !addfeed <feed_name> <URL>")
-            return
-
-        feed_name, feed_url = parts[1].strip(), parts[2].strip()
-        if target not in feed.channel_feeds:
-            feed.channel_feeds[target] = {}
-
-        feed.channel_feeds[target][feed_name] = feed_url
-        feed.save_feeds()
-        send_message(irc, target, f"Feed added: {feed_name} ({feed_url})")
-
-    elif lower_message.startswith("!delfeed"):
-        if not effective_op:
-            send_private_message(irc, user, "Access denied. Only channel operators can remove feeds.")
-            return
-
-        parts = message.split(" ", 1)
-        if len(parts) < 2:
-            send_message(irc, target, "Usage: !delfeed <feed_name>")
-            return
-
-        pattern = parts[1].strip()
-        matched = match_feed(feed.channel_feeds.get(target, {}), pattern)
-
-        if matched is None:
-            send_message(irc, target, f"No feeds match '{pattern}'.")
-            return
-
-        del feed.channel_feeds[target][matched]
-        feed.save_feeds()
-        send_message(irc, target, f"Feed removed: {matched}")
-
+        send_multiline_message_fn(user, help_text)
     else:
-        send_message(irc, target, "Unknown command. Use !help for a list.")
+        send_message_fn(response_target, "Unknown command. Use !help for a list.")
 
