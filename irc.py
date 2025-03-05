@@ -76,4 +76,3 @@ def send_multiline_message(irc, user, message):
 if __name__ == '__main__':
     # For testing purposes only.
     client = connect_and_register()
-
