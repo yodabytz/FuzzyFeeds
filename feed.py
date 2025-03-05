@@ -3,104 +3,105 @@ import os
 import json
 import feedparser
 import time
-from config import feeds_file, subscriptions_file, channels, last_links_file, default_interval
+import logging
+from config import feeds_file, subscriptions_file, last_links_file, default_interval
 
-# Global data – only user‐added feeds are stored.
+# Global Data
 channel_feeds = {}  # { channel: { feed_name: feed_url, ... } }
 subscriptions = {}  # User-specific subscriptions: { user: { feed_name: feed_url, ... } }
 last_feed_links = set()  # Set of seen feed links
-
-# Globals for scheduling channel feeds
 channel_intervals = {}  # { channel: interval_in_seconds }
 last_check_times = {}   # { channel: last_check_timestamp }
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+
 def load_feeds():
-    """Load feeds from feeds_file; if missing/empty, leave channel_feeds empty."""
+    """Load feeds from feeds.json, and log only the number of feeds per channel."""
     global channel_feeds
     if os.path.exists(feeds_file):
         try:
-            channel_feeds = json.load(open(feeds_file, "r"))
+            with open(feeds_file, "r") as f:
+                channel_feeds = json.load(f)
+            logging.info(f"[feed.py] Loaded feeds for {len(channel_feeds)} channels, total feeds: {sum(len(feeds) for feeds in channel_feeds.values())}")
         except Exception as e:
-            print(f"Error loading {feeds_file}: {e}")
+            logging.error(f"[feed.py] Error loading {feeds_file}: {e}")
             channel_feeds = {}
     else:
         channel_feeds = {}
+
     init_channel_times()
-    print("[feed.py] Loaded channel feeds:", channel_feeds)
-    load_subscriptions()  # Ensure subscriptions are loaded
+    load_subscriptions()
 
 def save_feeds():
-    """Save the current channel_feeds dictionary to feeds_file."""
+    """Save the current channel_feeds dictionary to feeds.json."""
     try:
         with open(feeds_file, "w") as f:
             json.dump(channel_feeds, f, indent=4)
-        print("[feed.py] Saved channel feeds:", channel_feeds)
+        logging.info(f"[feed.py] Feeds saved for {len(channel_feeds)} channels.")
     except Exception as e:
-        print(f"Error saving {feeds_file}: {e}")
+        logging.error(f"[feed.py] Error saving {feeds_file}: {e}")
 
 def init_channel_times():
-    """Ensure each channel in channels has a default interval and last check time."""
+    """Ensure each channel has a default interval and last check time."""
     global channel_intervals, last_check_times
     current_time = time.time()
-    for chan in channels:
+    for chan in channel_feeds:
         if chan not in channel_intervals:
             channel_intervals[chan] = default_interval
-        if chan not in last_check_times or last_check_times.get(chan, 0) == 0:
+        if chan not in last_check_times:
             last_check_times[chan] = current_time
 
 def load_subscriptions():
-    """Load user subscriptions from subscriptions_file."""
+    """Load user subscriptions and log counts instead of full details."""
     global subscriptions
     if os.path.exists(subscriptions_file):
         try:
-            subscriptions = json.load(open(subscriptions_file, "r"))
+            with open(subscriptions_file, "r") as f:
+                subscriptions = json.load(f)
+            logging.info(f"[feed.py] Loaded {len(subscriptions)} user subscriptions, total feeds: {sum(len(feeds) for feeds in subscriptions.values())}")
         except Exception as e:
-            print(f"Error loading {subscriptions_file}: {e}")
+            logging.error(f"[feed.py] Error loading {subscriptions_file}: {e}")
             subscriptions = {}
     else:
         subscriptions = {}
-    save_subscriptions()
-    print("[feed.py] Loaded user subscriptions:", subscriptions)
 
 def save_subscriptions():
-    """Save the subscriptions dictionary to subscriptions_file."""
+    """Save subscriptions and log the number of users saved."""
     try:
         with open(subscriptions_file, "w") as f:
             json.dump(subscriptions, f, indent=4)
-        print("[feed.py] Saved user subscriptions:", subscriptions)
+        logging.info(f"[feed.py] Subscriptions saved for {len(subscriptions)} users.")
     except Exception as e:
-        print(f"Error saving {subscriptions_file}: {e}")
+        logging.error(f"[feed.py] Error saving {subscriptions_file}: {e}")
 
 def load_last_feed_links():
-    """Load the set of seen feed links from last_links_file."""
+    """Load previously seen feed links."""
     global last_feed_links
     if os.path.exists(last_links_file):
         try:
             with open(last_links_file, "r") as f:
                 last_feed_links = set(f.read().splitlines())
+            logging.info(f"[feed.py] Loaded {len(last_feed_links)} past feed links.")
         except Exception as e:
-            print(f"Error loading {last_links_file}: {e}")
+            logging.error(f"[feed.py] Error loading {last_links_file}: {e}")
             last_feed_links = set()
     else:
         last_feed_links = set()
-    print("[feed.py] Loaded last feed links:", last_feed_links)
 
 def save_last_feed_link(link):
-    """Append a new feed link to last_links_file and update the in-memory set."""
+    """Save a new feed link to prevent reposting."""
     global last_feed_links
     last_feed_links.add(link)
     try:
         with open(last_links_file, "a") as f:
             f.write(f"{link}\n")
-        print("[feed.py] Saved new feed link:", link)
+        logging.info(f"[feed.py] Added new feed link to history.")
     except Exception as e:
-        print(f"Error saving to {last_links_file}: {e}")
+        logging.error(f"[feed.py] Error saving to {last_links_file}: {e}")
 
 def fetch_latest_feed(feed_url):
-    """
-    Parse the feed URL and return (title, link) for the latest entry
-    if its link has not been seen; otherwise, return (None, None).
-    """
+    """Fetch the latest feed entry if it hasn't been seen before."""
     d = feedparser.parse(feed_url)
     if d.entries:
         entry = d.entries[0]
@@ -111,9 +112,7 @@ def fetch_latest_feed(feed_url):
     return None, None
 
 def fetch_latest_article(feed_url):
-    """
-    Always return the latest entry (title, link), regardless of seen status.
-    """
+    """Always return the latest entry, even if it was already seen."""
     d = feedparser.parse(feed_url)
     if d.entries:
         entry = d.entries[0]
@@ -122,43 +121,29 @@ def fetch_latest_article(feed_url):
         return title, link
     return None, None
 
-def check_feeds(send_message_func):
-    """
-    For each channel in channels, check for new feed entries using user‐added feeds.
-    Only post articles that have been published after the last check time.
-    Announce any new entries via send_message_func by sending two separate messages:
-    one for the title and one for the link, then record their links.
-    Returns a list of messages that were generated.
-    """
-    messages = []
+def check_feeds(send_message_func, channels_to_check=None):
+    """Check feeds for all channels and user subscriptions, logging only feed counts."""
     current_time = time.time()
-    for chan in channels:
-        feeds_to_check = channel_feeds.get(chan, {})
-        interval = channel_intervals.get(chan, default_interval)
-        if current_time - last_check_times.get(chan, 0) >= interval:
-            for feed_name, feed_url in feeds_to_check.items():
-                d = feedparser.parse(feed_url)
-                if d.entries:
-                    entry = d.entries[0]
-                    published_time = None
-                    if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                        published_time = time.mktime(entry.published_parsed)
-                    if published_time is not None and published_time <= last_check_times.get(chan, 0):
-                        continue
-                    title = entry.title.strip() if entry.title else "No Title"
-                    link = entry.link.strip() if entry.link else ""
-                    if link and link not in last_feed_links:
-                        title_msg = f"New Feed from {feed_name}: {title}"
-                        link_msg = f"Link: {link}"
-                        send_message_func(chan, title_msg)
-                        send_message_func(chan, link_msg)
-                        messages.append(title_msg)
-                        messages.append(link_msg)
-                        save_last_feed_link(link)
-            last_check_times[chan] = current_time
-    return messages
+    channels_list = channels_to_check if channels_to_check is not None else list(channel_feeds.keys())
 
-if __name__ == "__main__":
-    # For testing purposes only.
-    load_feeds()
-    load_last_feed_links()
+    # Include user subscriptions in feed checks
+    for user, subs in subscriptions.items():
+        channels_list.append(user)
+
+    logging.info(f"[feed.py] Checking feeds for {len(channels_list)} targets...")
+
+    for chan in channels_list:
+        feeds_to_check = channel_feeds.get(chan, {}) if chan in channel_feeds else subscriptions.get(chan, {})
+        interval = channel_intervals.get(chan, default_interval)
+
+        if current_time - last_check_times.get(chan, 0) >= interval:
+            logging.info(f"[feed.py] Checking {len(feeds_to_check)} feeds in {chan}...")
+
+            for feed_name, feed_url in feeds_to_check.items():
+                title, link = fetch_latest_feed(feed_url)
+                if title and link:
+                    send_message_func(chan, f"New Feed from {feed_name}: {title}")
+                    send_message_func(chan, f"Link: {link}")
+                    save_last_feed_link(link)
+
+            last_check_times[chan] = current_time
