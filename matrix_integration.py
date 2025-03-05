@@ -11,8 +11,8 @@ import os
 
 from nio import AsyncClient, LoginResponse, RoomMessageText
 from config import (
-    matrix_homeserver, matrix_user, matrix_password, matrix_rooms,
-    admins, admin as config_admin, admin_file, start_time
+    matrix_homeserver, matrix_user, matrix_password, admins,
+    admin as config_admin, admin_file, start_time
 )
 import feed
 import persistence
@@ -24,7 +24,7 @@ logging.basicConfig(level=logging.INFO)
 GRACE_PERIOD = 5
 POSTED_FILE = "matrix_posted.json"
 
-# Global dictionary to hold posted articles (loaded from file)
+# Load posted articles from file
 def load_posted_articles():
     if os.path.exists(POSTED_FILE):
         try:
@@ -46,6 +46,23 @@ def save_posted_articles(posted_set):
 # Global dictionary to hold Matrix room display names.
 matrix_room_names = {}
 
+# Function to dynamically load all Matrix rooms from feeds.json
+def load_matrix_rooms():
+    """Dynamically load all Matrix rooms from feeds.json."""
+    matrix_rooms = set()
+    try:
+        with open("feeds.json", "r") as f:
+            feeds_data = json.load(f)
+            for channel in feeds_data.keys():
+                if channel.startswith("!"):  # Matrix room IDs start with "!"
+                    matrix_rooms.add(channel)
+    except Exception as e:
+        logging.error(f"Error loading matrix rooms: {e}")
+    return list(matrix_rooms)
+
+# Load all Matrix rooms dynamically
+matrix_rooms = load_matrix_rooms()
+
 def match_feed(feed_dict, pattern):
     if "*" in pattern or "?" in pattern:
         matches = [name for name in feed_dict.keys() if fnmatch.fnmatch(name, pattern)]
@@ -63,10 +80,10 @@ def get_feeds_for_room(room):
     return {}
 
 class MatrixBot:
-    def __init__(self, homeserver, user, password, rooms):
+    def __init__(self, homeserver, user, password):
         self.client = AsyncClient(homeserver, user)
         self.password = password
-        self.rooms = rooms  # List of Matrix room IDs from config
+        self.rooms = load_matrix_rooms()  # Dynamically load Matrix rooms
         self.start_time = 0  # Set after initial sync
         self.processing_enabled = False
         self.posted_articles = load_posted_articles()
@@ -82,6 +99,7 @@ class MatrixBot:
 
     async def join_rooms(self):
         global matrix_room_names
+        self.rooms = load_matrix_rooms()  # Ensure up-to-date rooms
         for room in self.rooms:
             try:
                 response = await self.client.join(room)
@@ -95,7 +113,7 @@ class MatrixBot:
                         display_name = room
                     matrix_room_names[room] = display_name
                     logging.info(f"Joined Matrix room: {room} (Display name: {display_name})")
-                    await self.send_message(room, f"🤖 FuzzyFeeds Bot is online! Type `!help` for commands. (Room: {display_name})")
+                    await self.send_message(room, f"🤖 FuzzyFeeds Bot is online! Type `!help` for commands.")
                 else:
                     logging.error(f"Error joining room {room}: {response}")
             except Exception as e:
@@ -111,46 +129,36 @@ class MatrixBot:
 
     async def check_feeds_loop(self):
         while True:
-            logging.info("Matrix: Checking feeds for new articles...")
+            logging.info("Matrix: Checking feeds for all rooms and subscriptions...")
             current = time.time()
-            for room in self.rooms:
-                feeds_in_room = get_feeds_for_room(room)
-                logging.info(f"Room {room}: Found {len(feeds_in_room)} feeds.")
+
+            # Get all Matrix channels from feeds.json
+            matrix_rooms_to_check = load_matrix_rooms()
+
+            # Include user subscriptions
+            all_targets = matrix_rooms_to_check + list(feed.subscriptions.keys())
+
+            for room in all_targets:
+                feeds_in_room = feed.channel_feeds.get(room, {}) if room in feed.channel_feeds else feed.subscriptions.get(room, {})
+
+                logging.info(f"Checking {len(feeds_in_room)} feeds in {room}...")
+
                 last_checked = feed.last_check_times.get(room, 0)
                 for feed_name, feed_url in feeds_in_room.items():
-                    logging.info(f"Room {room}: Checking feed '{feed_name}' at URL: {feed_url}")
-                    parsed = feedparser.parse(feed_url)
-                    if parsed.bozo:
-                        logging.warning(f"Room {room}: Error parsing feed {feed_url}: {parsed.bozo_exception}")
-                        continue
-                    if parsed.entries:
-                        entry = parsed.entries[0]
-                        published_time = None
-                        if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                            published_time = time.mktime(entry.published_parsed)
-                        elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
-                            published_time = time.mktime(entry.updated_parsed)
-                        if published_time is not None and published_time <= last_checked:
-                            logging.info(f"Room {room}: Feed '{feed_name}' entry is not new (published at {published_time}, last checked {last_checked}).")
-                            continue
-                        title = entry.title.strip() if entry.title else "No Title"
-                        link = entry.link.strip() if entry.link else ""
-                        if title and link:
-                            if link not in self.posted_articles:
-                                message = f"New Feed from {feed_name}: {title}\nLink: {link}"
-                                logging.info(f"Room {room}: Sending message: {message}")
-                                await self.send_message(room, message)
-                                logging.info(f"Matrix: Article posted to {room}: {title}")
-                                self.posted_articles.add(link)
-                                save_posted_articles(self.posted_articles)
-                            else:
-                                logging.info(f"Room {room}: Duplicate article (already posted): {link}")
-                        else:
-                            logging.info(f"Room {room}: No valid article found for feed '{feed_name}'.")
-                    else:
-                        logging.info(f"Room {room}: No entries found for feed '{feed_name}'.")
+                    logging.info(f"Fetching latest article for {feed_name} ({feed_url})...")
+
+                    title, link = feed.fetch_latest_article(feed_url)
+
+                    if title and link and link not in self.posted_articles:
+                        message = f"New Feed from {feed_name}: {title}\nLink: {link}"
+                        await self.send_message(room, message)
+                        logging.info(f"Posted to {room}: {title}")
+                        self.posted_articles.add(link)
+                        save_posted_articles(self.posted_articles)
+
                 feed.last_check_times[room] = current
-                logging.info(f"Room {room}: Updated last check time to {current}")
+                logging.info(f"Updated last check time for {room}")
+
             await asyncio.sleep(300)
 
     async def process_command(self, room, command, sender):
@@ -161,6 +169,7 @@ class MatrixBot:
             logging.info(f"Ignoring old message in {room_key}: {command}")
             return
         logging.info(f"Processing command `{cmd}` from `{sender}` in `{room_key}`.")
+
         if cmd == "!listfeeds":
             feeds = get_feeds_for_room(room_key)
             if not feeds:
@@ -168,79 +177,45 @@ class MatrixBot:
             else:
                 response = "\n".join([f"`{name}` - {url}" for name, url in feeds.items()])
                 await self.send_message(room_key, f"**Feeds for this room:**\n{response}")
+
         elif cmd == "!latest":
             if len(parts) < 2:
                 await self.send_message(room_key, "Usage: !latest <feed_name>")
                 return
             pattern = parts[1].strip()
             feeds = get_feeds_for_room(room_key)
-            if not feeds:
-                await self.send_message(room_key, "No feeds found in this room.")
-                return
             matched = match_feed(feeds, pattern)
-            if matched is None:
-                await self.send_message(room_key, f"No feed matches '{pattern}'.")
-                return
-            if isinstance(matched, list):
-                await self.send_message(room_key, f"Multiple feeds match '{pattern}': {', '.join(matched)}. Please be more specific.")
-                return
-            title, link = feed.fetch_latest_article(feeds[matched])
-            if title and link:
-                await self.send_message(room_key, f"Latest from {matched}: {title}\n{link}")
+            if matched:
+                title, link = feed.fetch_latest_article(feeds[matched])
+                await self.send_message(room_key, f"Latest from {matched}: {title}\n{link}" if title and link else f"No entry available for {matched}.")
             else:
-                await self.send_message(room_key, f"No entry available for {matched}.")
+                await self.send_message(room_key, f"No feed matches '{pattern}'.")
+
         elif cmd == "!stats":
             uptime_seconds = int(time.time() - self.start_time)
             uptime = str(datetime.timedelta(seconds=uptime_seconds))
             await self.send_message(room_key, f"Uptime: {uptime}")
-        else:
-            await self.send_message(room_key, "Unknown command. Use !help for a list.")
 
     async def message_callback(self, room, event):
         if not self.processing_enabled:
             return
-        if hasattr(event, "origin_server_ts") and event.origin_server_ts < self.start_time:
-            logging.info(f"Ignoring old message in {room.room_id}: {event.body}")
-            return
         if event.body.startswith("!"):
-            logging.info(f"Matrix command received in {room.room_id}: {event.body}")
             await self.process_command(room, event.body, event.sender)
 
     async def send_message(self, room_id, message):
-        try:
-            await self.client.room_send(
-                room_id,
-                message_type="m.room.message",
-                content={"msgtype": "m.text", "body": message}
-            )
-            logging.info(f"Sent message to {room_id}: {message}")
-        except Exception as e:
-            logging.error(f"Failed to send message to {room_id}: {e}")
-
-    async def sync_forever(self):
-        while True:
-            await self.client.sync(timeout=30000)
-            await asyncio.sleep(1)
+        await self.client.room_send(room_id, "m.room.message", {"msgtype": "m.text", "body": message})
 
     async def run(self):
         feed.load_feeds()
         users.load_users()
-        logging.info(f"Loaded feeds: {feed.channel_feeds}")
         await self.login()
         await self.join_rooms()
         await self.initial_sync()
         asyncio.create_task(self.check_feeds_loop())
-        await self.sync_forever()
+        await self.client.sync_forever()
 
 def start_matrix_bot():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    logging.info("Starting Matrix integration...")
-    bot = MatrixBot(matrix_homeserver, matrix_user, matrix_password, matrix_rooms)
-    try:
-        loop.run_until_complete(bot.run())
-    except Exception as e:
-        logging.error(f"Matrix integration error: {e}")
+    asyncio.run(MatrixBot(matrix_homeserver, matrix_user, matrix_password).run())
 
 if __name__ == "__main__":
     start_matrix_bot()
