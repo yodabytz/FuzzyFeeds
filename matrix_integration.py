@@ -26,7 +26,7 @@ POSTED_FILE = "matrix_posted.json"
 
 # Global instance for external use.
 matrix_bot_instance = None
-matrix_event_loop = None  # The event loop used by the Matrix integration
+matrix_event_loop = None  # The event loop used by Matrix integration
 
 def load_posted_articles():
     if os.path.exists(POSTED_FILE):
@@ -63,6 +63,12 @@ def get_feeds_for_room(room):
         if key.lstrip("#!").lower() == norm:
             return val
     return {}
+
+def get_localpart(matrix_id):
+    """Extract the local part from a Matrix user ID (e.g. '@locoghost:matrix.org' -> 'locoghost')."""
+    if matrix_id.startswith("@"):
+        return matrix_id.split(":", 1)[0].lstrip("@")
+    return matrix_id
 
 class MatrixBot:
     def __init__(self, homeserver, user, password, rooms):
@@ -115,7 +121,6 @@ class MatrixBot:
         room_key = room.room_id
         parts = command.strip().split(" ", 2)
         cmd = parts[0].lower()
-        # Ignore old messages.
         if hasattr(room, "origin_server_ts") and room.origin_server_ts < self.start_time:
             logging.info(f"Ignoring old message in {room_key}: {command}")
             return
@@ -123,8 +128,8 @@ class MatrixBot:
         logging.info(f"Processing command `{cmd}` from `{sender}` in `{room_key}`.")
 
         if cmd == "!join":
-            # Only allow admin users to use !join.
-            if sender.lower() not in ([a.lower() for a in admins] + [config_admin.lower()]):
+            # Check that sender's local part is in admins or equals the primary admin.
+            if get_localpart(sender).lower() not in ([a.lower() for a in admins] + [config_admin.lower()]):
                 await self.send_message(room_key, "Only a bot admin can use !join.")
                 return
             if len(parts) < 3:
@@ -145,7 +150,7 @@ class MatrixBot:
                     await self.send_message(join_response.room_id,
                         f"🤖 FuzzyFeeds Bot joined room '{display_name}' with admin {join_admin}")
                     logging.info(f"Joined Matrix room: {join_response.room_id} (Display name: {display_name})")
-                    # Update admin.json with new admin mapping.
+                    # Update admin.json with the new admin mapping.
                     try:
                         if os.path.exists(admin_file):
                             with open(admin_file, "r") as f:
