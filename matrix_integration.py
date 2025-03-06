@@ -28,23 +28,34 @@ POSTED_FILE = "matrix_posted.json"
 matrix_bot_instance = None
 matrix_event_loop = None  # The event loop used by Matrix integration
 
+# --- Per-Room Posted Feeds Functions ---
 def load_posted_articles():
+    """
+    Load a dictionary mapping room_id -> set(links) from POSTED_FILE.
+    """
     if os.path.exists(POSTED_FILE):
         try:
             with open(POSTED_FILE, "r") as f:
                 data = json.load(f)
-                return set(data)
+                # Convert lists to sets.
+                return {room: set(links) for room, links in data.items()}
         except Exception as e:
             logging.error(f"Error loading {POSTED_FILE}: {e}")
-            return set()
-    return set()
+            return {}
+    return {}
 
-def save_posted_articles(posted_set):
+def save_posted_articles(posted_dict):
+    """
+    Save the dictionary mapping room_id -> set(links) to POSTED_FILE.
+    """
     try:
+        serializable = {room: list(links) for room, links in posted_dict.items()}
         with open(POSTED_FILE, "w") as f:
-            json.dump(list(posted_set), f, indent=4)
+            json.dump(serializable, f, indent=4)
     except Exception as e:
         logging.error(f"Error saving {POSTED_FILE}: {e}")
+
+# --- End Per-Room Posted Feeds ---
 
 matrix_room_names = {}
 
@@ -77,8 +88,8 @@ class MatrixBot:
         self.rooms = rooms  # List of Matrix room IDs from config
         self.start_time = 0  # Set after initial sync
         self.processing_enabled = False
-        # Load posted articles to avoid duplicate postings.
-        self.posted_articles = load_posted_articles()
+        # Load per-room posted articles.
+        self.posted_articles = load_posted_articles()  # {room_id: set(links)}
         self.client.add_event_callback(self.message_callback, RoomMessageText)
 
     async def login(self):
@@ -103,6 +114,7 @@ class MatrixBot:
                         display_name = room
                     matrix_room_names[room] = display_name
                     logging.info(f"Joined Matrix room: {room} (Display name: {display_name})")
+                    # Announce in the room that the bot is online.
                     await self.send_message(room, f"🤖 FuzzyFeeds Bot is online! Type `!help` for commands. (Room: {display_name})")
                 else:
                     logging.error(f"Error joining room {room}: {response}")
@@ -128,7 +140,7 @@ class MatrixBot:
         logging.info(f"Processing command `{cmd}` from `{sender}` in `{room_key}`.")
 
         if cmd == "!join":
-            # Check that sender's local part is in admins or equals the primary admin.
+            # Only allow if sender's local part is in admins list or equals primary admin.
             if get_localpart(sender).lower() not in ([a.lower() for a in admins] + [config_admin.lower()]):
                 await self.send_message(room_key, "Only a bot admin can use !join.")
                 return
@@ -150,7 +162,7 @@ class MatrixBot:
                     await self.send_message(join_response.room_id,
                         f"🤖 FuzzyFeeds Bot joined room '{display_name}' with admin {join_admin}")
                     logging.info(f"Joined Matrix room: {join_response.room_id} (Display name: {display_name})")
-                    # Update admin.json with the new admin mapping.
+                    # Update admin.json with new admin mapping.
                     try:
                         if os.path.exists(admin_file):
                             with open(admin_file, "r") as f:
@@ -216,6 +228,17 @@ class MatrixBot:
             await self.process_command(room, event.body, event.sender)
 
     async def send_message(self, room_id, message):
+        # If this is a feed link announcement, check posted_articles.
+        if message.startswith("Link:"):
+            link = message[len("Link:"):].strip()
+            if room_id not in self.posted_articles:
+                self.posted_articles[room_id] = set()
+            if link in self.posted_articles[room_id]:
+                logging.info(f"Link already posted in {room_id}: {link}")
+                return
+            else:
+                self.posted_articles[room_id].add(link)
+                save_posted_articles(self.posted_articles)
         try:
             await self.client.room_send(
                 room_id,
