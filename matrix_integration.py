@@ -30,7 +30,7 @@ matrix_event_loop = None
 
 # --- Per-Room Posted Feeds Storage ---
 def load_posted_articles():
-    """Load a dictionary mapping room_id -> set(links) from POSTED_FILE."""
+    """Load a dict mapping room_id -> set(links) from POSTED_FILE."""
     if os.path.exists(POSTED_FILE):
         try:
             with open(POSTED_FILE, "r") as f:
@@ -42,7 +42,7 @@ def load_posted_articles():
     return {}
 
 def save_posted_articles(posted_dict):
-    """Save the dictionary mapping room_id -> set(links) to POSTED_FILE."""
+    """Save the dict mapping room_id -> set(links) to POSTED_FILE."""
     try:
         serializable = {room: list(links) for room, links in posted_dict.items()}
         with open(POSTED_FILE, "w") as f:
@@ -108,6 +108,7 @@ class MatrixBot:
                         display_name = room
                     matrix_room_names[room] = display_name
                     logging.info(f"Joined Matrix room: {room} (Display name: {display_name})")
+                    # Announce the bot's presence in the room.
                     await self.send_message(room, f"🤖 FuzzyFeeds Bot is online! Type `!help` for commands. (Room: {display_name})")
                 else:
                     logging.error(f"Error joining room {room}: {response}")
@@ -155,7 +156,7 @@ class MatrixBot:
                     await self.send_message(join_response.room_id,
                         f"🤖 FuzzyFeeds Bot joined room '{display_name}' with admin {join_admin}")
                     logging.info(f"Joined Matrix room: {join_response.room_id} (Display name: {display_name})")
-                    # Update admin.json with new admin mapping.
+                    # Update admin.json with the new admin mapping.
                     try:
                         if os.path.exists(admin_file):
                             with open(admin_file, "r") as f:
@@ -177,14 +178,14 @@ class MatrixBot:
             return
 
         elif cmd == "!part":
-            # Admin-only: allow bot to leave room.
+            # Admin-only: allow bot to leave the room.
             if get_localpart(sender).lower() not in ([a.lower() for a in admins] + [config_admin.lower()]):
                 await self.send_message(room_key, "Only a bot admin can use !part.")
                 return
             try:
                 leave_response = await self.client.room_leave(room_key)
                 if leave_response:
-                    # Remove room from admin mapping.
+                    # Optionally remove room from admin mapping.
                     if os.path.exists(admin_file):
                         try:
                             with open(admin_file, "r") as f:
@@ -204,8 +205,8 @@ class MatrixBot:
                 await self.send_message(room_key, f"Exception during part: {e}")
             return
 
-        # For any other commands, delegate to centralized handler.
         else:
+            # Delegate any other commands to the centralized command handler.
             def matrix_send(target, msg):
                 asyncio.create_task(self.send_message(target, msg))
             def matrix_send_private(user_, msg):
@@ -274,10 +275,12 @@ def send_matrix_message(room, message):
     if matrix_event_loop is None:
         logging.error("Matrix event loop not available.")
         return
-    # Schedule the send_message coroutine on the stored event loop using a lambda.
-    matrix_event_loop.call_soon_threadsafe(
-        lambda: matrix_event_loop.create_task(matrix_bot_instance.send_message(room, message))
-    )
+    # Use run_coroutine_threadsafe with our stored event loop.
+    future = asyncio.run_coroutine_threadsafe(matrix_bot_instance.send_message(room, message), matrix_event_loop)
+    try:
+        future.result(timeout=10)
+    except Exception as e:
+        logging.error(f"Error sending Matrix message: {e}")
 
 # Export send_message as an alias.
 send_message = send_matrix_message
@@ -296,7 +299,7 @@ def start_matrix_bot():
         logging.error(f"Matrix integration error: {e}")
 
 def disable_feed_loop():
-    # Internal feed checking loop disabled in favor of centralized_polling.
+    # Internal feed checking loop is disabled in favor of centralized_polling.
     pass
 
 if __name__ == "__main__":
