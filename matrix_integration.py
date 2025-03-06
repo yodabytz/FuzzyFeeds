@@ -26,7 +26,7 @@ POSTED_FILE = "matrix_posted.json"
 
 # Global instance for external use.
 matrix_bot_instance = None
-matrix_event_loop = None  # Store the event loop used by Matrix integration
+matrix_event_loop = None  # The event loop used by the Matrix integration
 
 def load_posted_articles():
     if os.path.exists(POSTED_FILE):
@@ -71,6 +71,7 @@ class MatrixBot:
         self.rooms = rooms  # List of Matrix room IDs from config
         self.start_time = 0  # Set after initial sync
         self.processing_enabled = False
+        # Load posted articles to avoid duplicate postings.
         self.posted_articles = load_posted_articles()
         self.client.add_event_callback(self.message_callback, RoomMessageText)
 
@@ -114,11 +115,57 @@ class MatrixBot:
         room_key = room.room_id
         parts = command.strip().split(" ", 2)
         cmd = parts[0].lower()
+        # Ignore old messages.
         if hasattr(room, "origin_server_ts") and room.origin_server_ts < self.start_time:
             logging.info(f"Ignoring old message in {room_key}: {command}")
             return
+
         logging.info(f"Processing command `{cmd}` from `{sender}` in `{room_key}`.")
-        if cmd == "!listfeeds":
+
+        if cmd == "!join":
+            # Only allow admin users to use !join.
+            if sender.lower() not in ([a.lower() for a in admins] + [config_admin.lower()]):
+                await self.send_message(room_key, "Only a bot admin can use !join.")
+                return
+            if len(parts) < 3:
+                await self.send_message(room_key, "Usage: !join <#room_alias> <adminname>")
+                return
+            room_alias = parts[1].strip()
+            join_admin = parts[2].strip()
+            try:
+                join_response = await self.client.join(room_alias)
+                if hasattr(join_response, "room_id"):
+                    try:
+                        state = await self.client.room_get_state_event(join_response.room_id, "m.room.name", "")
+                        display_name = state.get("name", room_alias)
+                    except Exception as e:
+                        logging.warning(f"Could not fetch display name for {room_alias}: {e}")
+                        display_name = room_alias
+                    matrix_room_names[join_response.room_id] = display_name
+                    await self.send_message(join_response.room_id,
+                        f"🤖 FuzzyFeeds Bot joined room '{display_name}' with admin {join_admin}")
+                    logging.info(f"Joined Matrix room: {join_response.room_id} (Display name: {display_name})")
+                    # Update admin.json with new admin mapping.
+                    try:
+                        if os.path.exists(admin_file):
+                            with open(admin_file, "r") as f:
+                                admin_mapping = json.load(f)
+                        else:
+                            admin_mapping = {}
+                        admin_mapping[join_response.room_id] = join_admin
+                        with open(admin_file, "w") as f:
+                            json.dump(admin_mapping, f, indent=4)
+                        logging.info(f"Updated admin mapping for room {join_response.room_id}: {join_admin}")
+                    except Exception as e:
+                        logging.error(f"Failed to update admin file: {e}")
+                else:
+                    logging.error(f"Error joining room {room_alias}: {join_response}")
+                    await self.send_message(room_key, f"Error joining room: {join_response}")
+            except Exception as e:
+                logging.error(f"Exception joining room {room_alias}: {e}")
+                await self.send_message(room_key, f"Exception during join: {e}")
+
+        elif cmd == "!listfeeds":
             feeds = get_feeds_for_room(room_key)
             if not feeds:
                 await self.send_message(room_key, "No feeds found in this room.")
@@ -190,7 +237,7 @@ class MatrixBot:
 
 def send_matrix_message(room, message):
     """
-    Module-level function for sending a message.
+    Module-level function for sending a Matrix message.
     This is used by centralized_polling.
     """
     global matrix_bot_instance, matrix_event_loop
@@ -211,7 +258,7 @@ send_message = send_matrix_message
 def start_matrix_bot():
     global matrix_bot_instance, matrix_event_loop
     loop = asyncio.new_event_loop()
-    matrix_event_loop = loop  # Save the loop globally for use by send_matrix_message
+    matrix_event_loop = loop  # Save the loop globally for use by send_message
     asyncio.set_event_loop(loop)
     logging.info("Starting Matrix integration...")
     bot_instance = MatrixBot(matrix_homeserver, matrix_user, matrix_password, matrix_rooms)
