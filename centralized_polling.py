@@ -10,8 +10,8 @@ provided callback functions to send messages to the appropriate integration chan
 Usage:
     Import and start the polling loop by passing in three callback functions:
       - irc_send(channel, message): for sending messages via IRC.
-      - matrix_send(room, message): for sending messages via Matrix.
-      - discord_send(channel, message): for sending messages via Discord.
+      - matrix_send(room, message): for sending messages to a Matrix room.
+      - discord_send(channel, message): for sending messages to a Discord channel.
       
     Optionally, set the poll_interval (default 300 seconds) between polling rounds.
 """
@@ -108,9 +108,12 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                                     if discord_send:
                                         discord_send(chan, msg1)
 
-                                # Save the new feed link to prevent duplicates.
+                                # Mark this feed link as seen.
                                 feed.last_feed_links.add(link)
                                 feed.save_last_feed_link(link)
+
+                    except Exception as e:
+                        logging.error(f"Error checking feed '{feed_name}' at {feed_url}: {e}")
 
                 # Log summary for this channel.
                 if new_feed_count > 0:
@@ -118,7 +121,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                 else:
                     logging.info(f"No new feeds found in {chan}.")
 
-                # Update last check time for this channel.
+                # Update the last check time for this channel.
                 feed.last_check_times[chan] = current_time
 
         logging.info(f"Finished checking feeds. Next check in {poll_interval} seconds.")
@@ -129,8 +132,13 @@ if __name__ == "__main__":
     def test_irc_send(channel, message):
         print(f"[IRC] Channel {channel}: {message}")
 
+    # FIXED MATRIX SEND: simply call the imported function.
     def test_matrix_send(room, message):
-        print(f"[Matrix] Room {room}: {message}")
+        try:
+            from matrix_integration import send_message as send_matrix_message
+            send_matrix_message(room, message)
+        except Exception as e:
+            logging.error(f"Error sending Matrix message: {e}")
 
     def test_discord_send(channel, message):
         print(f"[Discord] Channel {channel}: {message}")
