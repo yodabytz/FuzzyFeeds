@@ -35,7 +35,6 @@ def load_posted_articles():
         try:
             with open(POSTED_FILE, "r") as f:
                 data = json.load(f)
-                # Convert each list to a set.
                 return {room: set(links) for room, links in data.items()}
         except Exception as e:
             logging.error(f"Error loading {POSTED_FILE}: {e}")
@@ -109,7 +108,6 @@ class MatrixBot:
                         display_name = room
                     matrix_room_names[room] = display_name
                     logging.info(f"Joined Matrix room: {room} (Display name: {display_name})")
-                    # Announce join in the room.
                     await self.send_message(room, f"🤖 FuzzyFeeds Bot is online! Type `!help` for commands. (Room: {display_name})")
                 else:
                     logging.error(f"Error joining room {room}: {response}")
@@ -128,16 +126,14 @@ class MatrixBot:
         room_key = room.room_id
         parts = command.strip().split(" ", 2)
         cmd = parts[0].lower()
-        # Ignore old messages.
         if hasattr(room, "origin_server_ts") and room.origin_server_ts < self.start_time:
             logging.info(f"Ignoring old message in {room_key}: {command}")
             return
 
         logging.info(f"Processing command `{cmd}` from `{sender}` in `{room_key}`.")
 
-        # Handle admin-only commands locally.
         if cmd == "!join":
-            # Only allow if sender's local part is in admins or equals primary admin.
+            # Admin-only: check sender's local part.
             if get_localpart(sender).lower() not in ([a.lower() for a in admins] + [config_admin.lower()]):
                 await self.send_message(room_key, "Only a bot admin can use !join.")
                 return
@@ -159,7 +155,7 @@ class MatrixBot:
                     await self.send_message(join_response.room_id,
                         f"🤖 FuzzyFeeds Bot joined room '{display_name}' with admin {join_admin}")
                     logging.info(f"Joined Matrix room: {join_response.room_id} (Display name: {display_name})")
-                    # Update admin.json with the new admin mapping.
+                    # Update admin.json with new admin mapping.
                     try:
                         if os.path.exists(admin_file):
                             with open(admin_file, "r") as f:
@@ -181,14 +177,14 @@ class MatrixBot:
             return
 
         elif cmd == "!part":
-            # !part: Admin-only command to leave the room.
+            # Admin-only: allow bot to leave room.
             if get_localpart(sender).lower() not in ([a.lower() for a in admins] + [config_admin.lower()]):
                 await self.send_message(room_key, "Only a bot admin can use !part.")
                 return
             try:
                 leave_response = await self.client.room_leave(room_key)
                 if leave_response:
-                    # Optionally update admin.json to remove this room.
+                    # Remove room from admin mapping.
                     if os.path.exists(admin_file):
                         try:
                             with open(admin_file, "r") as f:
@@ -208,16 +204,14 @@ class MatrixBot:
                 await self.send_message(room_key, f"Exception during part: {e}")
             return
 
-        # Delegate any other commands to the centralized command handler.
+        # For any other commands, delegate to centralized handler.
         else:
-            # Define wrapper functions for sending messages.
             def matrix_send(target, msg):
                 asyncio.create_task(self.send_message(target, msg))
             def matrix_send_private(user_, msg):
                 asyncio.create_task(self.send_message(room_key, msg))
             def matrix_send_multiline(target, msg):
                 asyncio.create_task(self.send_message(target, msg))
-            # Determine operator flag from sender's local part.
             is_op_flag = (get_localpart(sender).lower() in ([a.lower() for a in admins] + [config_admin.lower()]))
             from commands import handle_centralized_command
             handle_centralized_command("matrix", matrix_send, matrix_send_private, matrix_send_multiline, sender, room_key, command, is_op_flag)
@@ -233,7 +227,7 @@ class MatrixBot:
             await self.process_command(room, event.body, event.sender)
 
     async def send_message(self, room_id, message):
-        # If this is a feed link announcement, check per-room posted links.
+        # For feed announcements, check per-room posted links.
         if message.startswith("Link:"):
             link = message[len("Link:"):].strip()
             if room_id not in self.posted_articles:
@@ -271,7 +265,7 @@ class MatrixBot:
 def send_matrix_message(room, message):
     """
     Module-level function for sending a Matrix message.
-    This is used by centralized_polling.
+    Used by centralized_polling.
     """
     global matrix_bot_instance, matrix_event_loop
     if matrix_bot_instance is None:
@@ -280,16 +274,18 @@ def send_matrix_message(room, message):
     if matrix_event_loop is None:
         logging.error("Matrix event loop not available.")
         return
-    # Schedule the send_message coroutine on the stored event loop.
-    matrix_event_loop.call_soon_threadsafe(asyncio.create_task, matrix_bot_instance.send_message(room, message))
+    # Schedule the send_message coroutine on the stored event loop using a lambda.
+    matrix_event_loop.call_soon_threadsafe(
+        lambda: matrix_event_loop.create_task(matrix_bot_instance.send_message(room, message))
+    )
 
-# Export send_message as an alias for backward compatibility.
+# Export send_message as an alias.
 send_message = send_matrix_message
 
 def start_matrix_bot():
     global matrix_bot_instance, matrix_event_loop
     loop = asyncio.new_event_loop()
-    matrix_event_loop = loop  # Save the event loop globally for use by send_message
+    matrix_event_loop = loop  # Store the loop globally.
     asyncio.set_event_loop(loop)
     logging.info("Starting Matrix integration...")
     bot_instance = MatrixBot(matrix_homeserver, matrix_user, matrix_password, matrix_rooms)
@@ -300,7 +296,7 @@ def start_matrix_bot():
         logging.error(f"Matrix integration error: {e}")
 
 def disable_feed_loop():
-    # Internal feed checking loop is disabled in favor of centralized_polling.
+    # Internal feed checking loop disabled in favor of centralized_polling.
     pass
 
 if __name__ == "__main__":
