@@ -108,7 +108,7 @@ class MatrixBot:
                         display_name = room
                     matrix_room_names[room] = display_name
                     logging.info(f"Joined Matrix room: {room} (Display name: {display_name})")
-                    # Announce the bot's presence in the room.
+                    # Announce bot presence in the room.
                     await self.send_message(room, f"🤖 FuzzyFeeds Bot is online! Type `!help` for commands. (Room: {display_name})")
                 else:
                     logging.error(f"Error joining room {room}: {response}")
@@ -156,7 +156,7 @@ class MatrixBot:
                     await self.send_message(join_response.room_id,
                         f"🤖 FuzzyFeeds Bot joined room '{display_name}' with admin {join_admin}")
                     logging.info(f"Joined Matrix room: {join_response.room_id} (Display name: {display_name})")
-                    # Update admin.json with the new admin mapping.
+                    # Update admin.json with new admin mapping.
                     try:
                         if os.path.exists(admin_file):
                             with open(admin_file, "r") as f:
@@ -185,7 +185,7 @@ class MatrixBot:
             try:
                 leave_response = await self.client.room_leave(room_key)
                 if leave_response:
-                    # Optionally remove room from admin mapping.
+                    # Optionally update admin.json to remove this room.
                     if os.path.exists(admin_file):
                         try:
                             with open(admin_file, "r") as f:
