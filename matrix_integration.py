@@ -26,7 +26,7 @@ POSTED_FILE = "matrix_posted.json"
 
 # Global instance for external use.
 matrix_bot_instance = None
-matrix_event_loop = None  # Global variable to store the event loop for Matrix
+matrix_event_loop = None  # Store the event loop used by the Matrix integration
 
 def load_posted_articles():
     if os.path.exists(POSTED_FILE):
@@ -202,13 +202,13 @@ def send_matrix_message(room, message):
         return
     asyncio.run_coroutine_threadsafe(matrix_bot_instance.send_message(room, message), matrix_event_loop)
 
-# Add an alias to allow importing send_message from this module.
+# Export send_message as an alias.
 send_message = send_matrix_message
 
 def start_matrix_bot():
     global matrix_bot_instance, matrix_event_loop
     loop = asyncio.new_event_loop()
-    matrix_event_loop = loop  # Save the loop globally for use by send_matrix_message
+    matrix_event_loop = loop  # Save the event loop for later use
     asyncio.set_event_loop(loop)
     logging.info("Starting Matrix integration...")
     bot_instance = MatrixBot(matrix_homeserver, matrix_user, matrix_password, matrix_rooms)
