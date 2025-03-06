@@ -17,7 +17,7 @@ from config import (
 import feed
 import persistence
 import users
-from commands import search_feeds, get_help
+import commands
 
 logging.basicConfig(level=logging.INFO)
 
@@ -63,11 +63,17 @@ def get_feeds_for_room(room):
             return val
     return {}
 
+def get_localpart(matrix_id):
+    """Extract the local part (username) from a Matrix user ID."""
+    if matrix_id.startswith("@"):
+        return matrix_id.split(":")[0].lstrip("@")
+    return matrix_id
+
 class MatrixBot:
     def __init__(self, homeserver, user, password, rooms):
         self.client = AsyncClient(homeserver, user)
         self.password = password
-        self.rooms = rooms  # List of Matrix room IDs from config
+        self.rooms = rooms  # List of Matrix room IDs or aliases from config
         self.start_time = 0  # Set after initial sync
         self.processing_enabled = False
         self.posted_articles = load_posted_articles()
@@ -113,10 +119,14 @@ class MatrixBot:
         room_key = room.room_id
         parts = command.strip().split(" ", 2)
         cmd = parts[0].lower()
+        # Ignore old messages.
         if hasattr(room, "origin_server_ts") and room.origin_server_ts < self.start_time:
             logging.info(f"Ignoring old message in {room_key}: {command}")
             return
-        logging.info(f"Processing command `{cmd}` from `{sender}` in `{room_key}`.")
+
+        sender_local = get_localpart(sender).lower()
+        logging.info(f"Processing command `{cmd}` from `{sender_local}` in `{room_key}`.")
+        
         if cmd == "!listfeeds":
             feeds = get_feeds_for_room(room_key)
             if not feeds:
@@ -146,11 +156,88 @@ class MatrixBot:
             else:
                 await self.send_message(room_key, f"No entry available for {matched}.")
         elif cmd == "!stats":
-            uptime_seconds = int(time.time() - self.start_time)
+            uptime_seconds = int(time.time() - self.start_time/1000)
             uptime = str(datetime.timedelta(seconds=uptime_seconds))
             await self.send_message(room_key, f"Uptime: {uptime}")
+        elif cmd == "!join":
+            # !join command (admin-only)
+            if sender_local not in ([a.lower() for a in admins] + [config_admin.lower()]):
+                await self.send_message(room_key, "Only a bot admin can use !join.")
+                return
+            if len(parts) < 3:
+                await self.send_message(room_key, "Usage: !join <#room_alias> <adminname>")
+                return
+            room_alias = parts[1].strip()
+            join_admin = parts[2].strip()
+            try:
+                join_response = await self.client.join(room_alias)
+                if hasattr(join_response, "room_id"):
+                    try:
+                        state = await self.client.room_get_state_event(join_response.room_id, "m.room.name", "")
+                        display_name = state.get("name", room_alias)
+                    except Exception as e:
+                        logging.warning(f"Could not fetch display name for {room_alias}: {e}")
+                        display_name = room_alias
+                    matrix_room_names[join_response.room_id] = display_name
+                    await self.send_message(join_response.room_id,
+                        f"🤖 FuzzyFeeds Bot joined room '{display_name}' with admin {join_admin}")
+                    logging.info(f"Joined Matrix room: {join_response.room_id} (Display name: {display_name})")
+                    # Update admin.json with the new admin info.
+                    try:
+                        if os.path.exists(admin_file):
+                            with open(admin_file, "r") as f:
+                                admin_mapping = json.load(f)
+                        else:
+                            admin_mapping = {}
+                        # For Matrix rooms, use the room ID as the key.
+                        admin_mapping[join_response.room_id] = join_admin
+                        with open(admin_file, "w") as f:
+                            json.dump(admin_mapping, f, indent=4)
+                        logging.info(f"Updated admin mapping for room {join_response.room_id}: {join_admin}")
+                    except Exception as e:
+                        logging.error(f"Failed to update admin file: {e}")
+                else:
+                    logging.error(f"Error joining room {room_alias}: {join_response}")
+                    await self.send_message(room_key, f"Error joining room: {join_response}")
+            except Exception as e:
+                logging.error(f"Exception joining room {room_alias}: {e}")
+                await self.send_message(room_key, f"Exception during join: {e}")
+        elif cmd == "!part":
+            # !part command for leaving the room (admin-only)
+            if sender_local not in ([a.lower() for a in admins] + [config_admin.lower()]):
+                await self.send_message(room_key, "Only a bot admin can use !part.")
+                return
+            try:
+                leave_response = await self.client.room_leave(room_key)
+                if leave_response:
+                    # Remove room's admin mapping from admin.json.
+                    if os.path.exists(admin_file):
+                        try:
+                            with open(admin_file, "r") as f:
+                                admin_mapping = json.load(f)
+                        except Exception as e:
+                            logging.error(f"Error reading admin file: {e}")
+                            admin_mapping = {}
+                        if room_key in admin_mapping:
+                            del admin_mapping[room_key]
+                        with open(admin_file, "w") as f:
+                            json.dump(admin_mapping, f, indent=4)
+                    logging.info(f"Left room {room_key} on admin request by {sender_local}.")
+                else:
+                    await self.send_message(room_key, "Failed to leave room.")
+            except Exception as e:
+                logging.error(f"Exception during !part in room {room_key}: {e}")
+                await self.send_message(room_key, f"Exception during part: {e}")
         else:
-            await self.send_message(room_key, "Unknown command. Use !help for a list.")
+            # For all other commands, delegate to the centralized command handler.
+            def matrix_send(target, msg):
+                asyncio.create_task(self.send_message(target, msg))
+            def matrix_send_private(user, msg):
+                asyncio.create_task(self.send_message(room_key, msg))
+            def matrix_send_multiline(target, msg):
+                asyncio.create_task(self.send_message(target, msg))
+            is_op_flag = (sender_local in ([a.lower() for a in admins] + [config_admin.lower()]))
+            commands.handle_centralized_command("matrix", matrix_send, matrix_send_private, matrix_send_multiline, sender, room_key, command, is_op_flag)
 
     async def message_callback(self, room, event):
         if not self.processing_enabled:
@@ -216,4 +303,3 @@ def disable_feed_loop():
 
 if __name__ == "__main__":
     start_matrix_bot()
-
