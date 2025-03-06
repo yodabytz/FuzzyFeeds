@@ -72,13 +72,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             continue
                         if parsed_feed.entries:
                             entry = parsed_feed.entries[0]
-                            published_time = None
-                            if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                                published_time = time.mktime(entry.published_parsed)
-                            elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
-                                published_time = time.mktime(entry.updated_parsed)
-                            if published_time is not None and published_time <= last_check:
-                                continue
+                            # Remove published_time check to ensure new links get posted even if published_time <= last_check.
                             title = entry.title.strip() if entry.title else "No Title"
                             link = entry.link.strip() if entry.link else ""
                             if link and link not in feed.last_feed_links:
@@ -132,7 +126,7 @@ if __name__ == "__main__":
     def test_irc_send(channel, message):
         print(f"[IRC] Channel {channel}: {message}")
 
-    # FIXED MATRIX SEND: simply call the imported function.
+    # FIXED MATRIX SEND: simply call the imported send_message function.
     def test_matrix_send(room, message):
         try:
             from matrix_integration import send_message as send_matrix_message
