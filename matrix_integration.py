@@ -223,8 +223,13 @@ class MatrixBot:
             await self.process_command(room, event.body, event.sender)
 
     async def send_message(self, room_id, message):
-        if message.startswith("Link:"):
-            link = message[len("Link:"):].strip()
+        # Scan the message for a line starting with "Link:".
+        link = None
+        for line in message.splitlines():
+            if line.startswith("Link:"):
+                link = line[len("Link:"):].strip()
+                break
+        if link:
             if room_id not in self.posted_articles:
                 self.posted_articles[room_id] = set()
             if link in self.posted_articles[room_id]:
@@ -269,7 +274,7 @@ def send_matrix_message(room, message):
     if matrix_event_loop is None:
         logging.error("Matrix event loop not available.")
         return
-    # Schedule the send_message coroutine on the stored event loop using a lambda.
+    # Schedule the send_message coroutine on the stored event loop.
     matrix_event_loop.call_soon_threadsafe(
         lambda: asyncio.ensure_future(matrix_bot_instance.send_message(room, message), loop=matrix_event_loop)
     )
