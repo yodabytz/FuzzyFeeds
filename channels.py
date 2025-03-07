@@ -1,7 +1,11 @@
 import os, json
 from config import channels_file
 
-channels_data = {"irc_channels": [], "matrix_channels": [], "discord_channels": []}
+channels_data = {
+    "irc_channels": [],
+    "matrix_channels": [],
+    "discord_channels": []
+}
 
 def load_channels():
     global channels_data
