@@ -26,15 +26,6 @@ from config import default_interval
 logging.basicConfig(level=logging.INFO)
 
 def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
-    """
-    Start the central polling loop.
-    
-    Parameters:
-      - irc_send: Function (channel: str, message: str) -> None to send a message on an IRC channel.
-      - matrix_send: Function (room: str, message: str) -> None to send a message to a Matrix room.
-      - discord_send: Function (channel: str, message: str) -> None to send a message to a Discord channel.
-      - poll_interval: Time in seconds between each poll round (default: 300 seconds).
-    """
     logging.info("Centralized polling started.")
     feed.load_feeds()
     if not hasattr(feed, 'last_feed_links'):
@@ -45,21 +36,18 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
     for chan in feed.channel_feeds.keys():
         if chan not in feed.last_check_times:
             feed.last_check_times[chan] = current_time
-    
+
     while True:
         current_time = time.time()
         channels_to_check = list(feed.channel_feeds.keys())
-
         logging.info(f"Checking {len(channels_to_check)} channels for new feeds...")
 
         for chan in channels_to_check:
             feeds_to_check = feed.channel_feeds.get(chan, {})
             interval = feed.channel_intervals.get(chan, default_interval)
             last_check = feed.last_check_times.get(chan, 0)
-
             if current_time - last_check >= interval:
                 new_feed_count = 0
-
                 for feed_name, feed_url in feeds_to_check.items():
                     try:
                         parsed_feed = feedparser.parse(feed_url)
@@ -67,16 +55,17 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             logging.warning(f"Error parsing feed '{feed_name}' ({feed_url}): {parsed_feed.bozo_exception}")
                             continue
                         if parsed_feed.entries:
-                            entry = parsed_feed.entries[0]
-                            # Removed published_time check to ensure new links get posted.
+                            entry = parsed_feed.entries[0]  # Only process the latest entry.
                             title = entry.title.strip() if entry.title else "No Title"
                             link = entry.link.strip() if entry.link else ""
                             if link and link not in feed.last_feed_links:
-                                # For Matrix channels, send a combined message.
+                                # For Matrix channels: send exactly two messages:
+                                #   First: "Feedname: Title goes here"
+                                #   Second: "Link: http://www.link.com/article-link"
                                 if chan.startswith("!"):
-                                    combined_msg = f"New Feed from {feed_name}: {title}\nLink: {link}"
                                     if matrix_send:
-                                        matrix_send(chan, combined_msg)
+                                        matrix_send(chan, f"{feed_name}: {title}")
+                                        matrix_send(chan, f"Link: {link}")
                                 elif chan.startswith("#"):
                                     if irc_send:
                                         irc_send(chan, f"New Feed from {feed_name}: {title}")
@@ -89,40 +78,31 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                                     if irc_send:
                                         irc_send(chan, f"New Feed from {feed_name}: {title}")
                                     if matrix_send:
-                                        matrix_send(chan, f"New Feed from {feed_name}: {title}\nLink: {link}")
+                                        matrix_send(chan, f"{feed_name}: {title}\nLink: {link}")
                                     if discord_send:
                                         discord_send(chan, f"New Feed from {feed_name}: {title}")
-                                
                                 new_feed_count += 1
                                 feed.last_feed_links.add(link)
                                 feed.save_last_feed_link(link)
                     except Exception as e:
                         logging.error(f"Error checking feed '{feed_name}' at {feed_url}: {e}")
-
                 if new_feed_count > 0:
                     logging.info(f"Posted {new_feed_count} new feeds in {chan}.")
                 else:
                     logging.info(f"No new feeds found in {chan}.")
-
                 feed.last_check_times[chan] = current_time
-
         logging.info(f"Finished checking feeds. Next check in {poll_interval} seconds.")
         time.sleep(poll_interval)
 
 if __name__ == "__main__":
-    # Example callback implementations for testing.
     def test_irc_send(channel, message):
         print(f"[IRC] Channel {channel}: {message}")
-
-    # Use the Matrix send function from matrix_integration (which now uses our stored event loop).
     def test_matrix_send(room, message):
         try:
             from matrix_integration import send_message as send_matrix_message
             send_matrix_message(room, message)
         except Exception as e:
             logging.error(f"Error sending Matrix message: {e}")
-
     def test_discord_send(channel, message):
         print(f"[Discord] Channel {channel}: {message}")
-
     start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=60)
