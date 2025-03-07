@@ -28,15 +28,18 @@ logging.basicConfig(level=logging.INFO)
 def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
     logging.info("Centralized polling started.")
     feed.load_feeds()
-    # Load last feed links from file if available.
-    if hasattr(feed, "load_last_feed_links"):
-        feed.last_feed_links = feed.load_last_feed_links()
-    if not hasattr(feed, 'last_feed_links'):
+    # Ensure global last_feed_links is set.
+    if not hasattr(feed, 'last_feed_links') or feed.last_feed_links is None:
         feed.last_feed_links = set()
     current_time = time.time()
     
     # Initialize last_check_times for channels not yet set.
+    if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
+        feed.last_check_times = {}
     for chan in feed.channel_feeds.keys():
+        if feed.channel_feeds[chan] is None:
+            # If a channel's feeds are None, skip it.
+            continue
         if chan not in feed.last_check_times:
             feed.last_check_times[chan] = current_time
 
@@ -46,7 +49,10 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
         logging.info(f"Checking {len(channels_to_check)} channels for new feeds...")
 
         for chan in channels_to_check:
-            feeds_to_check = feed.channel_feeds.get(chan, {})
+            feeds_to_check = feed.channel_feeds.get(chan)
+            if feeds_to_check is None:
+                logging.warning(f"No feed dictionary found for channel {chan}; skipping.")
+                continue
             interval = feed.channel_intervals.get(chan, default_interval)
             last_check = feed.last_check_times.get(chan, 0)
             if current_time - last_check >= interval:
@@ -57,39 +63,44 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                         if parsed_feed.bozo:
                             logging.warning(f"Error parsing feed '{feed_name}' ({feed_url}): {parsed_feed.bozo_exception}")
                             continue
-                        if parsed_feed.entries:
-                            entry = parsed_feed.entries[0]  # Only process the latest entry.
-                            title = entry.title.strip() if entry.title else "No Title"
-                            link = entry.link.strip() if entry.link else ""
-                            if link and link not in feed.last_feed_links:
-                                # For Matrix channels: send one combined message.
-                                if chan.startswith("!"):
-                                    if matrix_send:
-                                        # Format: "Feedname: Title" on first line, then the link on second.
-                                        combined_msg = f"{feed_name}: {title}\n{link}"
-                                        matrix_send(chan, combined_msg)
-                                elif chan.startswith("#"):
-                                    if irc_send:
-                                        irc_send(chan, f"New Feed from {feed_name}: {title}")
-                                        irc_send(chan, f"Link: {link}")
-                                elif chan.isdigit():
-                                    if discord_send:
-                                        discord_send(chan, f"New Feed from {feed_name}: {title}")
-                                        discord_send(chan, f"Link: {link}")
-                                else:
-                                    if irc_send:
-                                        irc_send(chan, f"New Feed from {feed_name}: {title}")
-                                    if matrix_send:
-                                        matrix_send(chan, f"{feed_name}: {title}\n{link}")
-                                    if discord_send:
-                                        discord_send(chan, f"New Feed from {feed_name}: {title}")
-                                new_feed_count += 1
-                                feed.last_feed_links.add(link)
-                                if hasattr(feed, "save_last_feed_link"):
-                                    feed.save_last_feed_link(link)
-                            # Else, skip if already posted.
-                        else:
+                        # Ensure entries is iterable.
+                        entries = parsed_feed.get("entries")
+                        if not entries:
                             logging.info(f"No entries in feed '{feed_name}' ({feed_url}).")
+                            continue
+                        entry = entries[0]  # Only process the latest entry.
+                        title = entry.title.strip() if entry.get("title") else "No Title"
+                        link = entry.link.strip() if entry.get("link") else ""
+                        if link and link not in feed.last_feed_links:
+                            # For Matrix channels, send two separate messages.
+                            if chan.startswith("!"):
+                                if matrix_send:
+                                    # First message: "Feedname: Title goes here"
+                                    matrix_send(chan, f"{feed_name}: {title}")
+                                    # Second message: "Link: {link}"
+                                    matrix_send(chan, f"Link: {link}")
+                            elif chan.startswith("#"):
+                                if irc_send:
+                                    irc_send(chan, f"New Feed from {feed_name}: {title}")
+                                    irc_send(chan, f"Link: {link}")
+                            elif chan.isdigit():
+                                if discord_send:
+                                    discord_send(chan, f"New Feed from {feed_name}: {title}")
+                                    discord_send(chan, f"Link: {link}")
+                            else:
+                                if irc_send:
+                                    irc_send(chan, f"New Feed from {feed_name}: {title}")
+                                if matrix_send:
+                                    matrix_send(chan, f"{feed_name}: {title}\nLink: {link}")
+                                if discord_send:
+                                    discord_send(chan, f"New Feed from {feed_name}: {title}")
+                            new_feed_count += 1
+                            feed.last_feed_links.add(link)
+                            # Persist the new link.
+                            if hasattr(feed, "save_last_feed_link"):
+                                feed.save_last_feed_link(link)
+                        else:
+                            logging.info(f"Feed link already posted in {chan}: {link}")
                     except Exception as e:
                         logging.error(f"Error checking feed '{feed_name}' at {feed_url}: {e}")
                 if new_feed_count > 0:
@@ -101,18 +112,14 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
         time.sleep(poll_interval)
 
 if __name__ == "__main__":
-    # Test callback implementations.
     def test_irc_send(channel, message):
         print(f"[IRC] Channel {channel}: {message}")
-
     def test_matrix_send(room, message):
         try:
             from matrix_integration import send_message as send_matrix_message
             send_matrix_message(room, message)
         except Exception as e:
             logging.error(f"Error sending Matrix message: {e}")
-
     def test_discord_send(channel, message):
         print(f"[Discord] Channel {channel}: {message}")
-
     start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=60)
