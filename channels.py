@@ -1,27 +1,26 @@
 import os, json
-from config import channels_file, channels
+from config import channels_file
 
-joined_channels = []
+channels_data = {"irc_channels": [], "matrix_channels": [], "discord_channels": []}
 
 def load_channels():
-    global joined_channels
+    global channels_data
     if os.path.exists(channels_file):
         try:
-            joined_channels = json.load(open(channels_file, "r"))
+            channels_data = json.load(open(channels_file, "r"))
         except Exception as e:
             print(f"Error loading {channels_file}: {e}")
-            joined_channels = channels[:]  # Use default channels from config
+            channels_data = {"irc_channels": [], "matrix_channels": [], "discord_channels": []}
             save_channels()
     else:
-        joined_channels = channels[:]  # Use default channels from config
+        channels_data = {"irc_channels": [], "matrix_channels": [], "discord_channels": []}
         save_channels()
-    return joined_channels
+    return channels_data
 
 def save_channels():
-    global joined_channels
+    global channels_data
     try:
         with open(channels_file, "w") as f:
-            json.dump(joined_channels, f, indent=4)
+            json.dump(channels_data, f, indent=4)
     except Exception as e:
         print(f"Error saving {channels_file}: {e}")
-
