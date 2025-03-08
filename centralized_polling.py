@@ -25,6 +25,9 @@ from config import default_interval
 
 logging.basicConfig(level=logging.INFO)
 
+# Global variable: only articles published after this time will be posted.
+script_start_time = time.time()
+
 def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
     logging.info("Centralized polling started.")
     feed.load_feeds()
@@ -38,10 +41,9 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
         feed.last_check_times = {}
     for chan in feed.channel_feeds.keys():
         if feed.channel_feeds[chan] is None:
-            # If a channel's feeds are None, skip it.
             continue
-        if chan not in feed.last_check_times:
-            feed.last_check_times[chan] = current_time
+        # Set last_check_time to script_start_time so that we ignore older entries.
+        feed.last_check_times[chan] = script_start_time
 
     while True:
         current_time = time.time()
@@ -54,7 +56,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                 logging.warning(f"No feed dictionary found for channel {chan}; skipping.")
                 continue
             interval = feed.channel_intervals.get(chan, default_interval)
-            last_check = feed.last_check_times.get(chan, 0)
+            last_check = feed.last_check_times.get(chan, script_start_time)
             if current_time - last_check >= interval:
                 new_feed_count = 0
                 for feed_name, feed_url in feeds_to_check.items():
@@ -63,21 +65,28 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                         if parsed_feed.bozo:
                             logging.warning(f"Error parsing feed '{feed_name}' ({feed_url}): {parsed_feed.bozo_exception}")
                             continue
-                        # Ensure entries is iterable.
                         entries = parsed_feed.get("entries")
                         if not entries:
                             logging.info(f"No entries in feed '{feed_name}' ({feed_url}).")
                             continue
-                        entry = entries[0]  # Only process the latest entry.
+                        entry = entries[0]  # Process only the latest entry.
+                        # Determine published time (or updated time).
+                        published_time = None
+                        if entry.get("published_parsed"):
+                            published_time = time.mktime(entry.published_parsed)
+                        elif entry.get("updated_parsed"):
+                            published_time = time.mktime(entry.updated_parsed)
+                        # If published time is available and older than when the bot started, skip.
+                        if published_time is not None and published_time < script_start_time:
+                            logging.info(f"Skipping old entry from feed '{feed_name}' (published at {datetime.datetime.fromtimestamp(published_time)}).")
+                            continue
                         title = entry.title.strip() if entry.get("title") else "No Title"
                         link = entry.link.strip() if entry.get("link") else ""
                         if link and link not in feed.last_feed_links:
-                            # For Matrix channels, send two separate messages.
+                            # For Matrix channels, send two messages: one with title and one with link.
                             if chan.startswith("!"):
                                 if matrix_send:
-                                    # First message: "Feedname: Title goes here"
                                     matrix_send(chan, f"{feed_name}: {title}")
-                                    # Second message: "Link: {link}"
                                     matrix_send(chan, f"Link: {link}")
                             elif chan.startswith("#"):
                                 if irc_send:
@@ -96,7 +105,6 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                                     discord_send(chan, f"New Feed from {feed_name}: {title}")
                             new_feed_count += 1
                             feed.last_feed_links.add(link)
-                            # Persist the new link.
                             if hasattr(feed, "save_last_feed_link"):
                                 feed.save_last_feed_link(link)
                         else:
