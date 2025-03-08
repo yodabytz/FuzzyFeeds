@@ -24,7 +24,6 @@ logging.basicConfig(level=logging.INFO)
 
 GRACE_PERIOD = 5
 POSTED_FILE = "matrix_posted.json"
-TOKEN_FILE = "matrix_token.txt"  # New: file to store the access token
 
 # Global instance and event loop for Matrix integration.
 matrix_bot_instance = None
@@ -74,14 +73,10 @@ def get_localpart(matrix_id):
         return matrix_id.split(":", 1)[0].lstrip("@")
     return matrix_id
 
-# --- Matrix DM Helper Functions ---
-matrix_dm_rooms = {}  # Cache mapping Matrix user IDs to DM room IDs
+# --- Matrix DM Helper Functions (no longer used for command responses) ---
+matrix_dm_rooms = {}
 
 async def update_direct_messages(room_id, user):
-    """
-    Update the bot's m.direct account data so that the given room_id is marked
-    as a DM for the specified user.
-    """
     try:
         current = await matrix_bot_instance.client.get_account_data("m.direct")
         dm_content = current.content if current and hasattr(current, "content") else {}
@@ -99,12 +94,6 @@ async def update_direct_messages(room_id, user):
             logging.error(f"Error setting m.direct account data: {e}")
 
 async def get_dm_room(user):
-    """
-    Get or create a direct-message room with the specified Matrix user.
-    First check the m.direct account data; if a room already exists, return it.
-    Otherwise, create a new DM room, enable encryption, update the account data,
-    and return the new room ID.
-    """
     global matrix_dm_rooms
     if user in matrix_dm_rooms:
         return matrix_dm_rooms[user]
@@ -126,7 +115,6 @@ async def get_dm_room(user):
             is_direct=True,
             preset="trusted_private_chat"
         )
-        # Try both attribute and dict lookup for room_id
         room_id = getattr(response, "room_id", None)
         if not room_id and isinstance(response, dict):
             room_id = response.get("room_id", None)
@@ -148,17 +136,11 @@ async def get_dm_room(user):
         return None
 
 async def send_matrix_dm_async(user, message):
-    """
-    Asynchronously send a direct message to a Matrix user.
-    """
     room_id = await get_dm_room(user)
     if room_id:
         await matrix_bot_instance.send_message(room_id, message)
 
 def send_matrix_dm(user, message):
-    """
-    Synchronously schedule sending a DM to a Matrix user.
-    """
     global matrix_bot_instance, matrix_event_loop
     if matrix_bot_instance is None or matrix_event_loop is None:
         logging.error("Matrix bot not properly initialized for DM sending.")
@@ -174,36 +156,17 @@ class MatrixBot:
         self.password = password
         self.start_time = 0
         self.processing_enabled = False
-        self.posted_articles = load_posted_articles()  # Dict: room_id -> set(links)
+        self.posted_articles = load_posted_articles()
         self.client.add_event_callback(self.message_callback, RoomMessageText)
+        self.last_help_timestamp = {}  # For rate-limiting !help commands
 
     async def login(self):
-        # New login logic: try to load token from TOKEN_FILE first.
-        token = None
-        if os.path.exists(TOKEN_FILE):
-            try:
-                with open(TOKEN_FILE, "r") as f:
-                    token = f.read().strip()
-                if token:
-                    self.client.access_token = token
-                    logging.info("Loaded Matrix access token from file.")
-                    # Optionally, you might want to call a sync here to ensure token validity.
-            except Exception as e:
-                logging.error(f"Error reading token file: {e}")
-        if not token:
-            response = await self.client.login(self.password, device_name="FuzzyFeeds Bot")
-            if hasattr(response, "access_token") and response.access_token:
-                logging.info("Matrix login successful")
-                self.client.access_token = response.access_token
-                try:
-                    with open(TOKEN_FILE, "w") as f:
-                        f.write(response.access_token)
-                    logging.info("Saved Matrix access token to file.")
-                except Exception as e:
-                    logging.error(f"Error saving token file: {e}")
-            else:
-                logging.error("Matrix login failed: %s", response)
-                raise Exception("Matrix login failed")
+        response = await self.client.login(self.password, device_name="FuzzyFeeds Bot")
+        if hasattr(response, "access_token") and response.access_token:
+            logging.info("Matrix login successful")
+        else:
+            logging.error("Matrix login failed: %s", response)
+            raise Exception("Matrix login failed")
 
     async def join_rooms(self):
         global matrix_room_names
@@ -245,6 +208,7 @@ class MatrixBot:
 
         logging.info(f"Processing command `{cmd}` from `{sender}` in `{room_key}`.")
 
+        # Handle join and part commands as before.
         if cmd == "!join":
             if get_localpart(sender).lower() not in ([a.lower() for a in admins] + [config_admin.lower()]):
                 await self.send_message(room_key, "Only a bot admin can use !join.")
@@ -313,14 +277,33 @@ class MatrixBot:
                 await self.send_message(room_key, f"Exception during part: {e}")
             return
 
+        # Subscription-related commands are not supported on Matrix.
+        elif cmd.startswith("!addsub") or cmd.startswith("!mysubs") or cmd.startswith("!listsubs") or cmd.startswith("!latestsub"):
+            await self.send_message(room_key, "Feature does not work on Matrix.")
+            return
+
+        # !help command: rate limit to once per minute.
+        elif cmd.startswith("!help"):
+            now = time.time()
+            if sender in self.last_help_timestamp and now - self.last_help_timestamp[sender] < 60:
+                await self.send_message(room_key, "Rate limit: please wait 1 minute before using !help again.")
+                return
+            self.last_help_timestamp[sender] = now
+            parts = command.split(" ", 1)
+            if len(parts) == 2:
+                help_text = get_help(parts[1].strip())
+            else:
+                help_text = get_help()
+            await self.send_message(room_key, help_text)
+            return
+
         else:
-            # For non-special commands, use DM for private responses.
+            # For all other commands, send responses publicly in the room.
             def matrix_send(target, msg):
                 asyncio.create_task(self.send_message(target, msg))
-            # NEW: Instead of replying in the public room, send private response via DM.
+            # Even the "private" callback now sends to the public room.
             def matrix_send_private(user_, msg):
-                from matrix_integration import send_matrix_dm
-                send_matrix_dm(sender, msg)
+                asyncio.create_task(self.send_message(room_key, msg))
             def matrix_send_multiline(target, msg):
                 asyncio.create_task(self.send_message(target, msg))
             is_op_flag = (get_localpart(sender).lower() in ([a.lower() for a in admins] + [config_admin.lower()]))
