@@ -4,64 +4,106 @@ import time
 import datetime
 import logging
 import json
-from flask import Flask, request, Response, render_template_string, jsonify
+from collections import deque
+from flask import Flask, jsonify, render_template_string
+
+# If your config references are in config.py, adjust as needed
 from config import start_time, dashboard_port, dashboard_username, dashboard_password
 import feed
-# Import the global matrix_room_names from matrix_integration.
 try:
     from matrix_integration import matrix_room_names
 except ImportError:
     matrix_room_names = {}
 
+###############################################################################
+# Log handler that captures ERROR messages in memory so we can display them.
+###############################################################################
+MAX_ERRORS = 50
+errors_deque = deque()
+
+class DashboardErrorHandler(logging.Handler):
+    def emit(self, record):
+        if record.levelno >= logging.ERROR:
+            msg = self.format(record)
+            errors_deque.append(msg)
+            if len(errors_deque) > MAX_ERRORS:
+                errors_deque.popleft()
+
+# Attach the custom handler so we see any logging.error in the dashboard
+handler = DashboardErrorHandler()
+handler.setLevel(logging.ERROR)
+logging.getLogger().addHandler(handler)
+
 logging.basicConfig(level=logging.INFO)
 
+###############################################################################
+# Create the Flask app
+###############################################################################
 app = Flask(__name__)
 
-def check_auth(username, password):
-    return username == dashboard_username and password == dashboard_password
-
-def authenticate():
-    return Response(
-        'Could not verify your access level for that URL.\n'
-        'You have to login with proper credentials', 401,
-        {'WWW-Authenticate': 'Basic realm="Login Required"'})
-
-def requires_auth(f):
-    from functools import wraps
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        auth = request.authorization
-        if not auth or not check_auth(auth.username, auth.password):
-            return authenticate()
-        return f(*args, **kwargs)
-    return decorated
-
-template = """
+# The entire HTML is embedded here. The only relevant part for the logo is:
+# <img src="/static/images/fuzzyfeeds-logo-sm.png" width="100" height="100" alt="FuzzyFeeds Logo" />
+DASHBOARD_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <title>FuzzyFeeds Dashboard</title>
-    <link rel="icon" href="/static/favicon.ico">
-    <!-- Bootstrap CSS from CDN -->
+    <!-- Google Fonts: Passion One (title) & Montserrat (body) -->
+    <link href="https://fonts.googleapis.com/css2?family=Passion+One&family=Montserrat:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Bootstrap CSS -->
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <style>
-      body { padding-top: 60px; }
-      .container { max-width: 1200px; }
-      .card { margin-bottom: 20px; }
-      .table { table-layout: fixed; width: 100%; word-wrap: break-word; }
-      .table th, .table td { vertical-align: middle; overflow: hidden; text-overflow: ellipsis; }
-      .footer { text-align: center; margin-top: 20px; color: #777; }
+      body {
+          font-family: 'Montserrat', sans-serif;
+          padding-top: 60px;
+      }
+      h1 {
+          font-family: 'Passion One', sans-serif;
+          font-size: 3rem;
+      }
+      .container {
+          max-width: 1200px;
+      }
+      .card {
+          margin-bottom: 20px;
+          border-radius: 15px;
+          box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+      }
+      .table {
+          table-layout: fixed;
+          width: 100%;
+          word-wrap: break-word;
+      }
+      .table th, .table td {
+          vertical-align: middle;
+          overflow: hidden;
+          text-overflow: ellipsis;
+      }
+      .footer {
+          text-align: center;
+          margin-top: 20px;
+          color: #777;
+      }
+      .logo-img {
+          margin-right: 10px;
+      }
     </style>
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top">
-      <a class="navbar-brand" href="#">FuzzyFeeds Dashboard</a>
+      <span class="navbar-brand mb-0 h1">FuzzyFeeds Dashboard</span>
     </nav>
+
     <div class="container">
-        <h1 class="mt-4">FuzzyFeeds Analytics Dashboard</h1>
+        <!-- Place the logo left of the H1 -->
+        <h1 class="mt-4">
+          <img class="logo-img" src="/static/images/fuzzyfeeds-logo-sm.png" width="100" height="100" alt="FuzzyFeeds Logo">
+          FuzzyFeeds Analytics Dashboard
+        </h1>
         <p class="lead">Monitor uptime, feeds, subscriptions, and errors.</p>
         
+        <!-- Top row: Uptime, Feeds, Subs -->
         <div class="row">
           <div class="col-md-4">
               <div class="card">
@@ -90,9 +132,9 @@ template = """
           </div>
         </div>
 
-        <!-- Integration Specific Details -->
+        <!-- Integration-Specific: IRC, Matrix, Discord -->
         <div class="row">
-            <!-- IRC Section -->
+            <!-- IRC -->
             <div class="col-md-4">
               <div class="card">
                 <div class="card-header bg-secondary text-white">IRC Channels</div>
@@ -120,7 +162,7 @@ template = """
                 </div>
               </div>
             </div>
-            <!-- Matrix Section -->
+            <!-- Matrix -->
             <div class="col-md-4">
               <div class="card">
                 <div class="card-header bg-secondary text-white">Matrix Rooms</div>
@@ -154,7 +196,7 @@ template = """
                 </div>
               </div>
             </div>
-            <!-- Discord Section -->
+            <!-- Discord -->
             <div class="col-md-4">
               <div class="card">
                 <div class="card-header bg-secondary text-white">Discord Channels</div>
@@ -184,7 +226,7 @@ template = """
             </div>
         </div>
         
-        <!-- Feed Details Section -->
+        <!-- Feed Details -->
         <div class="row">
           <div class="col-md-12">
               <div class="card">
@@ -213,13 +255,13 @@ template = """
           </div>
         </div>
         
-        <!-- Errors Section -->
+        <!-- Errors -->
         <div class="row">
           <div class="col-md-12">
               <div class="card">
                 <div class="card-header bg-danger text-white">Errors</div>
                 <div class="card-body">
-                  <p class="card-text" id="errors">{{ errors }}</p>
+                  <pre class="card-text" id="errors">{{ errors }}</pre>
                 </div>
               </div>
           </div>
@@ -228,10 +270,10 @@ template = """
     <div class="footer">
       <p>&copy; FuzzyFeeds <span id="current_year">{{ current_year }}</span></p>
     </div>
-    <!-- JavaScript for automatic stats updates and uptime timer -->
+
+    <!-- JavaScript to auto-update uptime & stats -->
     <script>
-      // Uptime update every second using server start time
-      const serverStart = {{ start_time|tojson }};
+      const serverStart = {{ server_start_time|tojson }};
       function updateUptime() {
           const now = Date.now();
           let diff = Math.floor((now - serverStart * 1000) / 1000);
@@ -248,62 +290,63 @@ template = """
           const response = await fetch('/stats_data');
           if (!response.ok) throw new Error('Network response was not ok');
           const data = await response.json();
+          
+          // Update top cards
           document.getElementById("total_feeds").innerText = data.total_feeds + " feeds";
           document.getElementById("total_channels").innerText = data.total_channels;
           document.getElementById("total_subscriptions").innerText = data.total_subscriptions + " total";
           document.getElementById("current_year").innerText = data.current_year;
-          
-          // Update IRC table
+
+          // IRC
           let ircTable = "";
-          for (const [channel, feeds] of Object.entries(data.irc_channels)) {
-            ircTable += `<tr><td>${channel}</td><td>${Object.keys(feeds).length}</td></tr>`;
+          for (const [ch, fs] of Object.entries(data.irc_channels)) {
+            ircTable += `<tr><td>${ch}</td><td>${Object.keys(fs).length}</td></tr>`;
           }
           document.getElementById("irc_table_body").innerHTML = ircTable;
-          
-          // Update Matrix table with display names.
+
+          // Matrix
           let matrixTable = "";
-          for (const [room, feeds] of Object.entries(data.matrix_rooms)) {
-            let displayName = data.matrix_room_names[room] || room;
-            matrixTable += `<tr><td>${displayName}</td><td>${Object.keys(feeds).length}</td></tr>`;
+          for (const [room, fs] of Object.entries(data.matrix_rooms)) {
+            const displayName = data.matrix_room_names[room] || room;
+            matrixTable += `<tr><td>${displayName}</td><td>${Object.keys(fs).length}</td></tr>`;
           }
           document.getElementById("matrix_table_body").innerHTML = matrixTable;
-          
-          // Update Discord table
+
+          // Discord
           let discordTable = "";
-          for (const [channel, feeds] of Object.entries(data.discord_channels)) {
-            discordTable += `<tr><td>${channel}</td><td>${Object.keys(feeds).length}</td></tr>`;
+          for (const [chan, fs] of Object.entries(data.discord_channels)) {
+            discordTable += `<tr><td>${chan}</td><td>${Object.keys(fs).length}</td></tr>`;
           }
           document.getElementById("discord_table_body").innerHTML = discordTable;
           
-          // Update Feed Details table (ordered by IRC, then Matrix, then Discord)
+          // Feed details
           let feedDetails = data.feed_details;
-          feedDetails.sort((a, b) => {
-              // Define priorities: IRC (#): 0, Matrix (!): 1, Discord (digits): 2, else: 3.
-              function getPriority(channel) {
-                  if(channel.startsWith("#")) return 0;
-                  if(channel.startsWith("!")) return 1;
-                  if(channel.match(/^\d+$/)) return 2;
-                  return 3;
-              }
-              const pA = getPriority(a.channel);
-              const pB = getPriority(b.channel);
-              if(pA !== pB) return pA - pB;
-              // If same integration, sort alphabetically by channel and then by feed_name.
-              if(a.channel.toLowerCase() < b.channel.toLowerCase()) return -1;
-              if(a.channel.toLowerCase() > b.channel.toLowerCase()) return 1;
-              if(a.feed_name.toLowerCase() < b.feed_name.toLowerCase()) return -1;
-              if(a.feed_name.toLowerCase() > b.feed_name.toLowerCase()) return 1;
-              return 0;
+          feedDetails.sort((a,b) => {
+            function getPriority(c) {
+              if (c.startsWith('#')) return 0;
+              if (c.startsWith('!')) return 1;
+              if (c.match(/^\\d+$/)) return 2;
+              return 3;
+            }
+            const pa = getPriority(a.channel);
+            const pb = getPriority(b.channel);
+            if (pa !== pb) return pa - pb;
+            if (a.channel.toLowerCase() < b.channel.toLowerCase()) return -1;
+            if (a.channel.toLowerCase() > b.channel.toLowerCase()) return 1;
+            if (a.feed_name.toLowerCase() < b.feed_name.toLowerCase()) return -1;
+            if (a.feed_name.toLowerCase() > b.feed_name.toLowerCase()) return 1;
+            return 0;
           });
-          let feedDetailsTable = "";
+          let feedsHTML = "";
           for (const item of feedDetails) {
-              feedDetailsTable += `<tr><td>${item.channel}</td><td>${item.feed_name}</td><td><a href="${item.link}" target="_blank">${item.link}</a></td></tr>`;
+            feedsHTML += `<tr><td>${item.channel}</td><td>${item.feed_name}</td><td><a href=\"${item.link}\" target=\"_blank\">${item.link}</a></td></tr>`;
           }
-          document.getElementById("feed_details_table_body").innerHTML = feedDetailsTable;
+          document.getElementById("feed_details_table_body").innerHTML = feedsHTML;
           
+          // Errors
           document.getElementById("errors").innerText = data.errors;
-        } catch (error) {
-          console.error('Error fetching stats:', error);
+        } catch (err) {
+          console.error('Error fetching stats:', err);
         }
       }
       setInterval(updateStats, 30000);
@@ -315,82 +358,88 @@ template = """
 </html>
 """
 
-def build_feed_details():
-    details = []
+###############################################################################
+# FLASK ROUTES
+###############################################################################
+@app.route('/')
+def index():
+    feed.load_feeds()
+
+    uptime_seconds = int(time.time() - start_time)
+    uptime_str = str(datetime.timedelta(seconds=uptime_seconds))
+    total_feeds = sum(len(fds) for fds in feed.channel_feeds.values())
+    total_channels = len(feed.channel_feeds)
+    total_subscriptions = sum(len(subs) for subs in feed.subscriptions.values())
+
+    feed_details = []
     for channel, feeds_dict in feed.channel_feeds.items():
         for feed_name, link in feeds_dict.items():
-            if link.startswith("http"):
-                details.append({
-                    "channel": channel,
-                    "feed_name": feed_name,
-                    "link": link
-                })
-    return details
+            feed_details.append({
+                "channel": channel,
+                "feed_name": feed_name,
+                "link": link
+            })
 
-@app.route('/')
-@requires_auth
-def index():
-    feed.load_feeds()  # Update feed.channel_feeds and feed.subscriptions
-    uptime_seconds = int(time.time() - start_time)
-    uptime = str(datetime.timedelta(seconds=uptime_seconds))
-    total_feeds = sum(len(feeds) for feeds in feed.channel_feeds.values())
-    total_channels = len(feed.channel_feeds)
-    total_subscriptions = sum(len(subs) for subs in feed.subscriptions.values())
-    
-    irc_channels = {chan: feeds for chan, feeds in feed.channel_feeds.items() if chan.startswith("#")}
-    matrix_rooms = {chan: feeds for chan, feeds in feed.channel_feeds.items() if chan.startswith("!")}
-    discord_channels = {chan: feeds for chan, feeds in feed.channel_feeds.items() if chan.isdigit()}
-    
-    feed_details = build_feed_details()
-    
-    errors = "No errors reported."
+    errors_str = "\n".join(errors_deque) if errors_deque else "No errors reported."
     current_year = datetime.datetime.now().year
-    
-    return render_template_string(template,
-                                  uptime=uptime,
-                                  total_feeds=total_feeds,
-                                  total_channels=total_channels,
-                                  total_subscriptions=total_subscriptions,
-                                  irc_channels=irc_channels,
-                                  matrix_rooms=matrix_rooms,
-                                  discord_channels=discord_channels,
-                                  errors=errors,
-                                  current_year=current_year,
-                                  matrix_room_names=matrix_room_names,
-                                  start_time=start_time,
-                                  feed_details=feed_details)
+
+    return render_template_string(
+        DASHBOARD_TEMPLATE,
+        uptime=uptime_str,
+        total_feeds=total_feeds,
+        total_channels=total_channels,
+        total_subscriptions=total_subscriptions,
+        irc_channels={k: v for k,v in feed.channel_feeds.items() if k.startswith('#')},
+        matrix_rooms={k: v for k,v in feed.channel_feeds.items() if k.startswith('!')},
+        discord_channels={k: v for k,v in feed.channel_feeds.items() if k.isdigit()},
+        feed_details=feed_details,
+        errors=errors_str,
+        current_year=current_year,
+        matrix_room_names=matrix_room_names,
+        server_start_time=start_time
+    )
 
 @app.route('/stats_data')
-@requires_auth
 def stats_data():
     feed.load_feeds()
+
     uptime_seconds = int(time.time() - start_time)
-    uptime = str(datetime.timedelta(seconds=uptime_seconds))
-    total_feeds = sum(len(feeds) for feeds in feed.channel_feeds.values())
+    uptime_str = str(datetime.timedelta(seconds=uptime_seconds))
+    total_feeds = sum(len(fds) for fds in feed.channel_feeds.values())
     total_channels = len(feed.channel_feeds)
     total_subscriptions = sum(len(subs) for subs in feed.subscriptions.values())
-    
-    irc_channels = {chan: feeds for chan, feeds in feed.channel_feeds.items() if chan.startswith("#")}
-    matrix_rooms = {chan: feeds for chan, feeds in feed.channel_feeds.items() if chan.startswith("!")}
-    discord_channels = {chan: feeds for chan, feeds in feed.channel_feeds.items() if chan.isdigit()}
+
+    feed_details = []
+    for channel, feeds_dict in feed.channel_feeds.items():
+        for feed_name, link in feeds_dict.items():
+            feed_details.append({
+                "channel": channel,
+                "feed_name": feed_name,
+                "link": link
+            })
+
+    errors_str = "\n".join(errors_deque) if errors_deque else "No errors reported."
     current_year = datetime.datetime.now().year
-    feed_details = build_feed_details()
-    
-    return jsonify({
-        "uptime": uptime,
+
+    return {
+        "uptime": uptime_str,
         "total_feeds": total_feeds,
         "total_channels": total_channels,
         "total_subscriptions": total_subscriptions,
-        "irc_channels": irc_channels,
-        "matrix_rooms": matrix_rooms,
-        "discord_channels": discord_channels,
-        "errors": "No errors reported.",
+        "irc_channels": {k: v for k,v in feed.channel_feeds.items() if k.startswith('#')},
+        "matrix_rooms": {k: v for k,v in feed.channel_feeds.items() if k.startswith('!')},
+        "discord_channels": {k: v for k,v in feed.channel_feeds.items() if k.isdigit()},
+        "feed_details": feed_details,
+        "errors": errors_str,
         "current_year": current_year,
-        "matrix_room_names": matrix_room_names,
-        "feed_details": feed_details
-    })
+        "matrix_room_names": matrix_room_names
+    }
 
+###############################################################################
+# MAIN
+###############################################################################
 if __name__ == '__main__':
-    logging.info(f"Dashboard starting on port {dashboard_port} and binding to 0.0.0.0")
-    app.run(host='0.0.0.0', port=dashboard_port)
+    logging.info(f"Dashboard starting on port {dashboard_port}.")
+    # Must have static/images/fuzzyfeeds-logo-sm.png for the code to work
+    app.run(host='0.0.0.0', port=dashboard_port, debug=True)
 
