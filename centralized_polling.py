@@ -26,7 +26,7 @@ from config import default_interval
 
 logging.basicConfig(level=logging.INFO)
 
-# Global variable: used for initial setup of last check times.
+# Global variable: only articles published after this time will be posted.
 script_start_time = time.time()
 
 def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
@@ -35,15 +35,16 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
     # Ensure global last_feed_links is set.
     if not hasattr(feed, 'last_feed_links') or feed.last_feed_links is None:
         feed.last_feed_links = set()
+    current_time = time.time()
     
-    # Initialize last_check_times for channels that don't have one.
+    # Initialize last_check_times for channels not yet set.
     if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
         feed.last_check_times = {}
     for chan in feed.channel_feeds.keys():
         if feed.channel_feeds[chan] is None:
             continue
-        # For the very first poll, set last_check_time to the script start time.
-        feed.last_check_times.setdefault(chan, script_start_time)
+        # Set last_check_time to script_start_time so that we ignore older entries.
+        feed.last_check_times[chan] = script_start_time
 
     while True:
         current_time = time.time()
@@ -76,30 +77,27 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             published_time = time.mktime(entry.published_parsed)
                         elif entry.get("updated_parsed"):
                             published_time = time.mktime(entry.updated_parsed)
-                        
-                        # For non-Discord channels, only process entries published after the last check.
-                        if published_time is not None and not chan.isdigit() and published_time <= last_check:
+                        # For non-Discord channels, if published time is available and older than when the bot started, skip.
+                        if published_time is not None and published_time < script_start_time and not chan.isdigit():
                             logging.info(f"Skipping old entry from feed '{feed_name}' (published at {datetime.datetime.fromtimestamp(published_time)}).")
                             continue
-
                         title = entry.title.strip() if entry.get("title") else "No Title"
                         link = entry.link.strip() if entry.get("link") else ""
                         if link and link not in feed.last_feed_links:
-                            # Send messages based on integration type.
-                            if chan.startswith("!"):  # Matrix channel
+                            # For Matrix channels, send two messages: one with title and one with link.
+                            if chan.startswith("!"):
                                 if matrix_send:
                                     matrix_send(chan, f"{feed_name}: {title}")
                                     matrix_send(chan, f"Link: {link}")
-                            elif chan.startswith("#"):  # IRC channel
+                            elif chan.startswith("#"):
                                 if irc_send:
                                     irc_send(chan, f"New Feed from {feed_name}: {title}")
                                     irc_send(chan, f"Link: {link}")
-                            elif chan.isdigit():  # Discord channel
+                            elif chan.isdigit():
                                 if discord_send:
                                     discord_send(chan, f"New Feed from {feed_name}: {title}")
                                     discord_send(chan, f"Link: {link}")
                             else:
-                                # Fallback: send via all available integrations.
                                 if irc_send:
                                     irc_send(chan, f"New Feed from {feed_name}: {title}")
                                 if matrix_send:
