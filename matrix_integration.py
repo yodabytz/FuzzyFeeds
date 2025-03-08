@@ -58,7 +58,7 @@ matrix_dm_rooms = {}  # Cache mapping Matrix user IDs to DM room IDs
 async def update_direct_messages(room_id, user):
     """
     Update the bot's m.direct account data so that the given room_id is marked
-    as a direct message for the specified user.
+    as a DM for the specified user.
     """
     try:
         current = await matrix_bot_instance.client.get_account_data("m.direct")
@@ -79,11 +79,24 @@ async def update_direct_messages(room_id, user):
 async def get_dm_room(user):
     """
     Get or create a direct-message room with the specified Matrix user.
-    The room is updated as a direct message in the bot's account data.
+    First check the m.direct account data; if a room already exists, return it.
+    Otherwise, create a new DM room and update the account data.
     """
     global matrix_dm_rooms
     if user in matrix_dm_rooms:
         return matrix_dm_rooms[user]
+    try:
+        dm_data = await matrix_bot_instance.client.get_account_data("m.direct")
+        if dm_data and hasattr(dm_data, "content"):
+            content = dm_data.content
+            if user in content and content[user]:
+                room_id = content[user][0]
+                matrix_dm_rooms[user] = room_id
+                logging.info(f"Found existing DM room for {user}: {room_id}")
+                return room_id
+    except Exception as e:
+        logging.error(f"Error retrieving m.direct for DM: {e}")
+    
     try:
         response = await matrix_bot_instance.client.create_room(
             invite=[user],
@@ -91,11 +104,11 @@ async def get_dm_room(user):
             preset="trusted_private_chat"
         )
         if hasattr(response, "room_id"):
-            matrix_dm_rooms[user] = response.room_id
-            logging.info(f"Created DM room for {user}: {response.room_id}")
-            # Update account data to mark this room as a DM for the user.
-            await update_direct_messages(response.room_id, user)
-            return response.room_id
+            room_id = response.room_id
+            matrix_dm_rooms[user] = room_id
+            logging.info(f"Created DM room for {user}: {room_id}")
+            await update_direct_messages(room_id, user)
+            return room_id
         else:
             logging.error(f"Failed to create DM room for {user}: {response}")
             return None
@@ -164,7 +177,6 @@ class MatrixBot:
 
     async def join_rooms(self):
         global matrix_room_names
-        # Load matrix channels from channels.json.
         channels_data = load_channels()
         matrix_channels = channels_data.get("matrix_channels", [])
         for room in matrix_channels:
@@ -297,7 +309,6 @@ class MatrixBot:
             await self.process_command(room, event.body, event.sender)
 
     async def send_message(self, room_id, message):
-        # For Matrix channels, we want the message formatted with title then link.
         link = None
         for line in message.splitlines():
             if line.startswith("Link:"):
@@ -362,10 +373,9 @@ def start_matrix_bot():
     matrix_channels = channels_data.get("matrix_channels", [])
     bot_instance = MatrixBot(matrix_homeserver, matrix_user, matrix_password)
     matrix_bot_instance = bot_instance
-    # Pre-load feeds for Matrix channels: ensure feed.channel_feeds has keys for each matrix channel.
     for room in matrix_channels:
         if room not in feed.channel_feeds:
-            feed.channel_feeds[room] = {}  # Start with empty feeds
+            feed.channel_feeds[room] = {}
     try:
         loop.run_until_complete(bot_instance.run())
     except Exception as e:
