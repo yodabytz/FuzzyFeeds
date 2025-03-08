@@ -248,10 +248,14 @@ class MatrixBot:
             return
 
         else:
+            # For non-special commands, define our callbacks.
             def matrix_send(target, msg):
                 asyncio.create_task(self.send_message(target, msg))
+            # NEW: Instead of sending private messages to the current room,
+            # use our DM function so the reply goes to the sender's DM room.
             def matrix_send_private(user_, msg):
-                asyncio.create_task(self.send_message(room_key, msg))
+                from matrix_integration import send_matrix_dm
+                send_matrix_dm(sender, msg)
             def matrix_send_multiline(target, msg):
                 asyncio.create_task(self.send_message(target, msg))
             is_op_flag = (get_localpart(sender).lower() in ([a.lower() for a in admins] + [config_admin.lower()]))
