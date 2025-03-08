@@ -24,6 +24,7 @@ logging.basicConfig(level=logging.INFO)
 
 GRACE_PERIOD = 5
 POSTED_FILE = "matrix_posted.json"
+TOKEN_FILE = "matrix_token.txt"  # New: file to store the access token
 
 # Global instance and event loop for Matrix integration.
 matrix_bot_instance = None
@@ -52,7 +53,28 @@ def save_posted_articles(posted_dict):
 
 matrix_room_names = {}
 
-# --- New: Matrix DM Cache and Functions ---
+def match_feed(feed_dict, pattern):
+    if "*" in pattern or "?" in pattern:
+        matches = [name for name in feed_dict.keys() if fnmatch.fnmatch(name, pattern)]
+        return matches[0] if len(matches) == 1 else (matches if matches else None)
+    return pattern if pattern in feed_dict else None
+
+def get_feeds_for_room(room):
+    feeds = feed.channel_feeds.get(room)
+    if feeds is not None:
+        return feeds
+    norm = room.lstrip("#!").lower()
+    for key, val in feed.channel_feeds.items():
+        if key.lstrip("#!").lower() == norm:
+            return val
+    return {}
+
+def get_localpart(matrix_id):
+    if matrix_id.startswith("@"):
+        return matrix_id.split(":", 1)[0].lstrip("@")
+    return matrix_id
+
+# --- Matrix DM Helper Functions ---
 matrix_dm_rooms = {}  # Cache mapping Matrix user IDs to DM room IDs
 
 async def update_direct_messages(room_id, user):
@@ -80,7 +102,8 @@ async def get_dm_room(user):
     """
     Get or create a direct-message room with the specified Matrix user.
     First check the m.direct account data; if a room already exists, return it.
-    Otherwise, create a new DM room and update the account data.
+    Otherwise, create a new DM room, enable encryption, update the account data,
+    and return the new room ID.
     """
     global matrix_dm_rooms
     if user in matrix_dm_rooms:
@@ -103,10 +126,18 @@ async def get_dm_room(user):
             is_direct=True,
             preset="trusted_private_chat"
         )
-        if hasattr(response, "room_id"):
-            room_id = response.room_id
+        # Try both attribute and dict lookup for room_id
+        room_id = getattr(response, "room_id", None)
+        if not room_id and isinstance(response, dict):
+            room_id = response.get("room_id", None)
+        if room_id and room_id.startswith("!"):
             matrix_dm_rooms[user] = room_id
             logging.info(f"Created DM room for {user}: {room_id}")
+            try:
+                await matrix_bot_instance.client.room_set_encryption(room_id, algorithm="m.megolm.v1.aes-sha2")
+                logging.info(f"Enabled encryption in DM room {room_id}")
+            except Exception as e:
+                logging.error(f"Failed to enable encryption in DM room {room_id}: {e}")
             await update_direct_messages(room_id, user)
             return room_id
         else:
@@ -135,28 +166,7 @@ def send_matrix_dm(user, message):
     matrix_event_loop.call_soon_threadsafe(
         lambda: asyncio.ensure_future(send_matrix_dm_async(user, message), loop=matrix_event_loop)
     )
-# --- End Matrix DM Functions ---
-
-def match_feed(feed_dict, pattern):
-    if "*" in pattern or "?" in pattern:
-        matches = [name for name in feed_dict.keys() if fnmatch.fnmatch(name, pattern)]
-        return matches[0] if len(matches) == 1 else (matches if matches else None)
-    return pattern if pattern in feed_dict else None
-
-def get_feeds_for_room(room):
-    feeds = feed.channel_feeds.get(room)
-    if feeds is not None:
-        return feeds
-    norm = room.lstrip("#!").lower()
-    for key, val in feed.channel_feeds.items():
-        if key.lstrip("#!").lower() == norm:
-            return val
-    return {}
-
-def get_localpart(matrix_id):
-    if matrix_id.startswith("@"):
-        return matrix_id.split(":", 1)[0].lstrip("@")
-    return matrix_id
+# --- End Matrix DM Helper Functions ---
 
 class MatrixBot:
     def __init__(self, homeserver, user, password):
@@ -168,12 +178,32 @@ class MatrixBot:
         self.client.add_event_callback(self.message_callback, RoomMessageText)
 
     async def login(self):
-        response = await self.client.login(self.password, device_name="FuzzyFeeds Bot")
-        if hasattr(response, "access_token") and response.access_token:
-            logging.info("Matrix login successful")
-        else:
-            logging.error("Matrix login failed: %s", response)
-            raise Exception("Matrix login failed")
+        # New login logic: try to load token from TOKEN_FILE first.
+        token = None
+        if os.path.exists(TOKEN_FILE):
+            try:
+                with open(TOKEN_FILE, "r") as f:
+                    token = f.read().strip()
+                if token:
+                    self.client.access_token = token
+                    logging.info("Loaded Matrix access token from file.")
+                    # Optionally, you might want to call a sync here to ensure token validity.
+            except Exception as e:
+                logging.error(f"Error reading token file: {e}")
+        if not token:
+            response = await self.client.login(self.password, device_name="FuzzyFeeds Bot")
+            if hasattr(response, "access_token") and response.access_token:
+                logging.info("Matrix login successful")
+                self.client.access_token = response.access_token
+                try:
+                    with open(TOKEN_FILE, "w") as f:
+                        f.write(response.access_token)
+                    logging.info("Saved Matrix access token to file.")
+                except Exception as e:
+                    logging.error(f"Error saving token file: {e}")
+            else:
+                logging.error("Matrix login failed: %s", response)
+                raise Exception("Matrix login failed")
 
     async def join_rooms(self):
         global matrix_room_names
@@ -287,8 +317,7 @@ class MatrixBot:
             # For non-special commands, use DM for private responses.
             def matrix_send(target, msg):
                 asyncio.create_task(self.send_message(target, msg))
-            # Instead of sending private messages to the current room,
-            # send them as direct messages using our DM function.
+            # NEW: Instead of replying in the public room, send private response via DM.
             def matrix_send_private(user_, msg):
                 from matrix_integration import send_matrix_dm
                 send_matrix_dm(sender, msg)
@@ -375,7 +404,7 @@ def start_matrix_bot():
     matrix_bot_instance = bot_instance
     for room in matrix_channels:
         if room not in feed.channel_feeds:
-            feed.channel_feeds[room] = {}
+            feed.channel_feeds[room] = {}  # Start with empty feeds
     try:
         loop.run_until_complete(bot_instance.run())
     except Exception as e:
