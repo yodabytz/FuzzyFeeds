@@ -118,7 +118,7 @@ def start_centralized_polling():
         except Exception as e:
             logging.error(f"Error sending Discord message: {e}")
 
-    # New private_send callback: if the user string starts with '@', assume it's a Matrix user and DM via Matrix; otherwise use IRC.
+    # Private send: if user starts with '@', assume it's a Matrix user and DM via Matrix; otherwise use IRC.
     def private_send(user, message):
         if user.startswith("@"):
             send_matrix_dm(user, message)
