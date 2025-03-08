@@ -6,7 +6,7 @@ import asyncio
 from flask import Flask
 
 from irc import connect_and_register, send_message, send_private_message, send_multiline_message, set_irc_client
-from matrix_integration import start_matrix_bot, disable_feed_loop as disable_matrix_feed_loop, send_matrix_dm
+from matrix_integration import start_matrix_bot, disable_feed_loop as disable_matrix_feed_loop
 from discord_integration import bot, run_discord_bot, disable_feed_loop as disable_discord_feed_loop
 from dashboard import app  # Flask app from dashboard.py
 from config import enable_discord, admin, ops, admins, dashboard_port
@@ -106,7 +106,7 @@ def start_centralized_polling():
 
     def matrix_send(room, message):
         try:
-            from matrix_integration import send_matrix_message
+            from matrix_integration import send_message as send_matrix_message
             asyncio.run_coroutine_threadsafe(send_matrix_message(room, message), asyncio.get_event_loop())
         except Exception as e:
             logging.error(f"Error sending Matrix message: {e}")
@@ -118,19 +118,8 @@ def start_centralized_polling():
         except Exception as e:
             logging.error(f"Error sending Discord message: {e}")
 
-    # Private send: if user starts with '@', assume it's a Matrix user and DM via Matrix; otherwise use IRC.
-    def private_send(user, message):
-        if user.startswith("@"):
-            send_matrix_dm(user, message)
-        else:
-            global irc_client
-            if irc_client:
-                send_private_message(irc_client, user, message)
-            else:
-                logging.error("IRC client not connected; cannot send private message.")
-
     threading.Thread(target=lambda: centralized_polling.start_polling(
-        irc_send, matrix_send, discord_send, private_send, poll_interval=300
+        irc_send, matrix_send, discord_send, poll_interval=300
     ), daemon=True).start()
 
 if __name__ == "__main__":
