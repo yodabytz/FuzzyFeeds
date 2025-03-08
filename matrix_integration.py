@@ -52,6 +52,54 @@ def save_posted_articles(posted_dict):
 
 matrix_room_names = {}
 
+# --- New: Matrix DM Cache and Functions ---
+matrix_dm_rooms = {}  # Cache mapping Matrix user IDs to DM room IDs
+
+async def get_dm_room(user):
+    """
+    Get or create a direct-message room with the specified Matrix user.
+    """
+    global matrix_dm_rooms
+    if user in matrix_dm_rooms:
+        return matrix_dm_rooms[user]
+    try:
+        response = await matrix_bot_instance.client.create_room(
+            invite=[user],
+            is_direct=True,
+            preset="trusted_private_chat"
+        )
+        if hasattr(response, "room_id"):
+            matrix_dm_rooms[user] = response.room_id
+            logging.info(f"Created DM room for {user}: {response.room_id}")
+            return response.room_id
+        else:
+            logging.error(f"Failed to create DM room for {user}: {response}")
+            return None
+    except Exception as e:
+        logging.error(f"Exception creating DM room for {user}: {e}")
+        return None
+
+async def send_matrix_dm_async(user, message):
+    """
+    Asynchronously send a direct message to a Matrix user.
+    """
+    room_id = await get_dm_room(user)
+    if room_id:
+        await matrix_bot_instance.send_message(room_id, message)
+
+def send_matrix_dm(user, message):
+    """
+    Synchronously schedule sending a DM to a Matrix user.
+    """
+    global matrix_bot_instance, matrix_event_loop
+    if matrix_bot_instance is None or matrix_event_loop is None:
+        logging.error("Matrix bot not properly initialized for DM sending.")
+        return
+    matrix_event_loop.call_soon_threadsafe(
+        lambda: asyncio.ensure_future(send_matrix_dm_async(user, message), loop=matrix_event_loop)
+    )
+# --- End Matrix DM Functions ---
+
 def match_feed(feed_dict, pattern):
     if "*" in pattern or "?" in pattern:
         matches = [name for name in feed_dict.keys() if fnmatch.fnmatch(name, pattern)]
@@ -274,6 +322,7 @@ def send_matrix_message(room, message):
         lambda: asyncio.ensure_future(matrix_bot_instance.send_message(room, message), loop=matrix_event_loop)
     )
 
+# Export send_message as send_matrix_message for legacy compatibility.
 send_message = send_matrix_message
 
 def start_matrix_bot():
