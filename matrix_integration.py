@@ -55,9 +55,31 @@ matrix_room_names = {}
 # --- New: Matrix DM Cache and Functions ---
 matrix_dm_rooms = {}  # Cache mapping Matrix user IDs to DM room IDs
 
+async def update_direct_messages(room_id, user):
+    """
+    Update the bot's m.direct account data so that the given room_id is marked
+    as a direct message for the specified user.
+    """
+    try:
+        current = await matrix_bot_instance.client.get_account_data("m.direct")
+        dm_content = current.content if current and hasattr(current, "content") else {}
+    except Exception as e:
+        logging.error(f"Error fetching m.direct account data: {e}")
+        dm_content = {}
+    if user not in dm_content:
+        dm_content[user] = []
+    if room_id not in dm_content[user]:
+        dm_content[user].append(room_id)
+        try:
+            await matrix_bot_instance.client.set_account_data("m.direct", dm_content)
+            logging.info(f"Updated m.direct for {user} with room {room_id}")
+        except Exception as e:
+            logging.error(f"Error setting m.direct account data: {e}")
+
 async def get_dm_room(user):
     """
     Get or create a direct-message room with the specified Matrix user.
+    The room is updated as a direct message in the bot's account data.
     """
     global matrix_dm_rooms
     if user in matrix_dm_rooms:
@@ -71,6 +93,8 @@ async def get_dm_room(user):
         if hasattr(response, "room_id"):
             matrix_dm_rooms[user] = response.room_id
             logging.info(f"Created DM room for {user}: {response.room_id}")
+            # Update account data to mark this room as a DM for the user.
+            await update_direct_messages(response.room_id, user)
             return response.room_id
         else:
             logging.error(f"Failed to create DM room for {user}: {response}")
@@ -248,11 +272,11 @@ class MatrixBot:
             return
 
         else:
-            # For non-special commands, define our callbacks.
+            # For non-special commands, use DM for private responses.
             def matrix_send(target, msg):
                 asyncio.create_task(self.send_message(target, msg))
-            # NEW: Instead of sending private messages to the current room,
-            # use our DM function so the reply goes to the sender's DM room.
+            # Instead of sending private messages to the current room,
+            # send them as direct messages using our DM function.
             def matrix_send_private(user_, msg):
                 from matrix_integration import send_matrix_dm
                 send_matrix_dm(sender, msg)
@@ -273,9 +297,7 @@ class MatrixBot:
             await self.process_command(room, event.body, event.sender)
 
     async def send_message(self, room_id, message):
-        # For Matrix channels, we want the message to be exactly:
-        # "Feedname: Title goes here" on one line, then the link on the next.
-        # We check if the message contains a line starting with "Link:".
+        # For Matrix channels, we want the message formatted with title then link.
         link = None
         for line in message.splitlines():
             if line.startswith("Link:"):
