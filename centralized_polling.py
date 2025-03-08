@@ -19,13 +19,14 @@ Usage:
 import time
 import logging
 import feedparser
+import datetime
 
 import feed
 from config import default_interval
 
 logging.basicConfig(level=logging.INFO)
 
-# Global variable: only articles published after this time will be posted.
+# Global variable: used for initial setup of last check times.
 script_start_time = time.time()
 
 def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
@@ -34,16 +35,14 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
     # Ensure global last_feed_links is set.
     if not hasattr(feed, 'last_feed_links') or feed.last_feed_links is None:
         feed.last_feed_links = set()
-    current_time = time.time()
-    
-    # Initialize last_check_times for channels not yet set.
+    # Initialize last_check_times for channels that don't yet have one.
     if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
         feed.last_check_times = {}
     for chan in feed.channel_feeds.keys():
         if feed.channel_feeds[chan] is None:
             continue
-        # Set last_check_time to script_start_time so that we ignore older entries.
-        feed.last_check_times[chan] = script_start_time
+        # For the very first poll, set last_check_time to the script start time.
+        feed.last_check_times.setdefault(chan, script_start_time)
 
     while True:
         current_time = time.time()
@@ -52,11 +51,12 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
 
         for chan in channels_to_check:
             feeds_to_check = feed.channel_feeds.get(chan)
-            if feeds_to_check is None:
+            if not feeds_to_check:
                 logging.warning(f"No feed dictionary found for channel {chan}; skipping.")
                 continue
             interval = feed.channel_intervals.get(chan, default_interval)
             last_check = feed.last_check_times.get(chan, script_start_time)
+            logging.info(f"Channel {chan}: Last check at {datetime.datetime.fromtimestamp(last_check)}, current time {datetime.datetime.fromtimestamp(current_time)}, interval {interval}s")
             if current_time - last_check >= interval:
                 new_feed_count = 0
                 for feed_name, feed_url in feeds_to_check.items():
@@ -76,23 +76,22 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             published_time = time.mktime(entry.published_parsed)
                         elif entry.get("updated_parsed"):
                             published_time = time.mktime(entry.updated_parsed)
-                        # If published time is available and older than when the bot started, skip.
-                        if published_time is not None and published_time < script_start_time:
-                            logging.info(f"Skipping old entry from feed '{feed_name}' (published at {datetime.datetime.fromtimestamp(published_time)}).")
+                        # For non-Discord channels, only process entries published after the last check.
+                        if published_time is not None and not chan.isdigit() and published_time <= last_check:
+                            logging.info(f"Skipping entry from feed '{feed_name}' published at {datetime.datetime.fromtimestamp(published_time)} (last check was {datetime.datetime.fromtimestamp(last_check)}).")
                             continue
                         title = entry.title.strip() if entry.get("title") else "No Title"
                         link = entry.link.strip() if entry.get("link") else ""
                         if link and link not in feed.last_feed_links:
-                            # For Matrix channels, send two messages: one with title and one with link.
-                            if chan.startswith("!"):
+                            if chan.startswith("!"):  # Matrix channel.
                                 if matrix_send:
                                     matrix_send(chan, f"{feed_name}: {title}")
                                     matrix_send(chan, f"Link: {link}")
-                            elif chan.startswith("#"):
+                            elif chan.startswith("#"):  # IRC channel.
                                 if irc_send:
                                     irc_send(chan, f"New Feed from {feed_name}: {title}")
                                     irc_send(chan, f"Link: {link}")
-                            elif chan.isdigit():
+                            elif chan.isdigit():  # Discord channel.
                                 if discord_send:
                                     discord_send(chan, f"New Feed from {feed_name}: {title}")
                                     discord_send(chan, f"Link: {link}")
@@ -123,12 +122,7 @@ if __name__ == "__main__":
     def test_irc_send(channel, message):
         print(f"[IRC] Channel {channel}: {message}")
     def test_matrix_send(room, message):
-        try:
-            from matrix_integration import send_message as send_matrix_message
-            send_matrix_message(room, message)
-        except Exception as e:
-            logging.error(f"Error sending Matrix message: {e}")
+        print(f"[Matrix] Room {room}: {message}")
     def test_discord_send(channel, message):
         print(f"[Discord] Channel {channel}: {message}")
-    start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=60)
-
+    start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=300)
