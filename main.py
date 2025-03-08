@@ -118,8 +118,16 @@ def start_centralized_polling():
         except Exception as e:
             logging.error(f"Error sending Discord message: {e}")
 
+    # New callback for private messages (used for subscriptions)
+    def private_send(user, message):
+        global irc_client
+        if irc_client:
+            send_private_message(irc_client, user, message)
+        else:
+            logging.error("IRC client not connected; cannot send private message.")
+
     threading.Thread(target=lambda: centralized_polling.start_polling(
-        irc_send, matrix_send, discord_send, poll_interval=300
+        irc_send, matrix_send, discord_send, private_send, poll_interval=300
     ), daemon=True).start()
 
 if __name__ == "__main__":
@@ -142,4 +150,3 @@ if __name__ == "__main__":
 
     while True:
         time.sleep(1)
-
