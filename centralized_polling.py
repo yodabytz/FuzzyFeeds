@@ -32,6 +32,7 @@ script_start_time = time.time()
 def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
     logging.info("Centralized polling started.")
     feed.load_feeds()
+    logging.info(f"Loaded channels: {list(feed.channel_feeds.keys())}")
     # Ensure global last_feed_links is set.
     if not hasattr(feed, 'last_feed_links') or feed.last_feed_links is None:
         feed.last_feed_links = set()
@@ -46,9 +47,9 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
 
     while True:
         current_time = time.time()
+        logging.info(f"Polling loop iteration at {datetime.datetime.fromtimestamp(current_time)}")
         channels_to_check = list(feed.channel_feeds.keys())
         logging.info(f"Checking {len(channels_to_check)} channels for new feeds...")
-
         for chan in channels_to_check:
             feeds_to_check = feed.channel_feeds.get(chan)
             if not feeds_to_check:
