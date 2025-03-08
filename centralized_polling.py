@@ -6,14 +6,12 @@ This module implements centralized polling for RSS/Atom feeds for all integratio
 IRC, Matrix, and Discord. It uses the feed data from feed.py and, at configurable
 intervals, checks each feed for new entries. When a new entry is found, it uses the
 provided callback functions to send messages to the appropriate integration channel/room.
-It now also polls user subscriptions and sends updates via a private message.
 
 Usage:
-    Import and start the polling loop by passing in four callback functions:
+    Import and start the polling loop by passing in three callback functions:
       - irc_send(channel, message): for sending messages via IRC.
       - matrix_send(room, message): for sending messages to a Matrix room.
       - discord_send(channel, message): for sending messages to a Discord channel.
-      - private_send(user, message): for sending private messages (for subscriptions).
       
     Optionally, set the poll_interval (default 300 seconds) between polling rounds.
 """
@@ -31,7 +29,7 @@ logging.basicConfig(level=logging.INFO)
 # Global variable: only articles published after this time will be posted.
 script_start_time = time.time()
 
-def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interval=300):
+def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
     logging.info("Centralized polling started.")
     feed.load_feeds()
     # Ensure global last_feed_links is set.
@@ -53,7 +51,6 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
         channels_to_check = list(feed.channel_feeds.keys())
         logging.info(f"Checking {len(channels_to_check)} channels for new feeds...")
 
-        # Process channel feeds
         for chan in channels_to_check:
             feeds_to_check = feed.channel_feeds.get(chan)
             if feeds_to_check is None:
@@ -80,13 +77,14 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
                             published_time = time.mktime(entry.published_parsed)
                         elif entry.get("updated_parsed"):
                             published_time = time.mktime(entry.updated_parsed)
-                        # Skip if entry is older than when the bot started.
-                        if published_time is not None and published_time < script_start_time:
-                            logging.info(f"Skipping old entry from feed '{feed_name}'.")
+                        # For non-Discord channels, skip old entries.
+                        if published_time is not None and published_time < script_start_time and not chan.isdigit():
+                            logging.info(f"Skipping old entry from feed '{feed_name}' (published at {datetime.datetime.fromtimestamp(published_time)}).")
                             continue
                         title = entry.title.strip() if entry.get("title") else "No Title"
                         link = entry.link.strip() if entry.get("link") else ""
                         if link and link not in feed.last_feed_links:
+                            # For Matrix channels, send two messages: one with title and one with link.
                             if chan.startswith("!"):
                                 if matrix_send:
                                     matrix_send(chan, f"{feed_name}: {title}")
@@ -119,60 +117,14 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
                 else:
                     logging.info(f"No new feeds found in {chan}.")
                 feed.last_check_times[chan] = current_time
-
-        # Process user subscriptions
-        for user, subs in feed.subscriptions.items():
-            new_sub_count = 0
-            for sub_feed_name, sub_feed_url in subs.items():
-                try:
-                    parsed_feed = feedparser.parse(sub_feed_url)
-                    if parsed_feed.bozo:
-                        logging.warning(f"Error parsing subscribed feed '{sub_feed_name}' ({sub_feed_url}): {parsed_feed.bozo_exception}")
-                        continue
-                    entries = parsed_feed.get("entries")
-                    if not entries:
-                        logging.info(f"No entries in subscribed feed '{sub_feed_name}' ({sub_feed_url}).")
-                        continue
-                    entry = entries[0]
-                    published_time = None
-                    if entry.get("published_parsed"):
-                        published_time = time.mktime(entry.published_parsed)
-                    elif entry.get("updated_parsed"):
-                        published_time = time.mktime(entry.updated_parsed)
-                    if published_time is not None and published_time < script_start_time:
-                        logging.info(f"Skipping old subscription entry from '{sub_feed_name}'.")
-                        continue
-                    title = entry.title.strip() if entry.get("title") else "No Title"
-                    link = entry.link.strip() if entry.get("link") else ""
-                    if link and link not in feed.last_feed_links:
-                        private_send(user, f"Latest from your subscription '{sub_feed_name}': {title}")
-                        private_send(user, f"Link: {link}")
-                        new_sub_count += 1
-                        feed.last_feed_links.add(link)
-                        if hasattr(feed, "save_last_feed_link"):
-                            feed.save_last_feed_link(link)
-                    else:
-                        logging.info(f"Subscription feed link already posted for {user}: {link}")
-                except Exception as e:
-                    logging.error(f"Error checking subscribed feed '{sub_feed_name}' at {sub_feed_url}: {e}")
-            if new_sub_count > 0:
-                logging.info(f"Posted {new_sub_count} new subscription feeds to {user}.")
-
         logging.info(f"Finished checking feeds. Next check in {poll_interval} seconds.")
         time.sleep(poll_interval)
 
 if __name__ == "__main__":
-    # Test functions for debugging
     def test_irc_send(channel, message):
         print(f"[IRC] Channel {channel}: {message}")
     def test_matrix_send(room, message):
-        try:
-            from matrix_integration import send_message as send_matrix_message
-            send_matrix_message(room, message)
-        except Exception as e:
-            logging.error(f"Error sending Matrix message: {e}")
+        print(f"[Matrix] Room {room}: {message}")
     def test_discord_send(channel, message):
         print(f"[Discord] Channel {channel}: {message}")
-    def test_private_send(user, message):
-        print(f"[Private] To {user}: {message}")
-    start_polling(test_irc_send, test_matrix_send, test_discord_send, test_private_send, poll_interval=60)
+    start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=60)
