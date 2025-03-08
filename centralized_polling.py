@@ -19,7 +19,6 @@ Usage:
 import time
 import logging
 import feedparser
-import datetime
 
 import feed
 from config import default_interval
@@ -77,9 +76,9 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             published_time = time.mktime(entry.published_parsed)
                         elif entry.get("updated_parsed"):
                             published_time = time.mktime(entry.updated_parsed)
-                        # For non-Discord channels, process only entries published after the last check.
-                        if published_time is not None and not chan.isdigit() and published_time <= last_check:
-                            logging.info(f"Skipping entry from feed '{feed_name}' published at {datetime.datetime.fromtimestamp(published_time)} because it is not newer than last check ({datetime.datetime.fromtimestamp(last_check)}).")
+                        # If published time is available and older than when the bot started, skip.
+                        if published_time is not None and published_time < script_start_time:
+                            logging.info(f"Skipping old entry from feed '{feed_name}' (published at {datetime.datetime.fromtimestamp(published_time)}).")
                             continue
                         title = entry.title.strip() if entry.get("title") else "No Title"
                         link = entry.link.strip() if entry.get("link") else ""
@@ -124,7 +123,12 @@ if __name__ == "__main__":
     def test_irc_send(channel, message):
         print(f"[IRC] Channel {channel}: {message}")
     def test_matrix_send(room, message):
-        print(f"[Matrix] Room {room}: {message}")
+        try:
+            from matrix_integration import send_message as send_matrix_message
+            send_matrix_message(room, message)
+        except Exception as e:
+            logging.error(f"Error sending Matrix message: {e}")
     def test_discord_send(channel, message):
         print(f"[Discord] Channel {channel}: {message}")
-    start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=300)
+    start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=60)
+
