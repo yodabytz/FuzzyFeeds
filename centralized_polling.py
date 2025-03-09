@@ -106,28 +106,30 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             logging.info(f"Channel {chan} already has link: {link}")
                             continue
 
-                        # Otherwise, post it and mark as posted
+                        # Otherwise, post it in a single multi-line message, then mark as posted
                         if link:
-                            if chan.startswith("!"):  # Matrix
-                                if matrix_send:
-                                    matrix_send(chan, f"{feed_name}: {title}")
-                                    matrix_send(chan, f"Link: {link}")
-                            elif chan.startswith("#"):  # IRC
+                            message_text = f"{feed_name}: {title}\nLink: {link}"
+
+                            # IRC channel
+                            if chan.startswith("#"):
                                 if irc_send:
-                                    irc_send(chan, f"New Feed from {feed_name}: {title}")
-                                    irc_send(chan, f"Link: {link}")
-                            elif chan.isdigit():        # Discord
+                                    irc_send(chan, message_text)
+                            # Matrix room
+                            elif chan.startswith("!"):
+                                if matrix_send:
+                                    matrix_send(chan, message_text)
+                            # Discord channel (channel ID = digits)
+                            elif chan.isdigit():
                                 if discord_send:
-                                    discord_send(chan, f"New Feed from {feed_name}: {title}")
-                                    discord_send(chan, f"Link: {link}")
+                                    discord_send(chan, message_text)
                             else:
-                                # fallback/unknown
+                                # fallback or unknown channel type
                                 if irc_send:
-                                    irc_send(chan, f"New Feed from {feed_name}: {title}")
+                                    irc_send(chan, message_text)
                                 if matrix_send:
-                                    matrix_send(chan, f"{feed_name}: {title}\nLink: {link}")
+                                    matrix_send(chan, message_text)
                                 if discord_send:
-                                    discord_send(chan, f"New Feed from {feed_name}: {title}")
+                                    discord_send(chan, message_text)
 
                             feed.mark_link_posted(chan, link)
                             new_feed_count += 1
