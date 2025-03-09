@@ -17,6 +17,8 @@ FuzzyFeeds is an IRC bot that aggregates RSS and Atom feeds in real-time. It all
 - **Discord Integration:** Posts new feeds to Discord channels and allows users to interact with feed commands.
 - **Web Dashboard:** Operates on port 8081 (or your chosen port) and showcases a sleek stats page.
 
+<img src="ttps://raw.githubusercontent.com/yodabytz/FuzzyFeeds/refs/heads/main/dashboard-screenshot.png" alt="FuzzyFeeds" width="600">
+
 ## Installation
 
 1. **Clone the Repository:**
