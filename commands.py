@@ -348,6 +348,55 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         except Exception as e:
             send_message_fn(response_target, f"Error joining channel: {e}")
 
+    # ------------------- PART COMMAND -------------------
+    elif lower_message.startswith("!part"):
+        if user.lower() not in [a.lower() for a in admins]:
+            send_private_message_fn(user, "Only a bot admin can use !part.")
+            return
+        parts = message.split()
+        if len(parts) < 2:
+            send_message_fn(response_target, "Usage: !part <#channel>")
+            return
+        part_channel = parts[1].strip()
+        if not part_channel.startswith("#"):
+            send_message_fn(response_target, "Error: Channel must start with '#'")
+            return
+        try:
+            # Remove channel from channels.json
+            channels_data = channels.load_channels()
+            if part_channel in channels_data["irc_channels"]:
+                channels_data["irc_channels"].remove(part_channel)
+            channels.save_channels()
+            
+            # Remove feeds for that channel
+            if part_channel in feed.channel_feeds:
+                del feed.channel_feeds[part_channel]
+                feed.save_feeds()
+            
+            # Remove admin mapping for that channel from admin_file
+            import os
+            if os.path.exists(admin_file):
+                with open(admin_file, "r") as f:
+                    admin_mapping = json.load(f)
+            else:
+                admin_mapping = {}
+            if part_channel in admin_mapping:
+                del admin_mapping[part_channel]
+            with open(admin_file, "w") as f:
+                json.dump(admin_mapping, f, indent=4)
+            
+            send_message_fn(response_target, f"Leaving channel: {part_channel}")
+            
+            # Attempt to send a raw PART command via the IRC client
+            try:
+                from irc import current_irc_client
+                if current_irc_client:
+                    current_irc_client.send(f"PART {part_channel}\r\n".encode("utf-8"))
+            except Exception as e:
+                logging.error(f"Error sending PART command: {e}")
+        except Exception as e:
+            send_message_fn(response_target, f"Error parting channel: {e}")
+
     # ------------------- SUBSCRIPTIONS -------------------
 
     elif lower_message.startswith("!addsub"):
