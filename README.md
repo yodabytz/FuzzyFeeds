@@ -119,3 +119,6 @@ Contributions are welcome! Please fork the repository and submit pull requests. 
 
 ## License
 This project is licensed under the MIT License.
+
+##To do
+1. add the !addnetwork command to have the bot connect to another IRC network
