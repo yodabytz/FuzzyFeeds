@@ -14,7 +14,7 @@ try:
 except ImportError:
     matrix_room_names = {}
 
-# For loading aliases (if you already merged matrix_aliases usage)
+# If you have a matrix aliases file, we can load it here.
 from persistence import load_json
 MATRIX_ALIASES_FILE = os.path.join(os.path.dirname(__file__), "matrix_aliases.json")
 
@@ -44,7 +44,7 @@ logging.basicConfig(level=logging.INFO)
 ###############################################################################
 app = Flask(__name__)
 
-# Modified HTML to display user subscription counts
+# Modified HTML to display user subscription counts (no bold around user names).
 DASHBOARD_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="en">
@@ -129,10 +129,10 @@ DASHBOARD_TEMPLATE = r"""
                   <div class="card-header bg-info text-white">User Subscriptions</div>
                   <div class="card-body">
                       <h5 class="card-title" id="total_subscriptions">{{ total_subscriptions }} total</h5>
-                      <!-- Show each user and how many feeds they have -->
+                      <!-- Show each user and how many feeds they have (no bold) -->
                       <p class="card-text" style="font-size: 0.9em;">
                         {% for username, subs_dict in subscriptions.items() %}
-                          <strong>{{ username }}</strong>: {{ subs_dict|length }}<br/>
+                          {{ username }}: {{ subs_dict|length }}<br/>
                         {% endfor %}
                       </p>
                   </div>
@@ -313,10 +313,10 @@ DASHBOARD_TEMPLATE = r"""
           document.getElementById("total_subscriptions").innerText = data.total_subscriptions + " total";
           document.getElementById("current_year").innerText = data.current_year;
 
-          // Show each user and how many subs they have
+          // Show each user and how many subs they have (no bold)
           let userSubsHtml = "";
           for (const [username, subsDict] of Object.entries(data.subscriptions)) {
-            userSubsHtml += `<strong>${username}</strong>: ${Object.keys(subsDict).length}<br/>`;
+            userSubsHtml += `${username}: ${Object.keys(subsDict).length}<br/>`;
           }
           // Put it into the card-text area (right after the "X total" text)
           const subsCardText = document.querySelector("#total_subscriptions").parentNode.querySelector(".card-text");
@@ -348,6 +348,7 @@ DASHBOARD_TEMPLATE = r"""
           
           // Feed details
           let feedDetails = data.feed_details;
+          // Sort them for consistent table ordering
           feedDetails.sort((a,b) => {
             function getPriority(c) {
               if (c.startsWith('#')) return 0;
@@ -396,7 +397,7 @@ def index():
     # Make sure feeds/subscriptions are loaded
     feed.load_feeds()
 
-    # If you have matrix alias usage
+    # Load matrix aliases if you have them, otherwise empty
     if os.path.isfile(MATRIX_ALIASES_FILE):
         matrix_aliases = load_json(MATRIX_ALIASES_FILE, default={})
     else:
@@ -434,7 +435,7 @@ def index():
         current_year=current_year,
         matrix_room_names=matrix_room_names,
         matrix_aliases=matrix_aliases,
-        subscriptions=feed.subscriptions,  # <<< pass user subscriptions here
+        subscriptions=feed.subscriptions,  # pass user subscriptions here
         server_start_time=start_time
     )
 
@@ -442,7 +443,6 @@ def index():
 def stats_data():
     feed.load_feeds()
 
-    # If you have matrix alias usage
     if os.path.isfile(MATRIX_ALIASES_FILE):
         matrix_aliases = load_json(MATRIX_ALIASES_FILE, default={})
     else:
