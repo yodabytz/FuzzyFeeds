@@ -45,7 +45,7 @@ channels = load_channels()  # Load dynamically
 # --- Integration Configuration ---
 
 # Dashboard Configuration
-dashboard_port = 8081
+dashboard_port = 1039   #Port translates to FuzzyFeeds :)
 dashboard_username = "admin"
 dashboard_password = "securepassword"
 
