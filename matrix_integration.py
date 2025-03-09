@@ -208,7 +208,8 @@ class MatrixBot:
 
         logging.info(f"Processing command `{cmd}` from `{sender}` in `{room_key}`.")
 
-        # Handle join and part commands as before.
+        # --- Handle Matrix-specific commands ---
+
         if cmd == "!join":
             if get_localpart(sender).lower() not in ([a.lower() for a in admins] + [config_admin.lower()]):
                 await self.send_message(room_key, "Only a bot admin can use !join.")
@@ -252,12 +253,14 @@ class MatrixBot:
             return
 
         elif cmd == "!part":
+            # Matrix-specific !part command
             if get_localpart(sender).lower() not in ([a.lower() for a in admins] + [config_admin.lower()]):
                 await self.send_message(room_key, "Only a bot admin can use !part.")
                 return
             try:
                 response = await self.client.room_leave(room_key)
                 if response:
+                    # Remove room from admin mapping if present
                     if os.path.exists(admin_file):
                         try:
                             with open(admin_file, "r") as f:
@@ -269,7 +272,12 @@ class MatrixBot:
                             del admin_mapping[room_key]
                         with open(admin_file, "w") as f:
                             json.dump(admin_mapping, f, indent=4)
+                    # Also remove any feed data for this room from feed.channel_feeds
+                    if room_key in feed.channel_feeds:
+                        del feed.channel_feeds[room_key]
+                        feed.save_feeds()
                     logging.info(f"Left room {room_key} on admin request by {sender}.")
+                    await self.send_message(room_key, f"Bot has left the room {room_key}.")
                 else:
                     await self.send_message(room_key, "Failed to leave room.")
             except Exception as e:
@@ -301,7 +309,6 @@ class MatrixBot:
             # For all other commands, send responses publicly in the room.
             def matrix_send(target, msg):
                 asyncio.create_task(self.send_message(target, msg))
-            # Even the "private" callback now sends to the public room.
             def matrix_send_private(user_, msg):
                 asyncio.create_task(self.send_message(room_key, msg))
             def matrix_send_multiline(target, msg):
@@ -321,6 +328,7 @@ class MatrixBot:
             await self.process_command(room, event.body, event.sender)
 
     async def send_message(self, room_id, message):
+        # If the message contains a link, check per-room posted_articles to prevent duplicates
         link = None
         for line in message.splitlines():
             if line.startswith("Link:"):
@@ -398,4 +406,3 @@ def disable_feed_loop():
 
 if __name__ == "__main__":
     start_matrix_bot()
-
