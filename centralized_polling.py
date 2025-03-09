@@ -106,14 +106,15 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             logging.info(f"Channel {chan} already has link: {link}")
                             continue
 
-                        # Otherwise, post it in a single multi-line message, then mark as posted
+                        # Otherwise, post it in a multi-line message, then mark as posted
                         if link:
                             message_text = f"{feed_name}: {title}\nLink: {link}"
 
-                            # IRC channel
+                            # IRC channel - send each line separately to ensure the link is displayed
                             if chan.startswith("#"):
                                 if irc_send:
-                                    irc_send(chan, message_text)
+                                    for line in message_text.splitlines():
+                                        irc_send(chan, line)
                             # Matrix room
                             elif chan.startswith("!"):
                                 if matrix_send:
