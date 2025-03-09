@@ -7,13 +7,16 @@ import json
 from collections import deque
 from flask import Flask, jsonify, render_template_string
 
-# If your config references are in config.py, adjust as needed
 from config import start_time, dashboard_port, dashboard_username, dashboard_password
 import feed
 try:
     from matrix_integration import matrix_room_names
 except ImportError:
     matrix_room_names = {}
+
+# For loading aliases (if you already merged matrix_aliases usage)
+from persistence import load_json
+MATRIX_ALIASES_FILE = os.path.join(os.path.dirname(__file__), "matrix_aliases.json")
 
 ###############################################################################
 # Log handler that captures ERROR messages in memory so we can display them.
@@ -41,8 +44,7 @@ logging.basicConfig(level=logging.INFO)
 ###############################################################################
 app = Flask(__name__)
 
-# The entire HTML is embedded here. The only relevant part for the logo is:
-# <img src="/static/images/fuzzyfeeds-logo-sm.png" width="100" height="100" alt="FuzzyFeeds Logo" />
+# Modified HTML to display user subscription counts
 DASHBOARD_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="en">
@@ -127,6 +129,12 @@ DASHBOARD_TEMPLATE = r"""
                   <div class="card-header bg-info text-white">User Subscriptions</div>
                   <div class="card-body">
                       <h5 class="card-title" id="total_subscriptions">{{ total_subscriptions }} total</h5>
+                      <!-- Show each user and how many feeds they have -->
+                      <p class="card-text" style="font-size: 0.9em;">
+                        {% for username, subs_dict in subscriptions.items() %}
+                          <strong>{{ username }}</strong>: {{ subs_dict|length }}<br/>
+                        {% endfor %}
+                      </p>
                   </div>
               </div>
           </div>
@@ -179,7 +187,9 @@ DASHBOARD_TEMPLATE = r"""
                       {% for room, feeds in matrix_rooms.items() %}
                       <tr>
                         <td>
-                          {% if matrix_room_names[room] is defined and matrix_room_names[room] %}
+                          {% if matrix_aliases[room] is defined %}
+                            {{ matrix_aliases[room] }}
+                          {% elif matrix_room_names[room] is defined and matrix_room_names[room] %}
                             {{ matrix_room_names[room] }}
                           {% else %}
                             {{ room }}
@@ -243,7 +253,13 @@ DASHBOARD_TEMPLATE = r"""
                     <tbody id="feed_details_table_body">
                       {% for item in feed_details %}
                       <tr>
-                        <td>{{ item.channel }}</td>
+                        <td>
+                          {% if item.channel.startswith('!') and matrix_aliases[item.channel] is defined %}
+                            {{ matrix_aliases[item.channel] }}
+                          {% else %}
+                            {{ item.channel }}
+                          {% endif %}
+                        </td>
                         <td>{{ item.feed_name }}</td>
                         <td><a href="{{ item.link }}" target="_blank">{{ item.link }}</a></td>
                       </tr>
@@ -297,6 +313,17 @@ DASHBOARD_TEMPLATE = r"""
           document.getElementById("total_subscriptions").innerText = data.total_subscriptions + " total";
           document.getElementById("current_year").innerText = data.current_year;
 
+          // Show each user and how many subs they have
+          let userSubsHtml = "";
+          for (const [username, subsDict] of Object.entries(data.subscriptions)) {
+            userSubsHtml += `<strong>${username}</strong>: ${Object.keys(subsDict).length}<br/>`;
+          }
+          // Put it into the card-text area (right after the "X total" text)
+          const subsCardText = document.querySelector("#total_subscriptions").parentNode.querySelector(".card-text");
+          if (subsCardText) {
+            subsCardText.innerHTML = userSubsHtml;
+          }
+
           // IRC
           let ircTable = "";
           for (const [ch, fs] of Object.entries(data.irc_channels)) {
@@ -307,8 +334,8 @@ DASHBOARD_TEMPLATE = r"""
           // Matrix
           let matrixTable = "";
           for (const [room, fs] of Object.entries(data.matrix_rooms)) {
-            const displayName = data.matrix_room_names[room] || room;
-            matrixTable += `<tr><td>${displayName}</td><td>${Object.keys(fs).length}</td></tr>`;
+            const alias = data.matrix_aliases[room] || data.matrix_room_names[room] || room;
+            matrixTable += `<tr><td>${alias}</td><td>${Object.keys(fs).length}</td></tr>`;
           }
           document.getElementById("matrix_table_body").innerHTML = matrixTable;
 
@@ -339,7 +366,10 @@ DASHBOARD_TEMPLATE = r"""
           });
           let feedsHTML = "";
           for (const item of feedDetails) {
-            feedsHTML += `<tr><td>${item.channel}</td><td>${item.feed_name}</td><td><a href=\"${item.link}\" target=\"_blank\">${item.link}</a></td></tr>`;
+            const alias = item.channel.startsWith('!') && data.matrix_aliases[item.channel]
+                          ? data.matrix_aliases[item.channel]
+                          : item.channel;
+            feedsHTML += `<tr><td>${alias}</td><td>${item.feed_name}</td><td><a href=\"${item.link}\" target=\"_blank\">${item.link}</a></td></tr>`;
           }
           document.getElementById("feed_details_table_body").innerHTML = feedsHTML;
           
@@ -363,7 +393,14 @@ DASHBOARD_TEMPLATE = r"""
 ###############################################################################
 @app.route('/')
 def index():
+    # Make sure feeds/subscriptions are loaded
     feed.load_feeds()
+
+    # If you have matrix alias usage
+    if os.path.isfile(MATRIX_ALIASES_FILE):
+        matrix_aliases = load_json(MATRIX_ALIASES_FILE, default={})
+    else:
+        matrix_aliases = {}
 
     uptime_seconds = int(time.time() - start_time)
     uptime_str = str(datetime.timedelta(seconds=uptime_seconds))
@@ -396,12 +433,20 @@ def index():
         errors=errors_str,
         current_year=current_year,
         matrix_room_names=matrix_room_names,
+        matrix_aliases=matrix_aliases,
+        subscriptions=feed.subscriptions,  # <<< pass user subscriptions here
         server_start_time=start_time
     )
 
 @app.route('/stats_data')
 def stats_data():
     feed.load_feeds()
+
+    # If you have matrix alias usage
+    if os.path.isfile(MATRIX_ALIASES_FILE):
+        matrix_aliases = load_json(MATRIX_ALIASES_FILE, default={})
+    else:
+        matrix_aliases = {}
 
     uptime_seconds = int(time.time() - start_time)
     uptime_str = str(datetime.timedelta(seconds=uptime_seconds))
@@ -432,7 +477,9 @@ def stats_data():
         "feed_details": feed_details,
         "errors": errors_str,
         "current_year": current_year,
-        "matrix_room_names": matrix_room_names
+        "matrix_room_names": matrix_room_names,
+        "matrix_aliases": matrix_aliases,
+        "subscriptions": feed.subscriptions  # pass subscriptions to the JSON as well
     }
 
 ###############################################################################
@@ -440,6 +487,4 @@ def stats_data():
 ###############################################################################
 if __name__ == '__main__':
     logging.info(f"Dashboard starting on port {dashboard_port}.")
-    # Must have static/images/fuzzyfeeds-logo-sm.png for the code to work
     app.run(host='0.0.0.0', port=dashboard_port, debug=True)
-
