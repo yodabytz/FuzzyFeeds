@@ -33,10 +33,8 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
     logging.info("Centralized polling started.")
     feed.load_feeds()
     logging.info(f"Loaded channels: {list(feed.channel_feeds.keys())}")
-    
-    # Initialize last_check_times for any channel that doesn't have one.
-    # The feed.py code already does some initialization, but we do this
-    # again in case new channels appear after feed.load_feeds().
+
+    # Ensure each channel has a last_check_time. If missing, set it to script start time.
     if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
         feed.last_check_times = {}
     for chan in feed.channel_feeds.keys():
@@ -45,8 +43,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
     while True:
         current_time = time.time()
         logging.info(f"Polling loop iteration at {datetime.datetime.fromtimestamp(current_time)}")
-        
-        # Grab a static list of channels for this iteration
+
         channels_to_check = list(feed.channel_feeds.keys())
         logging.info(f"Checking {len(channels_to_check)} channels for new feeds...")
 
@@ -66,7 +63,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                 f"interval {interval}s"
             )
 
-            # Only proceed if enough time has passed for this channel
+            # Only poll if enough time has elapsed for this channel
             if current_time - last_check >= interval:
                 new_feed_count = 0
 
@@ -75,8 +72,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                         parsed_feed = feedparser.parse(feed_url)
                         if parsed_feed.bozo:
                             logging.warning(
-                                f"Error parsing feed '{feed_name}' ({feed_url}): "
-                                f"{parsed_feed.bozo_exception}"
+                                f"Error parsing feed '{feed_name}' ({feed_url}): {parsed_feed.bozo_exception}"
                             )
                             continue
 
@@ -85,17 +81,15 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             logging.info(f"No entries in feed '{feed_name}' ({feed_url}).")
                             continue
 
-                        # We only look at the most recent entry
+                        # Always check only the newest entry
                         entry = entries[0]
                         published_time = None
-
-                        # Use published or updated time
                         if entry.get("published_parsed"):
                             published_time = time.mktime(entry.published_parsed)
                         elif entry.get("updated_parsed"):
                             published_time = time.mktime(entry.updated_parsed)
 
-                        # For all channels, skip if feed item is older than this channel's last check
+                        # Skip if this item is older than this channel's last check time
                         if published_time is not None and published_time <= last_check:
                             logging.info(
                                 f"Skipping entry from feed '{feed_name}' "
@@ -107,23 +101,27 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                         title = entry.title.strip() if entry.get("title") else "No Title"
                         link = entry.link.strip() if entry.get("link") else ""
 
-                        # Since we no longer do a global last_feed_links check,
-                        # each channel will see the feed if it meets time criteria.
+                        # If we already posted this link in this channel, skip
+                        if link and feed.is_link_posted(chan, link):
+                            logging.info(f"Channel {chan} already has link: {link}")
+                            continue
+
+                        # Otherwise, post it and mark as posted
                         if link:
-                            if chan.startswith("!"):  # Matrix channel
+                            if chan.startswith("!"):  # Matrix
                                 if matrix_send:
                                     matrix_send(chan, f"{feed_name}: {title}")
                                     matrix_send(chan, f"Link: {link}")
-                            elif chan.startswith("#"):  # IRC channel
+                            elif chan.startswith("#"):  # IRC
                                 if irc_send:
                                     irc_send(chan, f"New Feed from {feed_name}: {title}")
                                     irc_send(chan, f"Link: {link}")
-                            elif chan.isdigit():        # Discord channel
+                            elif chan.isdigit():        # Discord
                                 if discord_send:
                                     discord_send(chan, f"New Feed from {feed_name}: {title}")
                                     discord_send(chan, f"Link: {link}")
                             else:
-                                # fallback or unknown
+                                # fallback/unknown
                                 if irc_send:
                                     irc_send(chan, f"New Feed from {feed_name}: {title}")
                                 if matrix_send:
@@ -131,6 +129,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                                 if discord_send:
                                     discord_send(chan, f"New Feed from {feed_name}: {title}")
 
+                            feed.mark_link_posted(chan, link)
                             new_feed_count += 1
 
                     except Exception as e:
@@ -142,11 +141,11 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                 else:
                     logging.info(f"No new feeds found in {chan}.")
 
-                # Update last check time for this channel
                 feed.last_check_times[chan] = current_time
 
         logging.info(f"Finished checking feeds. Next check in {poll_interval} seconds.")
         time.sleep(poll_interval)
+
 
 if __name__ == "__main__":
     def test_irc_send(channel, message):
