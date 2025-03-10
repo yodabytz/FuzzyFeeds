@@ -397,6 +397,62 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         except Exception as e:
             send_message_fn(response_target, f"Error parting channel: {e}")
 
+    # ------------------- NEW: ADDNETWORK COMMAND -------------------
+    elif lower_message.startswith("!addnetwork"):
+        if integration != "irc":
+            send_message_fn(response_target, "This command is for IRC only.")
+            return
+        if user.lower() != admin.lower():
+            send_private_message_fn(user, "Only the bot owner can use !addnetwork.")
+            return
+        parts = message.split()
+        # Expected usage: !addnetwork <server:port> [-ssl] <#channel> <admin>
+        if len(parts) not in [4, 5]:
+            send_message_fn(response_target, "Usage: !addnetwork <server:port> [-ssl] <#channel> <admin>")
+            return
+        server_port = parts[1]
+        use_ssl_flag = False
+        channel_index = 2
+        if parts[2].lower() == "-ssl":
+            use_ssl_flag = True
+            channel_index = 3
+        if len(parts) <= channel_index+1:
+            send_message_fn(response_target, "Usage: !addnetwork <server:port> [-ssl] <#channel> <admin>")
+            return
+        network_channel = parts[channel_index]
+        network_admin = parts[channel_index+1]
+        if ':' not in server_port:
+            send_message_fn(response_target, "Invalid server:port format.")
+            return
+        server_name, port_str = server_port.split(':', 1)
+        try:
+            port_number = int(port_str)
+        except ValueError:
+            send_message_fn(response_target, "Invalid port number.")
+            return
+        send_message_fn(response_target, f"Connecting to network {server_name}:{port_number} (SSL: {use_ssl_flag}) on channel {network_channel} with admin {network_admin}...")
+        import threading
+        from irc import connect_to_network
+        def connect_new():
+            new_client = connect_to_network(server_name, port_number, use_ssl_flag, network_channel)
+            if new_client:
+                send_message_fn(response_target, f"Successfully connected to {server_name}:{port_number} and joined {network_channel}.")
+                # Persist the network mapping for this IRC channel.
+                from persistence import load_json, save_json
+                import os
+                networks_file = "networks.json"
+                networks = load_json(networks_file, default={})
+                networks[network_channel] = {
+                    "server": server_name,
+                    "port": port_number,
+                    "ssl": use_ssl_flag,
+                    "admin": network_admin
+                }
+                save_json(networks_file, networks)
+            else:
+                send_message_fn(response_target, f"Failed to connect to {server_name}:{port_number}.")
+        threading.Thread(target=connect_new, daemon=True).start()
+
     # ------------------- SUBSCRIPTIONS -------------------
 
     elif lower_message.startswith("!addsub"):
@@ -555,3 +611,4 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     else:
         send_message_fn(response_target, "Unknown command. Use !help for a list.")
+
