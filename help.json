@@ -10,6 +10,7 @@
   "search": "!search <query> - Search for feeds matching a query.",
   "join": "!join <#channel> <adminname> - Join a channel (Admin only).",
   "part": "!part <#channel> - Make the bot leave a channel and remove its settings (Admin only).",
+  "addnetwork": "!addnetwork <server:port> [-ssl] <#channel> <admin> - Connect to another IRC network (bot owner only).",
   "addsub": "!addsub <feed_name> <URL> - Subscribe privately to a feed.",
   "unsub": "!unsub <feed_name> - Unsubscribe from a feed.",
   "mysubs": "!mysubs - List your private subscriptions.",
