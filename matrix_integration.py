@@ -178,7 +178,7 @@ class MatrixBot:
                 if hasattr(response, "room_id"):
                     try:
                         state = await self.client.room_get_state_event(room, "m.room.name", "")
-                        display_name = state.get("name", room)
+                        display_name = state.content.get("name", room) if hasattr(state, 'content') else room 
                     except Exception as e:
                         logging.warning(f"Could not fetch display name for {room}: {e}")
                         display_name = room
@@ -406,3 +406,4 @@ def disable_feed_loop():
 
 if __name__ == "__main__":
     start_matrix_bot()
+
