@@ -5,11 +5,11 @@ import threading
 import time
 from queue import Queue
 from config import server, port, channels, botnick, use_ssl
-from channels import load_channels  # Load additional channels from channels.json
+from channels import load_channels  # Loads channels from channels.json
 
 # Global message queue for rate-limiting outgoing messages.
 message_queue = Queue()
-RATE_LIMIT_DELAY = 1.0  # Delay in seconds between outgoing messages
+RATE_LIMIT_DELAY = 1.0  # Delay (in seconds) between outgoing messages
 
 # Global IRC client variable (set via set_irc_client)
 current_irc_client = None
@@ -36,6 +36,7 @@ def connect_and_register():
     irc.connect((server, port))
     irc.send(f"NICK {botnick}\r\n".encode("utf-8"))
     irc.send(f"USER {botnick} 0 * :Python IRC Bot\r\n".encode("utf-8"))
+    
     connected = False
     while not connected:
         response = irc.recv(2048).decode("utf-8", errors="ignore")
@@ -45,17 +46,18 @@ def connect_and_register():
                 irc.send(f"PONG {line.split()[1]}\r\n".encode("utf-8"))
             if " 001 " in line:  # Successful registration message
                 connected = True
-                # Load channels from channels.json
-                joined_channels = load_channels()
-                # Ensure that the default channel(s) from config are always included
+                # Load channels from channels.json.
+                channels_data = load_channels()
+                joined_channels = channels_data.get("irc_channels", [])
+                # Ensure default channels from config are included.
                 for ch in channels:
                     if ch not in joined_channels:
                         joined_channels.append(ch)
-                # Join each channel in the combined list
+                # Join each channel.
                 for chan in joined_channels:
                     irc.send(f"JOIN {chan}\r\n".encode("utf-8"))
                     send_message(irc, chan, "FuzzyFeeds has joined the channel!")
-    # Start the message sender thread for rate limiting outgoing messages.
+    # Start the message sender thread for rate limiting.
     threading.Thread(target=process_message_queue, args=(irc,), daemon=True).start()
     return irc
 
@@ -76,3 +78,4 @@ def send_multiline_message(irc, user, message):
 if __name__ == '__main__':
     # For testing purposes only.
     client = connect_and_register()
+
