@@ -29,9 +29,7 @@ MATRIX_ALIASES_FILE = os.path.join(os.path.dirname(__file__), "matrix_aliases.js
 # Reduce Werkzeug logs
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
-###############################################################################
 # Log handler that captures ERROR messages in memory so we can display them.
-###############################################################################
 MAX_ERRORS = 50
 errors_deque = deque()
 
@@ -49,9 +47,9 @@ logging.getLogger().addHandler(handler)
 
 logging.basicConfig(level=logging.INFO)
 
-###############################################################################
-# Helper functions to build feed tree structures
-###############################################################################
+###############################
+# Helper functions for feed tree
+###############################
 def build_feed_tree(networks):
     """
     Builds a nested dictionary structure:
@@ -90,21 +88,13 @@ def sort_feed_tree(feed_tree):
 def build_unicode_tree(feed_tree_sorted, matrix_aliases):
     """
     Builds an HTML string that displays the tree using Unicode box-drawing characters.
-    
-    Layout:
-    
-    Server (blue, bold)
-        ├── Channel (green, semi-bold)
-        │   ├── Feed1: link
-        │   └── Feed2: link
-        └── Channel2
-            ├── Feed1: link
-            └── Feed2: link
-
-    For Matrix channels, if a feed's name (lowercased) matches the channel alias (with leading "#" removed), that feed is skipped.
+    The connector characters are wrapped in a span with light gray color.
     """
     lines = []
     indent = "    "  # 4 spaces
+    # Helper: wrap connector in light gray
+    def connector(text):
+        return f'<span style="color:#d3d3d3;">{text}</span>'
     for server, channels in feed_tree_sorted:
         # Server line: no indent, blue and bold
         lines.append(f'<span style="color:#007bff; font-weight:bold;">{server}</span>')
@@ -112,31 +102,32 @@ def build_unicode_tree(feed_tree_sorted, matrix_aliases):
         n_channels = len(channel_keys)
         for idx, channel in enumerate(channel_keys):
             is_last_channel = (idx == n_channels - 1)
-            channel_connector = "└── " if is_last_channel else "├── "
+            ch_conn = "└── " if is_last_channel else "├── "
+            ch_conn = connector(ch_conn)
             # For Matrix channels, use alias if available.
             display_channel = matrix_aliases.get(channel, channel) if server == "Matrix" else channel
-            lines.append(indent + channel_connector + f'<span style="color:#28a745; font-weight:600;">{display_channel}</span>')
-            feed_indent = indent + ("    " if is_last_channel else "│   ")
+            lines.append(indent + ch_conn + f'<span style="color:#28a745; font-weight:600;">{display_channel}</span>')
+            feed_indent = indent + (("    " if is_last_channel else connector("│   ")))
             feeds = channels[channel]
             n_feeds = len(feeds)
             for f_idx, feed_item in enumerate(feeds):
-                # For Matrix channels, skip feed if its name matches the channel alias (without "#")
                 if server == "Matrix":
                     alias_clean = display_channel.lstrip("#").lower()
                     if feed_item["feed_name"].lower() == alias_clean:
                         continue
                 is_last_feed = (f_idx == n_feeds - 1)
-                feed_connector = "└── " if is_last_feed else "├── "
-                lines.append(feed_indent + feed_connector + f'{feed_item["feed_name"]}: <a href="{feed_item["link"]}" target="_blank">{feed_item["link"]}</a>')
+                feed_conn = "└── " if is_last_feed else "├── "
+                feed_conn = connector(feed_conn)
+                lines.append(feed_indent + feed_conn + f'{feed_item["feed_name"]}: <a href="{feed_item["link"]}" target="_blank">{feed_item["link"]}</a>')
         lines.append("<br>")
     return "<br>".join(lines)
 
-###############################################################################
+###############################
 # Create the Flask app
-###############################################################################
+###############################
 app = Flask(__name__)
 
-# Updated template – header changed from "Feed Tree" to "Fuzzy Tree" and container widened.
+# Updated template with a "Stats" card showing uptime and server statuses.
 DASHBOARD_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="en">
@@ -181,6 +172,16 @@ DASHBOARD_TEMPLATE = r"""
           font-family: monospace;
           font-size: 14px;
       }
+      /* Styles for server status dots */
+      .status-dot {
+          height: 10px;
+          width: 10px;
+          border-radius: 50%;
+          display: inline-block;
+          margin-right: 5px;
+      }
+      .status-green { background-color: green; }
+      .status-red { background-color: red; }
     </style>
 </head>
 <body>
@@ -197,26 +198,39 @@ DASHBOARD_TEMPLATE = r"""
         
         <!-- Top cards -->
         <div class="row">
+          <!-- Stats card -->
           <div class="col-md-4">
               <div class="card">
-                  <div class="card-header bg-primary text-white">Uptime</div>
+                  <div class="card-header bg-primary text-white" style="font-weight:600;">Stats</div>
                   <div class="card-body">
-                      <h5 class="card-title" id="uptime">{{ uptime }}</h5>
+                      <h5 class="card-title" id="uptime">Uptime: {{ uptime }}</h5>
+                      <p>
+                        {% for server in irc_servers %}
+                          <span class="status-dot {% if irc_status == 'green' %}status-green{% else %}status-red{% endif %}"></span>
+                          <span style="font-weight:600;">IRC Server:</span> {{ server }}<br>
+                        {% endfor %}
+                        <span class="status-dot {% if matrix_status == 'green' %}status-green{% else %}status-red{% endif %}"></span>
+                        <span style="font-weight:600;">Matrix Server:</span> {{ matrix_server }}<br>
+                        <span class="status-dot {% if discord_status == 'green' %}status-green{% else %}status-red{% endif %}"></span>
+                        <span style="font-weight:600;">Discord Server:</span> {{ discord_server }}
+                      </p>
                   </div>
               </div>
           </div>
+          <!-- Total Channel Feeds card -->
           <div class="col-md-4">
               <div class="card">
-                  <div class="card-header bg-success text-white">Total Channel Feeds</div>
+                  <div class="card-header bg-success text-white" style="font-weight:600;">Total Channel Feeds</div>
                   <div class="card-body">
                       <h5 class="card-title" id="total_feeds">{{ total_feeds }} feeds</h5>
                       <p class="card-text">Across <span id="total_channels">{{ total_channels }}</span> channels/rooms.</p>
                   </div>
               </div>
           </div>
+          <!-- User Subscriptions card -->
           <div class="col-md-4">
               <div class="card">
-                  <div class="card-header bg-info text-white">User Subscriptions</div>
+                  <div class="card-header bg-info text-white" style="font-weight:600;">User Subscriptions</div>
                   <div class="card-body">
                       <h5 class="card-title" id="total_subscriptions">{{ total_subscriptions }} total</h5>
                       <p class="card-text" style="font-size: 0.9em;">
@@ -234,7 +248,7 @@ DASHBOARD_TEMPLATE = r"""
             <!-- IRC -->
             <div class="col-md-4">
               <div class="card">
-                <div class="card-header bg-secondary text-white">IRC Channels</div>
+                <div class="card-header bg-secondary text-white" style="font-weight:600;">IRC Channels</div>
                 <div class="card-body">
                   {% if irc_channels %}
                   <table class="table table-sm table-bordered">
@@ -262,7 +276,7 @@ DASHBOARD_TEMPLATE = r"""
             <!-- Matrix -->
             <div class="col-md-4">
               <div class="card">
-                <div class="card-header bg-secondary text-white">Matrix Rooms</div>
+                <div class="card-header bg-secondary text-white" style="font-weight:600;">Matrix Rooms</div>
                 <div class="card-body">
                   {% if matrix_rooms %}
                   <table class="table table-sm table-bordered">
@@ -298,7 +312,7 @@ DASHBOARD_TEMPLATE = r"""
             <!-- Discord -->
             <div class="col-md-4">
               <div class="card">
-                <div class="card-header bg-secondary text-white">Discord Channels</div>
+                <div class="card-header bg-secondary text-white" style="font-weight:600;">Discord Channels</div>
                 <div class="card-body">
                   {% if discord_channels %}
                   <table class="table table-sm table-bordered">
@@ -329,7 +343,7 @@ DASHBOARD_TEMPLATE = r"""
         <div class="row">
           <div class="col-md-12">
               <div class="card">
-                <div class="card-header bg-dark text-white">Fuzzy Tree</div>
+                <div class="card-header bg-dark text-white" style="font-weight:600;">Fuzzy Tree</div>
                 <div class="card-body">
                   <pre class="tree">{{ feed_tree_html|safe }}</pre>
                 </div>
@@ -341,7 +355,7 @@ DASHBOARD_TEMPLATE = r"""
         <div class="row">
           <div class="col-md-12">
               <div class="card">
-                <div class="card-header bg-danger text-white">Errors</div>
+                <div class="card-header bg-danger text-white" style="font-weight:600;">Errors</div>
                 <div class="card-body">
                   <pre class="card-text" id="errors">{{ errors }}</pre>
                 </div>
@@ -360,7 +374,7 @@ DASHBOARD_TEMPLATE = r"""
               if (!response.ok) throw new Error('Failed');
               return response.json();
           }).then(data => {
-              document.getElementById("uptime").innerText = data.uptime;
+              document.getElementById("uptime").innerText = "Uptime: " + data.uptime;
               document.getElementById("uptime").style.color = "";
           }).catch(error => {
               document.getElementById("uptime").innerText = "DOWN";
@@ -423,9 +437,9 @@ DASHBOARD_TEMPLATE = r"""
 </html>
 """
 
-###############################################################################
-# Additional route: /uptime for live uptime polling
-###############################################################################
+###############################
+# Additional route for uptime polling
+###############################
 @app.route('/uptime')
 def uptime_route():
     uptime_seconds = int(time.time() - start_time)
@@ -435,9 +449,9 @@ def uptime_route():
     uptime_str = f"{hours}h {minutes}m {seconds}s"
     return jsonify({"uptime": uptime_str, "uptime_seconds": uptime_seconds})
 
-###############################################################################
-# FLASK ROUTES
-###############################################################################
+###############################
+# Main Flask routes
+###############################
 @app.route('/')
 def index():
     feed.load_feeds()
@@ -455,6 +469,41 @@ def index():
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     networks_file = os.path.join(BASE_DIR, "networks.json")
     networks = load_json(networks_file, default={}) if os.path.exists(networks_file) else {}
+
+    # Ensure that channels from networks.json are present in feed.channel_feeds.
+    for channel in networks.keys():
+        if channel not in feed.channel_feeds:
+            feed.channel_feeds[channel] = {}
+
+    # Aggregate IRC server names: include default IRC and any from networks.json.
+    irc_servers = []
+    default_irc = config.server
+    if default_irc:
+        irc_servers.append(default_irc)
+    for channel, details in networks.items():
+        if channel.startswith("#"):
+            server_name = details.get("server", "")
+            if server_name and server_name not in irc_servers:
+                irc_servers.append(server_name)
+
+    try:
+        from irc import current_irc_client
+        irc_status = "green" if current_irc_client is not None else "red"
+    except Exception:
+        irc_status = "red"
+    try:
+        from matrix_integration import matrix_bot_instance
+        matrix_status = "green" if matrix_bot_instance is not None else "red"
+    except Exception:
+        matrix_status = "red"
+    try:
+        from discord_integration import bot
+        discord_status = "green" if bot is not None else "red"
+    except Exception:
+        discord_status = "red"
+
+    matrix_server = config.matrix_homeserver
+    discord_server = "discord.com"
 
     uptime_seconds = int(time.time() - start_time)
     uptime_str = str(datetime.timedelta(seconds=uptime_seconds))
@@ -484,7 +533,13 @@ def index():
         matrix_room_names=matrix_room_names,
         matrix_aliases=matrix_aliases,
         subscriptions=feed.subscriptions,
-        server_start_time=start_time
+        server_start_time=start_time,
+        irc_status=irc_status,
+        matrix_status=matrix_status,
+        discord_status=discord_status,
+        irc_servers=irc_servers,
+        matrix_server=matrix_server,
+        discord_server=discord_server
     )
 
 @app.route('/stats_data')
@@ -533,10 +588,6 @@ def stats_data():
         "subscriptions": feed.subscriptions
     }
 
-###############################################################################
-# MAIN
-###############################################################################
 if __name__ == '__main__':
     logging.info(f"Dashboard starting on port {dashboard_port}.")
     app.run(host='0.0.0.0', port=dashboard_port, debug=True)
-
