@@ -25,11 +25,6 @@ posted_links = {}  # {channel: set_of_posted_links}
 
 
 def load_posted_links():
-    """
-    Loads posted_links from posted_links.json as a dict:
-       { "channel": ["link1", "link2", ...], ... }
-    Internally we store them as sets for quick membership checks.
-    """
     global posted_links
     if os.path.exists(posted_links_file):
         try:
@@ -44,10 +39,6 @@ def load_posted_links():
 
 
 def save_posted_links():
-    """
-    Saves posted_links back to posted_links.json,
-    converting each set to a list so JSON can store them.
-    """
     try:
         serializable = {ch: list(links) for ch, links in posted_links.items()}
         with open(posted_links_file, "w") as f:
@@ -57,16 +48,10 @@ def save_posted_links():
 
 
 def is_link_posted(channel, link):
-    """
-    Returns True if 'link' is already posted in 'channel'.
-    """
     return link in posted_links.get(channel, set())
 
 
 def mark_link_posted(channel, link):
-    """
-    Mark 'link' as posted in 'channel' and save to disk.
-    """
     if channel not in posted_links:
         posted_links[channel] = set()
     posted_links[channel].add(link)
@@ -74,7 +59,6 @@ def mark_link_posted(channel, link):
 
 
 def load_feeds():
-    """Load feeds from feeds_file; if missing/empty, leave channel_feeds empty."""
     global channel_feeds
     if os.path.exists(feeds_file):
         try:
@@ -89,16 +73,11 @@ def load_feeds():
     init_channel_times()
     total_feeds = sum(len(feeds) for feeds in channel_feeds.values())
     print(f"[feed.py] Loaded {len(channel_feeds)} channels with {total_feeds} feeds.")
-
-    # Ensure subscriptions are loaded
-    load_subscriptions()
-
-    # Also ensure per-channel posted links are loaded
+    # Removed call to load_subscriptions() here, so that subscriptions are loaded only once at startup.
     load_posted_links()
 
 
 def save_feeds():
-    """Save the current channel_feeds dictionary to feeds_file."""
     try:
         with open(feeds_file, "w") as f:
             json.dump(channel_feeds, f, indent=4)
@@ -109,7 +88,6 @@ def save_feeds():
 
 
 def init_channel_times():
-    """Ensure each channel in channels has a default interval and last check time."""
     global channel_intervals, last_check_times
     current_time = time.time()
     for chan in channels:
@@ -120,23 +98,26 @@ def init_channel_times():
 
 
 def load_subscriptions():
-    """Load user subscriptions from subscriptions_file."""
+    """Load user subscriptions from subscriptions_file only once."""
     global subscriptions
     if os.path.exists(subscriptions_file):
         try:
-            subscriptions = json.load(open(subscriptions_file, "r"))
+            with open(subscriptions_file, "r") as f:
+                data = f.read().strip()
+                if data:
+                    subscriptions = json.loads(data)
+                else:
+                    subscriptions = {}
         except Exception as e:
             print(f"Error loading {subscriptions_file}: {e}")
             subscriptions = {}
     else:
         subscriptions = {}
-    save_subscriptions()
     total_subs = sum(len(subs) for subs in subscriptions.values())
     print(f"[feed.py] Loaded user subscriptions: {total_subs} subscriptions.")
 
 
 def save_subscriptions():
-    """Save the subscriptions dictionary to subscriptions_file."""
     try:
         with open(subscriptions_file, "w") as f:
             json.dump(subscriptions, f, indent=4)
@@ -147,7 +128,6 @@ def save_subscriptions():
 
 
 def load_last_feed_links():
-    """Legacy function. Loads from last_links_file (text) into last_feed_links set."""
     global last_feed_links
     if os.path.exists(last_links_file):
         try:
@@ -162,7 +142,6 @@ def load_last_feed_links():
 
 
 def save_last_feed_link(link):
-    """Legacy function. Appends new link to last_links_file and last_feed_links set."""
     global last_feed_links
     last_feed_links.add(link)
     try:
@@ -174,10 +153,6 @@ def save_last_feed_link(link):
 
 
 def fetch_latest_feed(feed_url):
-    """
-    Parse the feed URL and return (title, link) for the latest entry
-    if its link has not been seen globally (legacy check); otherwise, return (None, None).
-    """
     d = feedparser.parse(feed_url)
     if d.entries:
         entry = d.entries[0]
@@ -189,9 +164,6 @@ def fetch_latest_feed(feed_url):
 
 
 def fetch_latest_article(feed_url):
-    """
-    Always return the latest entry (title, link), regardless of seen status.
-    """
     d = feedparser.parse(feed_url)
     if d.entries:
         entry = d.entries[0]
@@ -202,13 +174,6 @@ def fetch_latest_article(feed_url):
 
 
 def check_feeds(send_message_func, channels_to_check=None):
-    """
-    For each channel (or each channel in channels_to_check if provided),
-    check for new feed entries using user‐added feeds.
-    Only post articles that have been published after the last check time.
-    Announce any new entries via send_message_func by sending messages,
-    then record their links in last_feed_links (legacy).
-    """
     current_time = time.time()
     channels_list = channels_to_check if channels_to_check is not None else channels
     for chan in channels_list:
@@ -231,3 +196,4 @@ def check_feeds(send_message_func, channels_to_check=None):
                         send_message_func(chan, f"Link: {link}")
                         save_last_feed_link(link)
             last_check_times[chan] = current_time
+
