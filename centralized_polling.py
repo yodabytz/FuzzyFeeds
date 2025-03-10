@@ -161,3 +161,4 @@ if __name__ == "__main__":
         print(f"[Discord] Channel {channel}: {message}")
 
     start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=300)
+
