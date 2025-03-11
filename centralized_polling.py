@@ -112,8 +112,14 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                         if link:
                             message_text = f"{feed_name}: {title}\nLink: {link}"
 
-                            # IRC channel - send each line separately to ensure the link is displayed
-                            if chan.startswith("#"):
+                            # Determine target based on channel key.
+                            # If it's an IRC composite key (contains "|"), extract the actual IRC channel.
+                            if "|" in chan:
+                                target = chan.split("|", 1)[1]
+                                if irc_send:
+                                    for line in message_text.splitlines():
+                                        irc_send(target, line)
+                            elif chan.startswith("#"):
                                 if irc_send:
                                     for line in message_text.splitlines():
                                         irc_send(chan, line)
