@@ -52,73 +52,117 @@ logging.basicConfig(level=logging.INFO)
 ###############################
 def build_feed_tree(networks):
     """
-    Builds a nested dictionary structure:
-      { server: { channel: [ {feed_name, link}, ... ], ... }, ... }
+    Builds a nested dictionary structure with one branch per integration:
+    
+      {
+        "IRC": { pure_channel: [ {feed_name, link}, ... ], ... },
+        "Matrix": { channel: [ {feed_name, link}, ... ], ... },
+        "Discord": { channel: [ {feed_name, link}, ... ], ... }
+      }
+    
+    For IRC, we merge composite keys of the form "prefix|#channel" into the pure channel
+    (if not already present, one is created using the pure channel name extracted from the composite key).
+    Any other IRC composite keys that don’t match a pure channel remain separate.
     """
-    feed_tree = {}
+    irc_tree = {}
+    matrix_tree = {}
+    discord_tree = {}
+    
+    # First, add pure keys (for IRC, keys starting with "#"; Matrix: keys starting with "!"; Discord: digits)
     for channel, feeds_dict in feed.channel_feeds.items():
-        if channel.startswith("#"):
-            server = networks.get(channel, {}).get("server", config.server)
-        elif channel.startswith("!"):
-            server = "Matrix"
+        # For Matrix
+        if channel.startswith("!"):
+            matrix_tree[channel] = [{"feed_name": name, "link": link} for name, link in feeds_dict.items()]
+        # For Discord
         elif channel.isdigit():
-            server = "Discord"
-        else:
-            server = ""
-        if server not in feed_tree:
-            feed_tree[server] = {}
-        if channel not in feed_tree[server]:
-            feed_tree[server][channel] = []
-        for feed_name, link in feeds_dict.items():
-            feed_tree[server][channel].append({"feed_name": feed_name, "link": link})
-    return feed_tree
+            discord_tree[channel] = [{"feed_name": name, "link": link} for name, link in feeds_dict.items()]
+        # For IRC pure channels (starting with "#")
+        elif channel.startswith("#"):
+            irc_tree[channel] = [{"feed_name": name, "link": link} for name, link in feeds_dict.items()]
+    
+    # Now, process composite IRC keys (those containing "|" but not starting with "#" already)
+    for channel, feeds_dict in feed.channel_feeds.items():
+        if "|" in channel:
+            # Expecting format "prefix|#channel"
+            parts = channel.split("|", 1)
+            if len(parts) == 2 and parts[1].startswith("#"):
+                pure_channel = parts[1]
+                items = [{"feed_name": name, "link": link} for name, link in feeds_dict.items()]
+                # If pure_channel exists, merge; otherwise, create it.
+                if pure_channel in irc_tree:
+                    irc_tree[pure_channel].extend(items)
+                else:
+                    irc_tree[pure_channel] = items
+            else:
+                # If composite key is not in expected form, add it as is.
+                irc_tree[channel] = [{"feed_name": name, "link": link} for name, link in feeds_dict.items()]
+    
+    overall_tree = {
+        "IRC": irc_tree,
+        "Matrix": matrix_tree,
+        "Discord": discord_tree
+    }
+    return overall_tree
 
 def sort_feed_tree(feed_tree):
-    # Custom order: IRC (order 1), Matrix (order 2), Discord (order 3)
-    def order_key(server):
-        s = server.lower()
-        if s == "matrix":
-            return (2, s)
-        elif s == "discord":
-            return (3, s)
+    """
+    Returns a sorted list of (integration, channels) tuples.
+    Integration order: IRC first, then Matrix, then Discord.
+    For the IRC branch, pure channels are sorted alphabetically.
+    """
+    def integration_order(integration):
+        lower = integration.lower()
+        if lower == "irc":
+            return 0
+        elif lower == "matrix":
+            return 1
+        elif lower == "discord":
+            return 2
         else:
-            return (1, s)
-    return sorted(feed_tree.items(), key=lambda x: order_key(x[0]))
+            return 3
+    sorted_integrations = sorted(feed_tree.items(), key=lambda x: integration_order(x[0]))
+    # For IRC, sort channels alphabetically
+    if "IRC" in feed_tree:
+        irc_channels = feed_tree["IRC"]
+        sorted_irc = dict(sorted(irc_channels.items(), key=lambda kv: kv[0].lower()))
+        for idx, (integ, channels) in enumerate(sorted_integrations):
+            if integ == "IRC":
+                sorted_integrations[idx] = (integ, sorted_irc)
+                break
+    return sorted_integrations
 
 def build_unicode_tree(feed_tree_sorted, matrix_aliases):
     """
     Builds an HTML string that displays the tree using Unicode box-drawing characters.
-    The connector characters are wrapped in a span with light gray color.
+    Each connector is wrapped in a span with light gray color.
     """
     lines = []
     indent = "    "  # 4 spaces
-    # Helper: wrap connector in light gray
     def connector(text):
         return f'<span style="color:#d3d3d3;">{text}</span>'
-    for server, channels in feed_tree_sorted:
-        # Server line: no indent, blue and bold
-        lines.append(f'<span style="color:#007bff; font-weight:bold;">{server}</span>')
+    for integration, channels in feed_tree_sorted:
+        # Integration heading: blue and bold.
+        lines.append(f'<span style="color:#007bff; font-weight:bold;">{integration}</span>')
         channel_keys = sorted(channels.keys())
         n_channels = len(channel_keys)
         for idx, channel in enumerate(channel_keys):
             is_last_channel = (idx == n_channels - 1)
             ch_conn = "└── " if is_last_channel else "├── "
             ch_conn = connector(ch_conn)
-            # For Matrix channels, use alias if available.
-            display_channel = matrix_aliases.get(channel, channel) if server == "Matrix" else channel
+            # For Matrix, use alias if available.
+            display_channel = matrix_aliases.get(channel, channel) if integration == "Matrix" else channel
             lines.append(indent + ch_conn + f'<span style="color:#28a745; font-weight:600;">{display_channel}</span>')
             feed_indent = indent + (("    " if is_last_channel else connector("│   ")))
             feeds = channels[channel]
             n_feeds = len(feeds)
             for f_idx, feed_item in enumerate(feeds):
-                if server == "Matrix":
-                    alias_clean = display_channel.lstrip("#").lower()
-                    if feed_item["feed_name"].lower() == alias_clean:
-                        continue
                 is_last_feed = (f_idx == n_feeds - 1)
                 feed_conn = "└── " if is_last_feed else "├── "
                 feed_conn = connector(feed_conn)
-                lines.append(feed_indent + feed_conn + f'{feed_item["feed_name"]}: <a href="{feed_item["link"]}" target="_blank">{feed_item["link"]}</a>')
+                # Ensure keys exist in feed_item
+                feed_name = feed_item.get("feed_name", "Unknown")
+                link = feed_item.get("link", "#")
+                lines.append(feed_indent + feed_conn + f'{feed_name}: <a href="{link}" target="_blank">{link}</a>')
         lines.append("<br>")
     return "<br>".join(lines)
 
@@ -127,13 +171,15 @@ def build_unicode_tree(feed_tree_sorted, matrix_aliases):
 ###############################
 app = Flask(__name__)
 
-# Updated template with a "Stats" card showing uptime and server statuses.
+# Updated template with favicon and go-to-top arrow.
 DASHBOARD_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <title>FuzzyFeeds Dashboard</title>
+    <!-- Favicon -->
+    <link rel="icon" href="/static/images/favicon.ico" type="image/x-icon">
     <!-- Google Fonts: Passion One (title) & Montserrat (body) -->
     <link href="https://fonts.googleapis.com/css2?family=Passion+One&family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
     <!-- Bootstrap CSS -->
@@ -182,6 +228,19 @@ DASHBOARD_TEMPLATE = r"""
       }
       .status-green { background-color: green; }
       .status-red { background-color: red; }
+      /* Go-to-top arrow styles */
+      .go-to-top {
+          position: fixed;
+          bottom: 20px;
+          right: 20px;
+          background: #007bff;
+          color: white;
+          padding: 10px;
+          border-radius: 50%;
+          text-decoration: none;
+          font-size: 24px;
+          z-index: 1000;
+      }
     </style>
 </head>
 <body>
@@ -363,6 +422,10 @@ DASHBOARD_TEMPLATE = r"""
           </div>
         </div>
     </div>
+    
+    <!-- Go-to-top arrow -->
+    <a href="#" class="go-to-top">&#8679;</a>
+    
     <div class="footer">
       <p>&copy; FuzzyFeeds <span id="current_year">{{ current_year }}</span></p>
     </div>
@@ -511,6 +574,7 @@ def index():
     total_channels = len(feed.channel_feeds)
     total_subscriptions = sum(len(subs) for subs in feed.subscriptions.values())
 
+    # Build the overall feed tree for all integrations.
     feed_tree = build_feed_tree(networks)
     feed_tree_sorted = sort_feed_tree(feed_tree)
     feed_tree_html = build_unicode_tree(feed_tree_sorted, matrix_aliases)
@@ -518,13 +582,19 @@ def index():
     errors_str = "\n".join(errors_deque) if errors_deque else "No errors reported."
     current_year = datetime.datetime.now().year
 
+    # For the IRC table, display only pure IRC channels (those starting with "#")
+    irc_channels = {}
+    for channel, feeds in feed.channel_feeds.items():
+        if channel.startswith("#"):
+            irc_channels[channel] = feeds
+
     return render_template_string(
         DASHBOARD_TEMPLATE,
         uptime=uptime_str,
         total_feeds=total_feeds,
         total_channels=total_channels,
         total_subscriptions=total_subscriptions,
-        irc_channels={k: v for k, v in feed.channel_feeds.items() if k.startswith('#')},
+        irc_channels=irc_channels,
         matrix_rooms={k: v for k, v in feed.channel_feeds.items() if k.startswith('!')},
         discord_channels={k: v for k, v in feed.channel_feeds.items() if k.isdigit()},
         feed_tree_html=feed_tree_html,
@@ -560,15 +630,15 @@ def stats_data():
     networks_file = os.path.join(BASE_DIR, "networks.json")
     networks = load_json(networks_file, default={}) if os.path.exists(networks_file) else {}
 
+    feed_tree = build_feed_tree(networks)
+    feed_tree_sorted = sort_feed_tree(feed_tree)
+    feed_tree_html = build_unicode_tree(feed_tree_sorted, matrix_aliases)
+
     uptime_seconds = int(time.time() - start_time)
     uptime_str = str(datetime.timedelta(seconds=uptime_seconds))
     total_feeds = sum(len(fds) for fds in feed.channel_feeds.values())
     total_channels = len(feed.channel_feeds)
     total_subscriptions = sum(len(subs) for subs in feed.subscriptions.values())
-
-    feed_tree = build_feed_tree(networks)
-    feed_tree_sorted = sort_feed_tree(feed_tree)
-    feed_tree_html = build_unicode_tree(feed_tree_sorted, matrix_aliases)
     errors_str = "\n".join(errors_deque) if errors_deque else "No errors reported."
     current_year = datetime.datetime.now().year
 
@@ -591,4 +661,3 @@ def stats_data():
 if __name__ == '__main__':
     logging.info(f"Dashboard starting on port {dashboard_port}.")
     app.run(host='0.0.0.0', port=dashboard_port, debug=True)
-
