@@ -20,5 +20,8 @@
   "settings": "!settings - List all your personal settings.",
   "admin": "!admin - Display admin information.",
   "stats": "!stats - Display uptime, channel feed counts, and user subscription counts.",
+  "quit": "!quit - Shut down the bot.",
+  "reload": "!reload - Reload the configuration.",
+  "restart": "!restart - Restart the bot.",
   "help": "!help [command] - Show help for commands."
 }
