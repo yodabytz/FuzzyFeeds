@@ -126,7 +126,7 @@ def response_target(actual_channel, integration):
         return actual_channel
     return actual_channel
 
-# Added extra parameter irc_conn to capture the IRC connection that received the command.
+# The extra parameter 'irc_conn' carries the IRC connection that received the command.
 def handle_centralized_command(integration, send_message_fn, send_private_message_fn, send_multiline_message_fn,
                                user, target, message, is_op_flag, irc_conn=None):
     now = time.time()
@@ -161,6 +161,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
     actual_channel = get_actual_channel(target, integration)
     lower_message = message.lower()
 
+    # --- Command Handlers ---
     if lower_message.startswith("!addfeed"):
         parts = message.split(" ", 2)
         if len(parts) < 3:
@@ -321,6 +322,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # --- JOIN COMMAND ---
     elif lower_message.startswith("!join"):
+        # Bot owner or admins only.
         if user.lower() not in [a.lower() for a in admins]:
             send_private_message_fn(user, "Only a bot admin can use !join.")
             return
@@ -347,23 +349,9 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             with open(admin_file, "w") as f:
                 json.dump(admin_mapping, f, indent=4)
             send_message_fn(response_target(actual_channel, integration), f"Joined channel: {join_channel} with admin: {join_admin}")
-            # If on IRC, determine the appropriate connection.
-            if integration == "irc":
-                # Check if the composite key indicates a secondary network.
-                if "|" in key:
-                    pure_channel = get_actual_channel(key, integration)
-                    try:
-                        from main import additional_irc_clients, irc_client
-                    except ImportError:
-                        additional_irc_clients = {}
-                    if pure_channel in additional_irc_clients:
-                        additional_irc_clients[pure_channel].send(f"JOIN {join_channel}\r\n".encode("utf-8"))
-                    else:
-                        if irc_conn:
-                            irc_conn.send(f"JOIN {join_channel}\r\n".encode("utf-8"))
-                else:
-                    if irc_conn:
-                        irc_conn.send(f"JOIN {join_channel}\r\n".encode("utf-8"))
+            # IMPORTANT: Use the current IRC connection (irc_conn) to join the channel.
+            if integration == "irc" and irc_conn:
+                irc_conn.send(f"JOIN {join_channel}\r\n".encode("utf-8"))
         except Exception as e:
             send_message_fn(response_target(actual_channel, integration), f"Error joining channel: {e}")
 
