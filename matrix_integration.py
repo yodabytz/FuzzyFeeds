@@ -206,8 +206,6 @@ class MatrixBot:
             logging.info(f"Ignoring old message in {room_key}: {command}")
             return
         logging.info(f"Processing command `{cmd}` from `{sender}` in `{room_key}`.")
-        # Matrix-specific command handling (omitted for brevity)
-        # For other commands, we call the centralized command handler:
         def matrix_send(target, msg):
             asyncio.create_task(self.send_message(target, msg))
         def matrix_send_private(user_, msg):
@@ -275,10 +273,9 @@ def send_matrix_message(room, message):
     if matrix_event_loop is None:
         logging.error("Matrix event loop not available.")
         return
-    # Capture the current running event loop and pass it explicitly.
-    loop = asyncio.get_event_loop()
+    # Schedule the sending coroutine on the global matrix_event_loop.
     matrix_event_loop.call_soon_threadsafe(
-        lambda: asyncio.ensure_future(matrix_bot_instance.send_message(room, message), loop=loop)
+        lambda: asyncio.ensure_future(matrix_bot_instance.send_message(room, message), loop=matrix_event_loop)
     )
 
 # Export send_matrix_message for legacy compatibility.
@@ -287,7 +284,7 @@ send_message = send_matrix_message
 def start_matrix_bot():
     """
     Initializes and runs the Matrix bot.
-    This function is exported so that main.py can import and call it.
+    This function now schedules the bot's run() coroutine and then runs the event loop forever.
     """
     global matrix_bot_instance, matrix_event_loop
     loop = asyncio.new_event_loop()
@@ -303,7 +300,9 @@ def start_matrix_bot():
         if room not in feed.channel_feeds:
             feed.channel_feeds[room] = {}  # Start with empty feeds
     try:
-        loop.run_until_complete(bot_instance.run())
+        # Schedule the bot's run() coroutine and then run the loop forever.
+        loop.create_task(bot_instance.run())
+        loop.run_forever()
     except Exception as e:
         logging.error(f"Matrix integration error: {e}")
 
