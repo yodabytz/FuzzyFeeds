@@ -591,3 +591,4 @@ def stats_data():
 if __name__ == '__main__':
     logging.info(f"Dashboard starting on port {dashboard_port}.")
     app.run(host='0.0.0.0', port=dashboard_port, debug=True)
+
