@@ -5,15 +5,7 @@ import time
 import asyncio
 from flask import Flask
 
-from irc import (
-    connect_and_register,
-    send_message,
-    send_private_message,
-    send_multiline_message,
-    set_irc_client,
-    connect_to_network,
-    irc_command_parser
-)
+from irc import connect_and_register, send_message, send_private_message, send_multiline_message, set_irc_client, connect_to_network, irc_command_parser
 from matrix_integration import start_matrix_bot, disable_feed_loop as disable_matrix_feed_loop
 from discord_integration import bot, run_discord_bot, disable_feed_loop as disable_discord_feed_loop
 from dashboard import app  # Flask app from dashboard.py
@@ -25,8 +17,9 @@ import os
 
 logging.basicConfig(level=logging.INFO)
 
+# Global primary IRC client and dictionary for additional IRC networks.
 irc_client = None
-additional_irc_clients = {}  # Dictionary to hold additional network clients
+additional_irc_clients = {}  # Keys are pure IRC channel names from networks.json
 
 def start_dashboard():
     logging.info(f"Starting Dashboard server on port {dashboard_port}...")
@@ -69,7 +62,7 @@ def start_additional_irc_networks():
             if client:
                 additional_irc_clients[ch] = client
                 logging.info(f"Additional IRC network connected for channel {ch} on {srv}:{prt}")
-                # Start a command parser thread for this additional connection.
+                # Start the command parser thread for this additional connection.
                 threading.Thread(target=irc_command_parser_wrapper, args=(client,), daemon=True).start()
             else:
                 logging.error(f"Failed to connect to additional IRC network for channel {ch} on {srv}:{prt}")
@@ -84,17 +77,28 @@ def start_discord():
 
 def start_centralized_polling():
     def irc_send(channel, message):
-        global irc_client
-        if irc_client:
-            send_message(irc_client, channel, message)
+        global irc_client, additional_irc_clients
+        # If the channel key contains a "|" it indicates a secondary IRC network.
+        if "|" in channel:
+            parts = channel.split("|", 1)
+            if len(parts) == 2:
+                pure_channel = parts[1]
+                if pure_channel in additional_irc_clients:
+                    send_message(additional_irc_clients[pure_channel], pure_channel, message)
+                else:
+                    logging.error(f"Secondary IRC connection for {pure_channel} not found.")
+            else:
+                logging.error("Composite IRC channel key malformed: " + channel)
         else:
-            logging.error("IRC client not connected; cannot send message.")
+            if irc_client:
+                send_message(irc_client, channel, message)
+            else:
+                logging.error("Primary IRC client not connected; cannot send message.")
 
     def matrix_send(room, message):
         try:
-            # Import the matrix event loop from matrix_integration (set during bot startup)
-            from matrix_integration import matrix_event_loop, send_message as send_matrix_message
-            asyncio.run_coroutine_threadsafe(send_matrix_message(room, message), matrix_event_loop)
+            from matrix_integration import send_message as send_matrix_message
+            asyncio.run_coroutine_threadsafe(send_matrix_message(room, message), asyncio.get_event_loop())
         except Exception as e:
             logging.error(f"Error sending Matrix message: {e}")
 
