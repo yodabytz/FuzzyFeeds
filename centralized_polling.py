@@ -34,11 +34,13 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
     feed.load_feeds()
     logging.info(f"Loaded channels: {list(feed.channel_feeds.keys())}")
 
-    # Ensure each channel has a last_check_time. If missing, set it to script start time.
+    # Ensure each channel has a last_check_time.
+    # --- MODIFIED: Set default last_check_time to 0 so that any feed entry is considered new ---
     if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
         feed.last_check_times = {}
     for chan in feed.channel_feeds.keys():
-        feed.last_check_times.setdefault(chan, script_start_time)
+        feed.last_check_times.setdefault(chan, 0)
+    # --- End Modification ---
 
     while True:
         current_time = time.time()
@@ -161,4 +163,3 @@ if __name__ == "__main__":
         print(f"[Discord] Channel {channel}: {message}")
 
     start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=300)
-
