@@ -35,7 +35,7 @@ def process_message_queue(irc):
 def irc_command_parser(irc_client):
     """
     Reads data from the IRC socket, splits incoming messages on "\r\n",
-    and dispatches commands that start with '!' or '@fuzzyfeeds' using the centralized command handler.
+    and dispatches commands that start with '!' using the centralized command handler.
     Uses default arguments in lambdas to capture the local 'irc_client' properly.
     """
     buffer = ""
@@ -63,36 +63,26 @@ def irc_command_parser(irc_client):
                             if len(header_parts) < 2:
                                 continue
                             target = header_parts[1]
-                            # Extract nick (ignoring hostmask for brevity)
+                            # Simple extraction of nick (ignoring hostmask for brevity)
                             if "!" in prefix and "@" in prefix:
                                 nick = prefix.split("!")[0]
                             else:
                                 nick = prefix
-                            
-                            # Check for command prefixes: "!" or "@fuzzyfeeds"
-                            command_text = message_text
                             if message_text.startswith("!"):
-                                pass  # leave as is
-                            elif message_text.lower().startswith("@fuzzyfeeds"):
-                                command_text = message_text[len("@fuzzyfeeds"):].strip()
-                            else:
-                                # Not our command, ignore.
-                                continue
-                            
-                            # Import command handler when needed.
-                            from commands import handle_centralized_command
-                            from config import admin, ops, admins
-                            is_op_flag = (nick.lower() == admin.lower() or 
-                                          nick.lower() in [x.lower() for x in ops] or 
-                                          nick.lower() in [x.lower() for x in admins])
-                            handle_centralized_command(
-                                "irc",
-                                lambda tgt, msg, client=irc_client: send_message(client, tgt, msg),
-                                lambda usr, msg, client=irc_client: send_private_message(client, usr, msg),
-                                lambda tgt, msg, client=irc_client: send_multiline_message(client, tgt, msg),
-                                nick, target, command_text, is_op_flag,
-                                irc_conn=irc_client  # Pass the current connection
-                            )
+                                # Import command handler when needed
+                                from commands import handle_centralized_command
+                                from config import admin, ops, admins
+                                is_op_flag = (nick.lower() == admin.lower() or 
+                                              nick.lower() in [x.lower() for x in ops] or 
+                                              nick.lower() in [x.lower() for x in admins])
+                                # Use default argument in lambda to capture the local irc_client
+                                handle_centralized_command(
+                                    "irc",
+                                    lambda tgt, msg, client=irc_client: send_message(client, tgt, msg),
+                                    lambda usr, msg, client=irc_client: send_private_message(client, usr, msg),
+                                    lambda tgt, msg, client=irc_client: send_multiline_message(client, tgt, msg),
+                                    nick, target, message_text, is_op_flag
+                                )
                         except Exception as e:
                             logging.error(f"Error processing IRC message: {e}")
         except Exception as e:
@@ -121,14 +111,18 @@ def connect_and_register():
                 irc.send(f"PONG {line.split()[1]}\r\n".encode("utf-8"))
             if " 001 " in line:  # Successful registration message
                 connected = True
+                # Load channels from channels.json.
                 channels_data = load_channels()
                 joined_channels = channels_data.get("irc_channels", [])
+                # Ensure default channels from config are included.
                 for ch in channels:
                     if ch not in joined_channels:
                         joined_channels.append(ch)
+                # Join each channel.
                 for chan in joined_channels:
                     irc.send(f"JOIN {chan}\r\n".encode("utf-8"))
                     send_message(irc, chan, "FuzzyFeeds has joined the channel!")
+    # Start the message sender thread for rate limiting.
     threading.Thread(target=process_message_queue, args=(irc,), daemon=True).start()
     return irc
 
@@ -155,22 +149,33 @@ def connect_to_network(server_name, port_number, use_ssl_flag, channel):
             if " 001 " in line:
                 connected = True
                 break
+    # Join the provided channel.
     irc.send(f"JOIN {channel}\r\n".encode("utf-8"))
     send_message(irc, channel, "FuzzyFeeds has joined the channel!")
+    # Start the message sender thread for rate limiting.
     threading.Thread(target=process_message_queue, args=(irc,), daemon=True).start()
     return irc
 
 def send_message(irc, target, message):
-    msg = f"PRIVMSG {target} :{message}\r\n".encode("utf-8")
-    message_queue.put(msg)
+    """Queue a message to be sent to a target channel/user with rate limiting.
+    If the message contains newline characters, split it into individual lines."""
+    lines = message.splitlines() if "\n" in message else [message]
+    for line in lines:
+        msg = f"PRIVMSG {target} :{line}\r\n".encode("utf-8")
+        message_queue.put(msg)
 
 def send_private_message(irc, user, message):
+    """Queue a private message to a user."""
     send_message(irc, user, message)
 
 def send_multiline_message(irc, user, message):
+    """Splits the message by newline and queues each line as a private message."""
     for line in message.splitlines():
+        if not line.strip():
+            line = " "
         send_private_message(irc, user, line)
 
 if __name__ == '__main__':
+    # For testing purposes only.
     client = connect_and_register()
     threading.Thread(target=irc_command_parser, args=(client,), daemon=True).start()
