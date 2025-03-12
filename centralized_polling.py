@@ -107,14 +107,19 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             continue
 
                         if link:
+                            # Construct the feed message with a newline between title and link.
                             message_text = f"{feed_name}: {title}\nLink: {link}"
 
-                            # For IRC channels: if the channel key is a direct IRC channel or composite key.
+                            # For IRC channels, if the channel key is a direct IRC channel or composite key,
+                            # split the message into individual lines and send each line separately.
                             if chan.startswith("#") or ("|" in chan and chan.split("|", 1)[1].startswith("#")):
-                                # Extract actual channel name if composite
                                 actual_channel = chan if chan.startswith("#") else chan.split("|", 1)[1]
                                 if irc_send:
-                                    irc_send(actual_channel, message_text)
+                                    for line in message_text.split("\n"):
+                                        # If a line is empty, send a space.
+                                        if not line.strip():
+                                            line = " "
+                                        irc_send(actual_channel, line)
                             # Matrix room
                             elif chan.startswith("!"):
                                 if matrix_send:
@@ -124,7 +129,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                                 if discord_send:
                                     discord_send(chan, message_text)
                             else:
-                                # fallback for unknown channel type
+                                # fallback or unknown channel type
                                 if irc_send:
                                     irc_send(chan, message_text)
                                 if matrix_send:
