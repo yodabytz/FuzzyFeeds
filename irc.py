@@ -69,13 +69,11 @@ def irc_command_parser(irc_client):
                             else:
                                 nick = prefix
                             if message_text.startswith("!"):
-                                # Import command handler when needed
                                 from commands import handle_centralized_command
                                 from config import admin, ops, admins
                                 is_op_flag = (nick.lower() == admin.lower() or 
                                               nick.lower() in [x.lower() for x in ops] or 
                                               nick.lower() in [x.lower() for x in admins])
-                                # Use default argument in lambda to capture the local irc_client
                                 handle_centralized_command(
                                     "irc",
                                     lambda tgt, msg, client=irc_client: send_message(client, tgt, msg),
@@ -122,7 +120,6 @@ def connect_and_register():
                 for chan in joined_channels:
                     irc.send(f"JOIN {chan}\r\n".encode("utf-8"))
                     send_message(irc, chan, "FuzzyFeeds has joined the channel!")
-    # Start the message sender thread for rate limiting.
     threading.Thread(target=process_message_queue, args=(irc,), daemon=True).start()
     return irc
 
@@ -149,17 +146,19 @@ def connect_to_network(server_name, port_number, use_ssl_flag, channel):
             if " 001 " in line:
                 connected = True
                 break
-    # Join the provided channel.
     irc.send(f"JOIN {channel}\r\n".encode("utf-8"))
     send_message(irc, channel, "FuzzyFeeds has joined the channel!")
-    # Start the message sender thread for rate limiting.
     threading.Thread(target=process_message_queue, args=(irc,), daemon=True).start()
     return irc
 
 def send_message(irc, target, message):
-    """Queue a message to be sent to a target channel/user with rate limiting.
-    If the message contains newline characters, split it into individual lines."""
-    lines = message.splitlines() if "\n" in message else [message]
+    """
+    Queue a message to be sent to a target channel/user with rate limiting.
+    This function normalizes newline characters (CR, LF, CRLF) to LF,
+    splits the message into individual lines, and queues each line separately.
+    """
+    normalized_message = message.replace("\r\n", "\n").replace("\r", "\n")
+    lines = normalized_message.split("\n")
     for line in lines:
         msg = f"PRIVMSG {target} :{line}\r\n".encode("utf-8")
         message_queue.put(msg)
@@ -169,8 +168,11 @@ def send_private_message(irc, user, message):
     send_message(irc, user, message)
 
 def send_multiline_message(irc, user, message):
-    """Splits the message by newline and queues each line as a private message."""
-    for line in message.splitlines():
+    """
+    Splits the message by normalizing newlines and queues each line as a private message.
+    """
+    normalized_message = message.replace("\r\n", "\n").replace("\r", "\n")
+    for line in normalized_message.split("\n"):
         if not line.strip():
             line = " "
         send_private_message(irc, user, line)
