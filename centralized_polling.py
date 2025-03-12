@@ -34,7 +34,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
     feed.load_feeds()
     logging.info(f"Loaded channels: {list(feed.channel_feeds.keys())}")
 
-    # Ensure each channel has a last_check_time.
+    # Ensure each channel has a last_check_time. If missing, set it to script start time.
     if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
         feed.last_check_times = {}
     for chan in feed.channel_feeds.keys():
@@ -63,6 +63,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                 f"interval {interval}s"
             )
 
+            # Only poll if enough time has elapsed for this channel
             if current_time - last_check >= interval:
                 new_feed_count = 0
 
@@ -80,6 +81,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             logging.info(f"No entries in feed '{feed_name}' ({feed_url}).")
                             continue
 
+                        # Always check only the newest entry
                         entry = entries[0]
                         published_time = None
                         if entry.get("published_parsed"):
@@ -87,6 +89,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                         elif entry.get("updated_parsed"):
                             published_time = time.mktime(entry.updated_parsed)
 
+                        # Skip if this item is older than this channel's last check time
                         if published_time is not None and published_time <= last_check:
                             logging.info(
                                 f"Skipping entry from feed '{feed_name}' "
@@ -98,6 +101,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                         title = entry.title.strip() if entry.get("title") else "No Title"
                         link = entry.link.strip() if entry.get("link") else ""
 
+                        # If we already posted this link in this channel, skip
                         if link and feed.is_link_posted(chan, link):
                             logging.info(f"Channel {chan} already has link: {link}")
                             continue
@@ -107,13 +111,13 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             title_msg = f"{feed_name}: {title}"
                             link_msg = f"Link: {link}"
 
-                            # For IRC channels (regular or composite) send each line separately.
+                            # For IRC channels (or composite keys where the second part starts with '#')
                             if chan.startswith("#") or ("|" in chan and chan.split("|", 1)[1].startswith("#")):
                                 actual_channel = chan if chan.startswith("#") else chan.split("|", 1)[1]
                                 if irc_send:
                                     irc_send(actual_channel, title_msg)
-                                    # Small delay to help queue processing
-                                    time.sleep(0.1)
+                                    # Increase delay to ensure proper processing
+                                    time.sleep(0.5)
                                     irc_send(actual_channel, link_msg)
                             elif chan.startswith("!"):
                                 if matrix_send:
