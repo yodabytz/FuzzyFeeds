@@ -48,46 +48,49 @@ logging.getLogger().addHandler(handler)
 
 logging.basicConfig(level=logging.INFO)
 
-###############################
-# Feed Tree Functions
-###############################
+##########################################
+# Feed Tree Building Functions
+##########################################
 def build_feed_tree(networks):
     """
-    Builds a nested dictionary structure with keys being the server and subkeys the channel.
-    For IRC, if a key contains a pipe ("|"), it is split into server and channel.
-    For channels starting with '#' (and not composite), the default IRC server (config.server) is used.
-    For Matrix and Discord, the keys are handled as before.
+    Build a nested dictionary structure from feed.channel_feeds.
+    For IRC:
+      - If the key contains a pipe ("|"), split into server and channel.
+      - If it starts with '#' (non‑composite), use config.server.
+      - Skip keys exactly equal to "FuzzyFeeds".
+    Matrix keys (starting with '!') and Discord keys (all digits) are handled as before.
     Returns:
       { server: { channel: [ {feed_name, link}, ... ], ... }, ... }
     """
-    feed_tree = {}
-    for channel_key, feeds_dict in feed.channel_feeds.items():
-        # Check if this is a composite key (e.g., "cloaknet.local|#main")
-        if "|" in channel_key:
-            server, channel = channel_key.split("|", 1)
-        elif channel_key.startswith("#"):
-            server = config.server  # Default IRC server
-            channel = channel_key
-        elif channel_key.startswith("!"):
+    tree = {}
+    for key, feeds_dict in feed.channel_feeds.items():
+        if key == "FuzzyFeeds":
+            continue  # Skip unwanted branch.
+        if "|" in key:
+            server, channel = key.split("|", 1)
+        elif key.startswith("#"):
+            server = config.server
+            channel = key
+        elif key.startswith("!"):
             server = "Matrix"
-            channel = channel_key
-        elif channel_key.isdigit():
+            channel = key
+        elif key.isdigit():
             server = "Discord"
-            channel = channel_key
+            channel = key
         else:
             server = ""
-            channel = channel_key
+            channel = key
 
-        if server not in feed_tree:
-            feed_tree[server] = {}
-        if channel not in feed_tree[server]:
-            feed_tree[server][channel] = []
+        if server not in tree:
+            tree[server] = {}
+        if channel not in tree[server]:
+            tree[server][channel] = []
         for feed_name, link in feeds_dict.items():
-            feed_tree[server][channel].append({"feed_name": feed_name, "link": link})
-    return feed_tree
+            tree[server][channel].append({"feed_name": feed_name, "link": link})
+    return tree
 
 def sort_feed_tree(feed_tree):
-    # We sort the top-level keys using a custom order: IRC (order 1), Matrix (order 2), Discord (order 3)
+    # Order: IRC (order 1), Matrix (order 2), Discord (order 3)
     def order_key(server):
         s = server.lower()
         if s == "matrix":
@@ -98,20 +101,100 @@ def sort_feed_tree(feed_tree):
             return (1, s)
     return sorted(feed_tree.items(), key=lambda x: order_key(x[0]))
 
-def build_unicode_tree(feed_tree_sorted, matrix_aliases):
+##########################################
+# Section Tree Builders
+##########################################
+def build_irc_tree(irc_tree):
     """
-    Builds an HTML string displaying the feed tree using Unicode box-drawing characters.
-    IRC feeds are grouped under a top-level "IRC" heading with subheadings per server.
-    Matrix and Discord remain separate.
+    Build a multiline string for the IRC section.
+    Each IRC server is a branch with its channels and feeds shown with continuous vertical connectors.
+    Colors:
+      - Server names: Blue (#007bff)
+      - Channel names: Green (#28a745)
+      - Feed names: Bold Red (#dc3545)
     """
     lines = []
-    indent = "    "  # 4 spaces
+    base_indent = ""
+    server_keys = list(irc_tree.keys())
+    for s_idx, server in enumerate(server_keys):
+        is_last_server = (s_idx == len(server_keys) - 1)
+        server_line = base_indent + ("└── " if is_last_server else "├── ") + f'<span style="color:#007bff; font-weight:bold;">{server}</span>'
+        lines.append(server_line)
+        channels = list(irc_tree[server].keys())
+        for c_idx, channel in enumerate(channels):
+            if channel == "FuzzyFeeds":
+                continue
+            is_last_channel = (c_idx == len(channels) - 1)
+            indent_prefix = "    " if is_last_server else "│   "
+            channel_line = base_indent + indent_prefix + ("└── " if is_last_channel else "├── ") + f'<span style="color:#28a745; font-weight:600;">{channel}</span>'
+            lines.append(channel_line)
+            feeds = irc_tree[server][channel]
+            for f_idx, feed_item in enumerate(feeds):
+                is_last_feed = (f_idx == len(feeds) - 1)
+                feed_indent = "    " if is_last_channel else "│   "
+                # Wrap the feed name in a span with bold red (#dc3545)
+                feed_name = feed_item.get("feed_name", "Unknown")
+                feed_link = feed_item.get("link", "#")
+                feed_line = base_indent + indent_prefix + feed_indent + ("└── " if is_last_feed else "├── ") + f'<span style="color:#dc3545; font-weight:bold;">{feed_name}</span>: {feed_link}'
+                lines.append(feed_line)
+    return "\n".join(lines)
 
-    def connector(text):
-        return f'<span style="color:#d3d3d3;">{text}</span>'
+def build_matrix_tree(matrix_tree, matrix_aliases):
+    """
+    Build a multiline string for the Matrix section.
+    We mimic the IRC tree style by inserting a top-level "Matrix" header so that the vertical connectors appear continuous.
+    Colors:
+      - Top header: Bold dark magenta (#d63384)
+      - Room names: Bold magenta (#d63384)
+      - Feed names: Bright purple (#6610f2)
+    """
+    lines = []
+    # Add top-level Matrix header
+    header_line = "└── " + f'<span style="color:#d63384; font-weight:bold;">Matrix</span>'
+    lines.append(header_line)
+    room_keys = sorted(matrix_tree.keys())
+    n_rooms = len(room_keys)
+    for r_idx, room in enumerate(room_keys):
+        is_last_room = (r_idx == n_rooms - 1)
+        indent = "    "
+        room_connector = "└── " if is_last_room else "├── "
+        room_display = matrix_aliases.get(room, room)
+        room_line = indent + room_connector + f'<span style="color:#d63384; font-weight:bold;">{room_display}</span>'
+        lines.append(room_line)
+        feeds = matrix_tree[room]
+        n_feeds = len(feeds)
+        feed_indent = indent + ("│   " if not is_last_room else "    ")
+        for f_idx, feed_item in enumerate(feeds):
+            is_last_feed = (f_idx == n_feeds - 1)
+            feed_connector = "└── " if is_last_feed else "├── "
+            feed_line = feed_indent + feed_connector + f'<span style="color:#6610f2;">{feed_item.get("feed_name", "Unknown")}</span>: {feed_item.get("link", "#")}'
+            lines.append(feed_line)
+    return "\n".join(lines)
 
-    # Transform the sorted feed_tree into a new structure:
-    # new_tree = { "IRC": { server: { channel: feeds, ... }, ... }, "Matrix": { ... }, "Discord": { ... } }
+def build_discord_tree(discord_tree):
+    """
+    Build a multiline string for the Discord section.
+    Colors:
+      - Channel names: Dark Orange (#fd7e14)
+      - Feed names: Bold Teal (#20c997)
+    """
+    lines = []
+    channel_keys = sorted(discord_tree.keys())
+    for idx, channel in enumerate(channel_keys):
+        is_last = (idx == len(channel_keys) - 1)
+        connector = "└── " if is_last else "├── "
+        lines.append("    " + connector + f'<span style="color:#fd7e14; font-weight:bold;">{channel}</span>')
+        feeds = discord_tree[channel]
+        for f_idx, feed_item in enumerate(feeds):
+            is_last_feed = (f_idx == len(feeds) - 1)
+            feed_connector = "└── " if is_last_feed else "├── "
+            lines.append("        " + feed_connector + f'<span style="color:#20c997; font-weight:bold;">{feed_item.get("feed_name", "Unknown")}</span>: {feed_item.get("link", "#")}')
+    return "\n".join(lines)
+
+def build_unicode_tree(feed_tree_sorted, matrix_aliases):
+    """
+    Build the complete feed tree with sections for IRC, Matrix, and Discord.
+    """
     new_tree = {"IRC": {}, "Matrix": {}, "Discord": {}}
     for server, channels in feed_tree_sorted:
         if server.lower() == "matrix":
@@ -119,71 +202,26 @@ def build_unicode_tree(feed_tree_sorted, matrix_aliases):
         elif server.lower() == "discord":
             new_tree["Discord"].update(channels)
         else:
-            # Group under IRC by server
             if server not in new_tree["IRC"]:
                 new_tree["IRC"][server] = {}
             new_tree["IRC"][server].update(channels)
-
-    # Build IRC section
+    tree_sections = []
     if new_tree["IRC"]:
-        lines.append(f'<span style="color:#007bff; font-weight:bold;">IRC</span>')
-        irc_servers = sorted(new_tree["IRC"].keys())
-        for s_idx, server in enumerate(irc_servers):
-            s_conn = "└── " if s_idx == len(irc_servers)-1 else "├── "
-            s_conn = connector(s_conn)
-            lines.append(indent + s_conn + f'<span style="color:#007bff; font-weight:bold;">{server}</span>')
-            server_channels = new_tree["IRC"][server]
-            channel_keys = sorted(server_channels.keys())
-            for c_idx, channel in enumerate(channel_keys):
-                c_conn = "└── " if c_idx == len(channel_keys)-1 else "├── "
-                c_conn = connector(c_conn)
-                lines.append(indent*2 + c_conn + f'<span style="color:#28a745; font-weight:600;">{channel}</span>')
-                feeds = server_channels[channel]
-                for f_idx, feed_item in enumerate(feeds):
-                    f_conn = "└── " if f_idx == len(feeds)-1 else "├── "
-                    f_conn = connector(f_conn)
-                    lines.append(indent*3 + f_conn + f'{feed_item.get("feed_name", "Unknown")}: <a href="{feed_item.get("link", "#")}" target="_blank">{feed_item.get("link", "#")}</a>')
-        lines.append("<br>")
-
-    # Build Matrix section
+        tree_sections.append("IRC")
+        tree_sections.append(build_irc_tree(new_tree["IRC"]))
     if new_tree["Matrix"]:
-        lines.append(f'<span style="color:#007bff; font-weight:bold;">Matrix</span>')
-        matrix_channels = sorted(new_tree["Matrix"].keys())
-        for idx, channel in enumerate(matrix_channels):
-            m_conn = "└── " if idx == len(matrix_channels)-1 else "├── "
-            m_conn = connector(m_conn)
-            display_channel = matrix_aliases.get(channel, channel)
-            lines.append(indent + m_conn + f'<span style="color:#28a745; font-weight:600;">{display_channel}</span>')
-            feeds = new_tree["Matrix"][channel]
-            for f_idx, feed_item in enumerate(feeds):
-                f_conn = "└── " if f_idx == len(feeds)-1 else "├── "
-                f_conn = connector(f_conn)
-                lines.append(indent*2 + f_conn + f'{feed_item.get("feed_name", "Unknown")}: <a href="{feed_item.get("link", "#")}" target="_blank">{feed_item.get("link", "#")}</a>')
-        lines.append("<br>")
-
-    # Build Discord section
+        tree_sections.append("Matrix")
+        tree_sections.append(build_matrix_tree(new_tree["Matrix"], matrix_aliases))
     if new_tree["Discord"]:
-        lines.append(f'<span style="color:#007bff; font-weight:bold;">Discord</span>')
-        discord_channels = sorted(new_tree["Discord"].keys())
-        for idx, channel in enumerate(discord_channels):
-            d_conn = "└── " if idx == len(discord_channels)-1 else "├── "
-            d_conn = connector(d_conn)
-            lines.append(indent + d_conn + f'<span style="color:#28a745; font-weight:600;">{channel}</span>')
-            feeds = new_tree["Discord"][channel]
-            for f_idx, feed_item in enumerate(feeds):
-                f_conn = "└── " if f_idx == len(feeds)-1 else "├── "
-                f_conn = connector(f_conn)
-                lines.append(indent*2 + f_conn + f'{feed_item.get("feed_name", "Unknown")}: <a href="{feed_item.get("link", "#")}" target="_blank">{feed_item.get("link", "#")}</a>')
-        lines.append("<br>")
+        tree_sections.append("Discord")
+        tree_sections.append(build_discord_tree(new_tree["Discord"]))
+    return "\n".join(tree_sections)
 
-    return "<br>".join(lines)
-
-###############################
-# Create the Flask app
-###############################
+##########################################
+# Flask App and Routes
+##########################################
 app = Flask(__name__)
 
-# Updated template with a "Stats" card showing uptime and server statuses.
 DASHBOARD_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="en">
@@ -508,9 +546,9 @@ DASHBOARD_TEMPLATE = r"""
 </html>
 """
 
-###############################
-# Additional routes
-###############################
+##########################################
+# Additional Routes
+##########################################
 @app.route('/uptime')
 def uptime_route():
     uptime_seconds = int(time.time() - start_time)
@@ -538,7 +576,7 @@ def index():
     networks_file = os.path.join(BASE_DIR, "networks.json")
     networks = load_json(networks_file, default={}) if os.path.exists(networks_file) else {}
 
-    # Ensure that channels from networks.json are present in feed.channel_feeds.
+    # Ensure channels from networks.json are present in feed.channel_feeds.
     for channel in networks.keys():
         if channel not in feed.channel_feeds:
             feed.channel_feeds[channel] = {}
@@ -579,10 +617,31 @@ def index():
     total_channels = len(feed.channel_feeds)
     total_subscriptions = sum(len(subs) for subs in feed.subscriptions.values())
 
-    # Build the feed tree and then sort it.
+    # Build the feed tree and sort it.
     feed_tree = build_feed_tree(networks)
     feed_tree_sorted = sort_feed_tree(feed_tree)
-    feed_tree_html = build_unicode_tree(feed_tree_sorted, matrix_aliases)
+    # Build section trees
+    new_tree = {"IRC": {}, "Matrix": {}, "Discord": {}}
+    for server, channels in feed_tree_sorted:
+        if server.lower() == "matrix":
+            new_tree["Matrix"].update(channels)
+        elif server.lower() == "discord":
+            new_tree["Discord"].update(channels)
+        else:
+            if server not in new_tree["IRC"]:
+                new_tree["IRC"][server] = {}
+            new_tree["IRC"][server].update(channels)
+    tree_sections = []
+    if new_tree["IRC"]:
+        tree_sections.append("IRC")
+        tree_sections.append(build_irc_tree(new_tree["IRC"]))
+    if new_tree["Matrix"]:
+        tree_sections.append("Matrix")
+        tree_sections.append(build_matrix_tree(new_tree["Matrix"], matrix_aliases))
+    if new_tree["Discord"]:
+        tree_sections.append("Discord")
+        tree_sections.append(build_discord_tree(new_tree["Discord"]))
+    feed_tree_html = "\n".join(tree_sections)
 
     errors_str = "\n".join(errors_deque) if errors_deque else "No errors reported."
     current_year = datetime.datetime.now().year
@@ -637,7 +696,28 @@ def stats_data():
 
     feed_tree = build_feed_tree(networks)
     feed_tree_sorted = sort_feed_tree(feed_tree)
-    feed_tree_html = build_unicode_tree(feed_tree_sorted, matrix_aliases)
+    new_tree = {"IRC": {}, "Matrix": {}, "Discord": {}}
+    for server, channels in feed_tree_sorted:
+        if server.lower() == "matrix":
+            new_tree["Matrix"].update(channels)
+        elif server.lower() == "discord":
+            new_tree["Discord"].update(channels)
+        else:
+            if server not in new_tree["IRC"]:
+                new_tree["IRC"][server] = {}
+            new_tree["IRC"][server].update(channels)
+    tree_sections = []
+    if new_tree["IRC"]:
+        tree_sections.append("IRC")
+        tree_sections.append(build_irc_tree(new_tree["IRC"]))
+    if new_tree["Matrix"]:
+        tree_sections.append("Matrix")
+        tree_sections.append(build_matrix_tree(new_tree["Matrix"], matrix_aliases))
+    if new_tree["Discord"]:
+        tree_sections.append("Discord")
+        tree_sections.append(build_discord_tree(new_tree["Discord"]))
+    feed_tree_html = "\n".join(tree_sections)
+
     errors_str = "\n".join(errors_deque) if errors_deque else "No errors reported."
     current_year = datetime.datetime.now().year
 
