@@ -34,7 +34,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
     feed.load_feeds()
     logging.info(f"Loaded channels: {list(feed.channel_feeds.keys())}")
 
-    # Ensure each channel has a last_check_time. If missing, set it to script start time.
+    # Ensure each channel has a last_check_time.
     if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
         feed.last_check_times = {}
     for chan in feed.channel_feeds.keys():
@@ -63,7 +63,6 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                 f"interval {interval}s"
             )
 
-            # Only poll if enough time has elapsed for this channel
             if current_time - last_check >= interval:
                 new_feed_count = 0
 
@@ -81,7 +80,6 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             logging.info(f"No entries in feed '{feed_name}' ({feed_url}).")
                             continue
 
-                        # Always check only the newest entry
                         entry = entries[0]
                         published_time = None
                         if entry.get("published_parsed"):
@@ -89,7 +87,6 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                         elif entry.get("updated_parsed"):
                             published_time = time.mktime(entry.updated_parsed)
 
-                        # Skip if this item is older than this channel's last check time
                         if published_time is not None and published_time <= last_check:
                             logging.info(
                                 f"Skipping entry from feed '{feed_name}' "
@@ -101,38 +98,36 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                         title = entry.title.strip() if entry.get("title") else "No Title"
                         link = entry.link.strip() if entry.get("link") else ""
 
-                        # If we already posted this link in this channel, skip
                         if link and feed.is_link_posted(chan, link):
                             logging.info(f"Channel {chan} already has link: {link}")
                             continue
 
                         if link:
-                            # Construct message with a newline between feed title and link.
-                            message_text = f"{feed_name}: {title}\nLink: {link}"
+                            # Build separate messages for title and link.
+                            title_msg = f"{feed_name}: {title}"
+                            link_msg = f"Link: {link}"
 
-                            # For IRC channels (regular or composite), extract actual channel.
+                            # For IRC channels (regular or composite) send each line separately.
                             if chan.startswith("#") or ("|" in chan and chan.split("|", 1)[1].startswith("#")):
                                 actual_channel = chan if chan.startswith("#") else chan.split("|", 1)[1]
                                 if irc_send:
-                                    # Use splitlines() to handle any newline format.
-                                    for line in message_text.splitlines():
-                                        if not line.strip():
-                                            line = " "
-                                        irc_send(actual_channel, line)
+                                    irc_send(actual_channel, title_msg)
+                                    # Small delay to help queue processing
+                                    time.sleep(0.1)
+                                    irc_send(actual_channel, link_msg)
                             elif chan.startswith("!"):
                                 if matrix_send:
-                                    matrix_send(chan, message_text)
+                                    matrix_send(chan, f"{title_msg}\n{link_msg}")
                             elif chan.isdigit():
                                 if discord_send:
-                                    discord_send(chan, message_text)
+                                    discord_send(chan, f"{title_msg}\n{link_msg}")
                             else:
-                                # fallback for unknown channel type
                                 if irc_send:
-                                    irc_send(chan, message_text)
+                                    irc_send(chan, f"{title_msg}\n{link_msg}")
                                 if matrix_send:
-                                    matrix_send(chan, message_text)
+                                    matrix_send(chan, f"{title_msg}\n{link_msg}")
                                 if discord_send:
-                                    discord_send(chan, message_text)
+                                    discord_send(chan, f"{title_msg}\n{link_msg}")
 
                             feed.mark_link_posted(chan, link)
                             new_feed_count += 1
