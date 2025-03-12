@@ -106,14 +106,15 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             logging.info(f"Channel {chan} already has link: {link}")
                             continue
 
-                        # Otherwise, post it in a multi-line message, then mark as posted
                         if link:
                             message_text = f"{feed_name}: {title}\nLink: {link}"
 
-                            # For IRC channels, now call the callback once (send the full message).
-                            if chan.startswith("#"):
+                            # For IRC channels: if the channel key is a direct IRC channel or composite key.
+                            if chan.startswith("#") or ("|" in chan and chan.split("|", 1)[1].startswith("#")):
+                                # Extract actual channel name if composite
+                                actual_channel = chan if chan.startswith("#") else chan.split("|", 1)[1]
                                 if irc_send:
-                                    irc_send(chan, message_text)
+                                    irc_send(actual_channel, message_text)
                             # Matrix room
                             elif chan.startswith("!"):
                                 if matrix_send:
@@ -123,7 +124,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                                 if discord_send:
                                     discord_send(chan, message_text)
                             else:
-                                # fallback or unknown channel type
+                                # fallback for unknown channel type
                                 if irc_send:
                                     irc_send(chan, message_text)
                                 if matrix_send:
@@ -137,7 +138,6 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                     except Exception as e:
                         logging.error(f"Error checking feed '{feed_name}' at {feed_url}: {e}")
 
-                # Done checking all feeds in this channel
                 if new_feed_count > 0:
                     logging.info(f"Posted {new_feed_count} new feeds in {chan}.")
                 else:
