@@ -107,39 +107,29 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             continue
 
                         if link:
-                            # Construct the feed message with newline between title and link.
-                            message_text = f"{feed_name}: {title}\nLink: {link}"
-
-                            # Determine the type of channel:
-                            if chan.startswith("#"):
-                                # Regular IRC channel
-                                actual_channel = chan
-                            elif "|" in chan:
-                                parts = chan.split("|", 1)
-                                # If second part starts with '#', treat as IRC channel
-                                actual_channel = parts[1] if parts[1].startswith("#") else chan
-                            else:
-                                actual_channel = None
-
-                            if actual_channel:
-                                # Split the message into lines and send each one separately.
-                                for line in message_text.split("\n"):
-                                    if not line.strip():
-                                        line = " "
-                                    irc_send(actual_channel, line)
+                            # Instead of one multi-line message, send two separate IRC messages.
+                            # For IRC channels (direct or composite), extract the actual channel name.
+                            if chan.startswith("#") or ("|" in chan and chan.split("|", 1)[1].startswith("#")):
+                                actual_channel = chan if chan.startswith("#") else chan.split("|", 1)[1]
+                                if irc_send:
+                                    irc_send(actual_channel, f"{feed_name}: {title}")
+                                    irc_send(actual_channel, f"Link: {link}")
+                            # Matrix room
                             elif chan.startswith("!"):
                                 if matrix_send:
-                                    matrix_send(chan, message_text)
+                                    matrix_send(chan, f"{feed_name}: {title}\nLink: {link}")
+                            # Discord channel (channel ID = digits)
                             elif chan.isdigit():
                                 if discord_send:
-                                    discord_send(chan, message_text)
+                                    discord_send(chan, f"{feed_name}: {title}\nLink: {link}")
                             else:
+                                # fallback or unknown channel type
                                 if irc_send:
-                                    irc_send(chan, message_text)
+                                    irc_send(chan, f"{feed_name}: {title}\nLink: {link}")
                                 if matrix_send:
-                                    matrix_send(chan, message_text)
+                                    matrix_send(chan, f"{feed_name}: {title}\nLink: {link}")
                                 if discord_send:
-                                    discord_send(chan, message_text)
+                                    discord_send(chan, f"{feed_name}: {title}\nLink: {link}")
 
                             feed.mark_link_posted(chan, link)
                             new_feed_count += 1
