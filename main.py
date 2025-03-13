@@ -5,12 +5,12 @@ import time
 import asyncio
 from flask import Flask
 
-from irc import (connect_and_register, send_message, send_private_message, 
+from irc import (connect_and_register, send_message, send_private_message,
                  send_multiline_message, set_irc_client, connect_to_network, irc_command_parser)
 from matrix_integration import start_matrix_bot, disable_feed_loop as disable_matrix_feed_loop
 from discord_integration import bot, run_discord_bot, disable_feed_loop as disable_discord_feed_loop
 from dashboard import app  # Flask app from dashboard.py
-from config import enable_discord, admin, ops, admins, dashboard_port
+from config import enable_discord, admin, ops, admins, dashboard_port, channels as config_channels, server as default_irc_server
 import commands
 import centralized_polling
 from persistence import load_json
@@ -18,10 +18,10 @@ import os
 
 logging.basicConfig(level=logging.INFO)
 
-# Global primary IRC connection and dictionary for all IRC connections.
+# Global primary IRC connection.
 irc_client = None
-additional_irc_clients = {}  # For secondary connections.
-irc_connections = {}        # Mapping: composite channel key -> IRC socket.
+# Global dictionary for secondary IRC connections, keyed by composite key "server|channel"
+irc_secondary = {}
 
 def start_dashboard():
     logging.info(f"Starting Dashboard server on port {dashboard_port}...")
@@ -35,16 +35,19 @@ def irc_command_parser_wrapper(irc_conn):
         logging.error(f"Error in command parser thread: {e}")
 
 def start_irc():
-    global irc_client, irc_connections
+    global irc_client
     while True:
         try:
             logging.info("Connecting to primary IRC...")
             irc_client = connect_and_register()
             set_irc_client(irc_client)
-            # For primary IRC, store each default channel (from config) with its key.
-            from config import channels as config_channels
+            # Primary IRC channels (from config) use composite keys formed as "default_server|channel"
             for ch in config_channels:
-                irc_connections[ch] = irc_client
+                composite = f"{default_irc_server}|{ch}"
+                # For primary, we store the same connection for every composite key.
+                # (This is our working behavior from before.)
+                # If a feed key is exactly like "default_server|#main", then we can use the primary connection.
+                irc_secondary[composite] = irc_client
             irc_command_parser(irc_client)
         except Exception as e:
             logging.error(f"Primary IRC error: {e}")
@@ -54,23 +57,24 @@ def start_irc():
 def start_additional_irc_networks():
     """
     Reads networks.json and connects to each additional IRC network.
-    For each connection, stores the composite key (e.g. "irc.collectiveirc.net|#buzzard")
-    into our global dictionary so that the polling module can send messages via the proper connection.
+    For each additional connection, computes a composite key "server|channel" and stores it
+    in the global dictionary irc_secondary so that feed messages are sent on the correct connection.
     """
+    global irc_secondary
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     networks_file = os.path.join(BASE_DIR, "networks.json")
     networks = load_json(networks_file, default={})
-    for channel, net_info in networks.items():
-        server = net_info.get("server")
+    for channel_key, net_info in networks.items():
+        # channel_key from networks.json is typically the channel on that network, e.g. "#buzzard"
+        server_name = net_info.get("server")
         port = net_info.get("port")
         ssl_flag = net_info.get("ssl", False)
-        def connect_network(ch=channel, srv=server, prt=port, sslf=ssl_flag):
+        def connect_network(ch=channel_key, srv=server_name, prt=port, sslf=ssl_flag):
             client = connect_to_network(srv, prt, sslf, ch)
             if client:
-                additional_irc_clients[ch] = client
-                # Store in our global dictionary using the composite key (which is the channel key itself)
-                irc_connections[ch] = client
-                logging.info(f"Additional IRC network connected for channel {ch} on {srv}:{prt}")
+                composite = f"{srv}|{ch}"
+                irc_secondary[composite] = client
+                logging.info(f"Additional IRC network connected for channel {ch} on {srv}:{prt} (composite key: {composite})")
                 threading.Thread(target=irc_command_parser_wrapper, args=(client,), daemon=True).start()
             else:
                 logging.error(f"Failed to connect to additional IRC network for channel {ch} on {srv}:{prt}")
@@ -85,16 +89,16 @@ def start_discord():
 
 def start_centralized_polling():
     def irc_send(channel, message):
-        # If the channel key is composite (contains "|"), use the corresponding IRC connection.
+        # If the channel key contains a pipe, assume it's a composite key for a secondary IRC connection.
         if "|" in channel:
             parts = channel.split("|", 1)
-            composite_key = channel  # The composite key is exactly as stored in feed.channel_feeds.
+            composite_key = channel  # Feed data uses composite keys in the format "server|channel"
             actual_channel = parts[1] if parts[1].startswith("#") else channel
-            conn = irc_connections.get(composite_key)
+            conn = irc_secondary.get(composite_key)
             if conn:
                 send_message(conn, actual_channel, message)
             else:
-                logging.error(f"No secondary IRC connection found for composite key: {channel}")
+                logging.error(f"No IRC connection found for composite key: {channel}")
         else:
             # Otherwise, use the primary IRC connection.
             global irc_client
