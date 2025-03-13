@@ -8,12 +8,16 @@ intervals, checks each feed for new entries. When a new entry is found, it uses 
 provided callback functions to send messages to the appropriate integration channel/room.
 
 Usage:
-    Import and start the polling loop by passing in three callback functions:
-      - irc_send(channel, message): for sending messages via IRC.
-      - matrix_send(room, message): for sending messages to a Matrix room.
-      - discord_send(channel, message): for sending messages to a Discord channel.
-      
-    Optionally, set the poll_interval (default 300 seconds) between polling rounds.
+  Import and start the polling loop by passing in three callback functions:
+    - irc_send(channel, message): for sending messages via IRC.
+    - matrix_send(room, message): for sending messages to a Matrix room.
+    - discord_send(channel, message): for sending messages to a Discord channel.
+  Optionally, you may supply a fourth parameter, irc_multiline_send, which—if provided—
+  will be used to send the complete multi‑line message to IRC channels (this replicates the
+  working behavior from your old IRC module). If omitted, the message will be split by newline
+  and each line will be sent individually.
+  
+  Optionally, set the poll_interval (default 300 seconds) between polling rounds.
 """
 
 import time
@@ -29,7 +33,7 @@ logging.basicConfig(level=logging.INFO)
 # Global variable: used for initial setup of last check times.
 script_start_time = time.time()
 
-def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
+def start_polling(irc_send, matrix_send, discord_send, poll_interval=300, irc_multiline_send=None):
     logging.info("Centralized polling started.")
     feed.load_feeds()
     logging.info(f"Loaded channels: {list(feed.channel_feeds.keys())}")
@@ -63,7 +67,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                 f"interval {interval}s"
             )
 
-            # Only poll if enough time has elapsed for this channel
+            # Only poll if enough time has elapsed for this channel.
             if current_time - last_check >= interval:
                 new_feed_count = 0
 
@@ -81,7 +85,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             logging.info(f"No entries in feed '{feed_name}' ({feed_url}).")
                             continue
 
-                        # Always check only the newest entry
+                        # Always check only the newest entry.
                         entry = entries[0]
                         published_time = None
                         if entry.get("published_parsed"):
@@ -89,7 +93,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                         elif entry.get("updated_parsed"):
                             published_time = time.mktime(entry.updated_parsed)
 
-                        # Skip if this item is older than this channel's last check time
+                        # Skip if this item is older than this channel's last check time.
                         if published_time is not None and published_time <= last_check:
                             logging.info(
                                 f"Skipping entry from feed '{feed_name}' "
@@ -101,37 +105,40 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                         title = entry.title.strip() if entry.get("title") else "No Title"
                         link = entry.link.strip() if entry.get("link") else ""
 
-                        # If we already posted this link in this channel, skip
+                        # If we already posted this link in this channel, skip.
                         if link and feed.is_link_posted(chan, link):
                             logging.info(f"Channel {chan} already has link: {link}")
                             continue
 
                         if link:
-                            # Build separate messages for title and link.
-                            title_msg = f"{feed_name}: {title}"
-                            link_msg = f"Link: {link}"
+                            # Build the complete feed message.
+                            message_text = f"{feed_name}: {title}\nLink: {link}"
 
-                            # For IRC channels (or composite keys where the second part starts with '#')
+                            # Determine if this is an IRC channel:
                             if chan.startswith("#") or ("|" in chan and chan.split("|", 1)[1].startswith("#")):
                                 actual_channel = chan if chan.startswith("#") else chan.split("|", 1)[1]
-                                if irc_send:
-                                    irc_send(actual_channel, title_msg)
-                                    # Increase delay to ensure proper processing
-                                    time.sleep(0.5)
-                                    irc_send(actual_channel, link_msg)
+                                if irc_multiline_send:
+                                    # Use the provided working multi‑line callback.
+                                    irc_multiline_send(actual_channel, message_text)
+                                else:
+                                    # Fall back to splitting the message into lines.
+                                    for line in message_text.splitlines():
+                                        if not line.strip():
+                                            line = " "
+                                        irc_send(actual_channel, line)
                             elif chan.startswith("!"):
                                 if matrix_send:
-                                    matrix_send(chan, f"{title_msg}\n{link_msg}")
+                                    matrix_send(chan, message_text)
                             elif chan.isdigit():
                                 if discord_send:
-                                    discord_send(chan, f"{title_msg}\n{link_msg}")
+                                    discord_send(chan, message_text)
                             else:
                                 if irc_send:
-                                    irc_send(chan, f"{title_msg}\n{link_msg}")
+                                    irc_send(chan, message_text)
                                 if matrix_send:
-                                    matrix_send(chan, f"{title_msg}\n{link_msg}")
+                                    matrix_send(chan, message_text)
                                 if discord_send:
-                                    discord_send(chan, f"{title_msg}\n{link_msg}")
+                                    discord_send(chan, message_text)
 
                             feed.mark_link_posted(chan, link)
                             new_feed_count += 1
@@ -160,4 +167,13 @@ if __name__ == "__main__":
     def test_discord_send(channel, message):
         print(f"[Discord] Channel {channel}: {message}")
 
-    start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=300)
+    # For testing, you can supply a test multiline callback.
+    def test_irc_multiline_send(channel, message):
+        # Mimic the old working behavior: split by newline and send each line.
+        for line in message.splitlines():
+            if not line.strip():
+                line = " "
+            print(f"[IRC (multiline)] Channel {channel}: {line}")
+
+    start_polling(test_irc_send, test_matrix_send, test_discord_send,
+                  poll_interval=300, irc_multiline_send=test_irc_multiline_send)
