@@ -35,20 +35,22 @@ logging.basicConfig(level=logging.INFO)
 # Global primary IRC connection.
 irc_client = None
 # Global dictionary for secondary IRC connections (and also primary stored as composite keys)
-# Composite keys have the format "server|channel".
+# Composite keys have the format "server|channel"
 irc_secondary = {}
 
-# --- Helper function for multi-line sending ---
+# -------------------------------------------------------------------
+# Helper function to send multi-line messages via IRC.
 def my_send_multiline(irc_conn, target, message):
     """
-    Splits the provided message (which may contain newline characters)
-    into separate lines and sends each line using send_message().
+    Splits the given message (which may include newlines) into separate lines.
+    For each line (replacing an empty line with a space), calls send_message(irc_conn, target, line).
+    This mimics the working behavior from your old IRC module.
     """
     for line in message.splitlines():
         if not line.strip():
-            line = " "  # Ensure blank lines are sent as a space.
+            line = " "  # Ensure blank lines are not dropped.
         send_message(irc_conn, target, line)
-# --- End helper function ---
+# -------------------------------------------------------------------
 
 def start_dashboard():
     logging.info(f"Starting Dashboard server on port {dashboard_port}...")
@@ -68,7 +70,7 @@ def start_irc():
             logging.info("Connecting to primary IRC...")
             irc_client = connect_and_register()
             set_irc_client(irc_client)
-            # For primary IRC, store composite keys as "default_irc_server|channel"
+            # For primary IRC, build composite keys as "default_irc_server|channel"
             for ch in config_channels:
                 composite = f"{default_irc_server}|{ch}"
                 irc_secondary[composite] = irc_client
@@ -97,7 +99,7 @@ def start_additional_irc_networks():
             if client:
                 composite = f"{srv}|{ch}"
                 irc_secondary[composite] = client
-                logging.info(f"Additional IRC network connected for channel {ch} on {srv}:{prt} (composite key: {composite})")
+                logging.info(f"Additional IRC network connected for channel {ch} on {srv}:{prt} (key: {composite})")
                 threading.Thread(target=irc_command_parser_wrapper, args=(client,), daemon=True).start()
             else:
                 logging.error(f"Failed to connect to additional IRC network for channel {ch} on {srv}:{prt}")
@@ -110,27 +112,31 @@ def start_discord():
     if enable_discord:
         run_discord_bot()
 
-def start_centralized_polling():
-    def irc_send(channel, message):
-        # If the channel key contains a pipe ("|"), it's for a secondary IRC connection.
-        if "|" in channel:
-            parts = channel.split("|", 1)
-            composite_key = channel  # Expected format: "server|channel"
-            actual_channel = parts[1] if parts[1].startswith("#") else channel
-            conn = irc_secondary.get(composite_key)
-            if conn:
-                # Use our helper function to send the message on multiple lines.
-                my_send_multiline(conn, actual_channel, message)
-            else:
-                logging.error(f"No secondary IRC connection found for composite key: {channel}")
+# -------------------------------------------------------------------
+# Updated IRC send callback for polling.
+# This function uses our helper function my_send_multiline instead of trying to call
+# any method on the socket object.
+def irc_send_callback(channel, message):
+    # Check if the channel key is composite (contains a pipe).
+    if "|" in channel:
+        parts = channel.split("|", 1)
+        composite_key = channel  # Expected format: "server|channel"
+        actual_channel = parts[1] if parts[1].startswith("#") else channel
+        conn = irc_secondary.get(composite_key)
+        if conn:
+            my_send_multiline(conn, actual_channel, message)
         else:
-            # Otherwise, use the primary IRC connection.
-            global irc_client
-            if irc_client:
-                my_send_multiline(irc_client, channel, message)
-            else:
-                logging.error("Primary IRC client not connected; cannot send message.")
+            logging.error(f"No secondary IRC connection found for composite key: {channel}")
+    else:
+        # Otherwise, use the primary IRC connection.
+        global irc_client
+        if irc_client:
+            my_send_multiline(irc_client, channel, message)
+        else:
+            logging.error("Primary IRC client not connected; cannot send message.")
+# -------------------------------------------------------------------
 
+def start_centralized_polling():
     def matrix_send(room, message):
         try:
             from matrix_integration import send_message as send_matrix_message
@@ -146,13 +152,13 @@ def start_centralized_polling():
             logging.error(f"Error sending Discord message: {e}")
 
     threading.Thread(target=lambda: centralized_polling.start_polling(
-        irc_send, matrix_send, discord_send, poll_interval=300
+        irc_send_callback, matrix_send, discord_send, poll_interval=300
     ), daemon=True).start()
 
 if __name__ == "__main__":
     disable_matrix_feed_loop()
     disable_discord_feed_loop()
-
+    
     dashboard_thread = threading.Thread(target=start_dashboard, daemon=True)
     dashboard_thread.start()
 
