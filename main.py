@@ -5,12 +5,27 @@ import time
 import asyncio
 from flask import Flask
 
-from irc import (connect_and_register, send_message, send_private_message,
-                 send_multiline_message, set_irc_client, connect_to_network, irc_command_parser)
+from irc import (
+    connect_and_register,
+    send_message,
+    send_private_message,
+    send_multiline_message,  # Use this function for multi‑line sending
+    set_irc_client,
+    connect_to_network,
+    irc_command_parser
+)
 from matrix_integration import start_matrix_bot, disable_feed_loop as disable_matrix_feed_loop
 from discord_integration import bot, run_discord_bot, disable_feed_loop as disable_discord_feed_loop
 from dashboard import app  # Flask app from dashboard.py
-from config import enable_discord, admin, ops, admins, dashboard_port, channels as config_channels, server as default_irc_server
+from config import (
+    enable_discord,
+    admin,
+    ops,
+    admins,
+    dashboard_port,
+    channels as config_channels,
+    server as default_irc_server
+)
 import commands
 import centralized_polling
 from persistence import load_json
@@ -20,7 +35,7 @@ logging.basicConfig(level=logging.INFO)
 
 # Global primary IRC connection.
 irc_client = None
-# Global dictionary for secondary IRC connections, keyed by composite key "server|channel"
+# Global dictionary for secondary IRC connections (composite key: "server|channel")
 irc_secondary = {}
 
 def start_dashboard():
@@ -41,12 +56,9 @@ def start_irc():
             logging.info("Connecting to primary IRC...")
             irc_client = connect_and_register()
             set_irc_client(irc_client)
-            # Primary IRC channels (from config) use composite keys formed as "default_server|channel"
+            # For primary IRC, build composite keys using the default IRC server.
             for ch in config_channels:
                 composite = f"{default_irc_server}|{ch}"
-                # For primary, we store the same connection for every composite key.
-                # (This is our working behavior from before.)
-                # If a feed key is exactly like "default_server|#main", then we can use the primary connection.
                 irc_secondary[composite] = irc_client
             irc_command_parser(irc_client)
         except Exception as e:
@@ -57,15 +69,13 @@ def start_irc():
 def start_additional_irc_networks():
     """
     Reads networks.json and connects to each additional IRC network.
-    For each additional connection, computes a composite key "server|channel" and stores it
-    in the global dictionary irc_secondary so that feed messages are sent on the correct connection.
+    For each connection, computes a composite key "server|channel" and stores the connection
+    in the global dictionary irc_secondary.
     """
-    global irc_secondary
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     networks_file = os.path.join(BASE_DIR, "networks.json")
     networks = load_json(networks_file, default={})
     for channel_key, net_info in networks.items():
-        # channel_key from networks.json is typically the channel on that network, e.g. "#buzzard"
         server_name = net_info.get("server")
         port = net_info.get("port")
         ssl_flag = net_info.get("ssl", False)
@@ -74,7 +84,7 @@ def start_additional_irc_networks():
             if client:
                 composite = f"{srv}|{ch}"
                 irc_secondary[composite] = client
-                logging.info(f"Additional IRC network connected for channel {ch} on {srv}:{prt} (composite key: {composite})")
+                logging.info(f"Additional IRC network connected for channel {ch} on {srv}:{prt} (key: {composite})")
                 threading.Thread(target=irc_command_parser_wrapper, args=(client,), daemon=True).start()
             else:
                 logging.error(f"Failed to connect to additional IRC network for channel {ch} on {srv}:{prt}")
@@ -87,26 +97,27 @@ def start_discord():
     if enable_discord:
         run_discord_bot()
 
-def start_centralized_polling():
-    def irc_send(channel, message):
-        # If the channel key contains a pipe, assume it's a composite key for a secondary IRC connection.
-        if "|" in channel:
-            parts = channel.split("|", 1)
-            composite_key = channel  # Feed data uses composite keys in the format "server|channel"
-            actual_channel = parts[1] if parts[1].startswith("#") else channel
-            conn = irc_secondary.get(composite_key)
-            if conn:
-                send_message(conn, actual_channel, message)
-            else:
-                logging.error(f"No IRC connection found for composite key: {channel}")
+# Our updated IRC send callback that uses send_multiline_message
+def irc_send_callback(channel, message):
+    # If the channel key is composite (contains "|"), use the corresponding secondary connection.
+    if "|" in channel:
+        parts = channel.split("|", 1)
+        composite_key = channel  # In our feed data, the key is stored as "server|channel"
+        actual_channel = parts[1] if parts[1].startswith("#") else channel
+        conn = irc_secondary.get(composite_key)
+        if conn:
+            send_multiline_message(conn, actual_channel, message)
         else:
-            # Otherwise, use the primary IRC connection.
-            global irc_client
-            if irc_client:
-                send_message(irc_client, channel, message)
-            else:
-                logging.error("Primary IRC client not connected; cannot send message.")
+            logging.error(f"No secondary IRC connection found for key: {channel}")
+    else:
+        # Otherwise, use the primary IRC connection.
+        global irc_client
+        if irc_client:
+            send_multiline_message(irc_client, channel, message)
+        else:
+            logging.error("Primary IRC client not connected; cannot send message.")
 
+def start_centralized_polling():
     def matrix_send(room, message):
         try:
             from matrix_integration import send_message as send_matrix_message
@@ -121,14 +132,15 @@ def start_centralized_polling():
         except Exception as e:
             logging.error(f"Error sending Discord message: {e}")
 
+    # Use our updated irc_send_callback
     threading.Thread(target=lambda: centralized_polling.start_polling(
-        irc_send, matrix_send, discord_send, poll_interval=300
+        irc_send_callback, matrix_send, discord_send, poll_interval=300
     ), daemon=True).start()
 
 if __name__ == "__main__":
     disable_matrix_feed_loop()
     disable_discord_feed_loop()
-    
+
     dashboard_thread = threading.Thread(target=start_dashboard, daemon=True)
     dashboard_thread.start()
 
