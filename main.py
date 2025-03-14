@@ -9,7 +9,6 @@ from irc import (
     connect_and_register,
     send_message,
     send_private_message,
-    send_multiline_message,  # Module-level function that splits and sends lines
     set_irc_client,
     connect_to_network,
     irc_command_parser
@@ -35,9 +34,21 @@ logging.basicConfig(level=logging.INFO)
 
 # Global primary IRC connection.
 irc_client = None
-# Global dictionary for secondary IRC connections, keyed by composite key "server|channel".
-# For primary channels, we also store the connection using composite keys of the form "default_server|channel".
+# Global dictionary for secondary IRC connections (and also primary stored as composite keys)
+# Composite keys have the format "server|channel".
 irc_secondary = {}
+
+# --- Helper function for multi-line sending ---
+def my_send_multiline(irc_conn, target, message):
+    """
+    Splits the provided message (which may contain newline characters)
+    into separate lines and sends each line using send_message().
+    """
+    for line in message.splitlines():
+        if not line.strip():
+            line = " "  # Ensure blank lines are sent as a space.
+        send_message(irc_conn, target, line)
+# --- End helper function ---
 
 def start_dashboard():
     logging.info(f"Starting Dashboard server on port {dashboard_port}...")
@@ -57,7 +68,7 @@ def start_irc():
             logging.info("Connecting to primary IRC...")
             irc_client = connect_and_register()
             set_irc_client(irc_client)
-            # For primary IRC, build composite keys as "default_server|channel" and store the connection.
+            # For primary IRC, store composite keys as "default_irc_server|channel"
             for ch in config_channels:
                 composite = f"{default_irc_server}|{ch}"
                 irc_secondary[composite] = irc_client
@@ -70,7 +81,8 @@ def start_irc():
 def start_additional_irc_networks():
     """
     Reads networks.json and connects to each additional IRC network.
-    For each connection, computes a composite key "server|channel" and stores it in irc_secondary.
+    For each connection, computes a composite key "server|channel" and stores the connection
+    in the global dictionary irc_secondary.
     """
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     networks_file = os.path.join(BASE_DIR, "networks.json")
@@ -100,23 +112,22 @@ def start_discord():
 
 def start_centralized_polling():
     def irc_send(channel, message):
-        # Check if the channel key contains a pipe ("|").
+        # If the channel key contains a pipe ("|"), it's for a secondary IRC connection.
         if "|" in channel:
-            # For secondary IRC, channel key is composite ("server|channel").
             parts = channel.split("|", 1)
-            composite_key = channel  # This should match how we stored it.
+            composite_key = channel  # Expected format: "server|channel"
             actual_channel = parts[1] if parts[1].startswith("#") else channel
             conn = irc_secondary.get(composite_key)
             if conn:
-                # Use the module-level function send_multiline_message.
-                send_multiline_message(conn, actual_channel, message)
+                # Use our helper function to send the message on multiple lines.
+                my_send_multiline(conn, actual_channel, message)
             else:
                 logging.error(f"No secondary IRC connection found for composite key: {channel}")
         else:
             # Otherwise, use the primary IRC connection.
             global irc_client
             if irc_client:
-                send_multiline_message(irc_client, channel, message)
+                my_send_multiline(irc_client, channel, message)
             else:
                 logging.error("Primary IRC client not connected; cannot send message.")
 
