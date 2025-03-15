@@ -5,7 +5,7 @@ import datetime
 import logging
 import json
 from collections import deque
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template_string, request, Response
 import config  # Needed to reference config.server
 
 from config import start_time, dashboard_port, dashboard_username, dashboard_password
@@ -47,6 +47,29 @@ handler.setLevel(logging.ERROR)
 logging.getLogger().addHandler(handler)
 
 logging.basicConfig(level=logging.INFO)
+
+##########################################
+# Authentication Helpers
+##########################################
+from functools import wraps
+
+def check_auth(username, password):
+    return username == config.dashboard_username and password == config.dashboard_password
+
+def authenticate():
+    return Response(
+        'Could not verify your access level for that URL.\n'
+        'You have to login with proper credentials', 401,
+        {'WWW-Authenticate': 'Basic realm="Login Required"'})
+
+def requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+         auth = request.authorization
+         if not auth or not check_auth(auth.username, auth.password):
+              return authenticate()
+         return f(*args, **kwargs)
+    return decorated
 
 ##########################################
 # Feed Tree Building Functions
@@ -102,71 +125,69 @@ def sort_feed_tree(feed_tree):
     return sorted(feed_tree.items(), key=lambda x: order_key(x[0]))
 
 ##########################################
-# Section Tree Builders
+# Section Tree Builders with Updated Styling
 ##########################################
+# Helper to wrap text (connector dashes and pipes) in light gray.
+def dash(text):
+    return f'<span style="color:#d3d3d3;">{text}</span>'
+
 def build_irc_tree(irc_tree):
     """
     Build a multiline string for the IRC section.
-    Each IRC server is a branch with its channels and feeds shown with continuous vertical connectors.
-    Colors:
-      - Server names: Blue (#007bff)
-      - Channel names: Green (#28a745)
-      - Feed names: Bold Red (#dc3545)
+    Server/channel headings and feed names keep their colors.
+    Only the connector dashes and vertical bars are rendered in light gray.
     """
     lines = []
     base_indent = ""
     server_keys = list(irc_tree.keys())
     for s_idx, server in enumerate(server_keys):
         is_last_server = (s_idx == len(server_keys) - 1)
-        server_line = base_indent + ("└── " if is_last_server else "├── ") + f'<span style="color:#007bff; font-weight:bold;">{server}</span>'
+        connector = dash("└── ") if is_last_server else dash("├── ")
+        server_line = base_indent + connector + f'<span style="color:#d63384; font-weight:bold;">{server}</span>'
         lines.append(server_line)
         channels = list(irc_tree[server].keys())
         for c_idx, channel in enumerate(channels):
             if channel == "FuzzyFeeds":
                 continue
             is_last_channel = (c_idx == len(channels) - 1)
-            indent_prefix = "    " if is_last_server else "│   "
-            channel_line = base_indent + indent_prefix + ("└── " if is_last_channel else "├── ") + f'<span style="color:#28a745; font-weight:600;">{channel}</span>'
+            indent_prefix = "    " if is_last_server else dash("│") + "   "
+            connector = dash("└── ") if is_last_channel else dash("├── ")
+            channel_line = base_indent + indent_prefix + connector + f'<span style="color:#d63384; font-weight:bold;">{channel}</span>'
             lines.append(channel_line)
             feeds = irc_tree[server][channel]
             for f_idx, feed_item in enumerate(feeds):
                 is_last_feed = (f_idx == len(feeds) - 1)
-                feed_indent = "    " if is_last_channel else "│   "
-                # Wrap the feed name in a span with bold red (#dc3545)
+                feed_indent = "    " if is_last_channel else dash("│") + "   "
+                connector = dash("└── ") if is_last_feed else dash("├── ")
                 feed_name = feed_item.get("feed_name", "Unknown")
                 feed_link = feed_item.get("link", "#")
-                feed_line = base_indent + indent_prefix + feed_indent + ("└── " if is_last_feed else "├── ") + f'<span style="color:#dc3545; font-weight:bold;">{feed_name}</span>: {feed_link}'
+                feed_line = base_indent + indent_prefix + feed_indent + connector + f'<span style="color:#6610f2; font-weight:bold;">{feed_name}</span>: {feed_link}'
                 lines.append(feed_line)
     return "\n".join(lines)
 
 def build_matrix_tree(matrix_tree, matrix_aliases):
     """
     Build a multiline string for the Matrix section.
-    We mimic the IRC tree style by inserting a top-level "Matrix" header so that the vertical connectors appear continuous.
-    Colors:
-      - Top header: Bold dark magenta (#d63384)
-      - Room names: Bold magenta (#d63384)
-      - Feed names: Bright purple (#6610f2)
+    Only the line connectors (including vertical bars) are in light gray.
     """
     lines = []
-    # Add top-level Matrix header
-    header_line = "└── " + f'<span style="color:#d63384; font-weight:bold;">Matrix</span>'
+    header_line = dash("└── ") + f'<span style="color:#d63384; font-weight:bold;">Matrix</span>'
     lines.append(header_line)
     room_keys = sorted(matrix_tree.keys())
     n_rooms = len(room_keys)
     for r_idx, room in enumerate(room_keys):
         is_last_room = (r_idx == n_rooms - 1)
         indent = "    "
-        room_connector = "└── " if is_last_room else "├── "
+        room_connector = dash("└── ") if is_last_room else dash("├── ")
         room_display = matrix_aliases.get(room, room)
         room_line = indent + room_connector + f'<span style="color:#d63384; font-weight:bold;">{room_display}</span>'
         lines.append(room_line)
         feeds = matrix_tree[room]
         n_feeds = len(feeds)
-        feed_indent = indent + ("│   " if not is_last_room else "    ")
+        feed_indent = indent + (dash("│") + "   " if not is_last_room else "    ")
         for f_idx, feed_item in enumerate(feeds):
             is_last_feed = (f_idx == n_feeds - 1)
-            feed_connector = "└── " if is_last_feed else "├── "
+            feed_connector = dash("└── ") if is_last_feed else dash("├── ")
             feed_line = feed_indent + feed_connector + f'<span style="color:#6610f2;">{feed_item.get("feed_name", "Unknown")}</span>: {feed_item.get("link", "#")}'
             lines.append(feed_line)
     return "\n".join(lines)
@@ -174,21 +195,19 @@ def build_matrix_tree(matrix_tree, matrix_aliases):
 def build_discord_tree(discord_tree):
     """
     Build a multiline string for the Discord section.
-    Colors:
-      - Channel names: Dark Orange (#fd7e14)
-      - Feed names: Bold Teal (#20c997)
+    Only the connector dashes are in light gray.
     """
     lines = []
     channel_keys = sorted(discord_tree.keys())
     for idx, channel in enumerate(channel_keys):
         is_last = (idx == len(channel_keys) - 1)
-        connector = "└── " if is_last else "├── "
-        lines.append("    " + connector + f'<span style="color:#fd7e14; font-weight:bold;">{channel}</span>')
+        connector = dash("└── ") if is_last else dash("├── ")
+        lines.append("    " + connector + f'<span style="color:#d63384; font-weight:bold;">{channel}</span>')
         feeds = discord_tree[channel]
         for f_idx, feed_item in enumerate(feeds):
             is_last_feed = (f_idx == len(feeds) - 1)
-            feed_connector = "└── " if is_last_feed else "├── "
-            lines.append("        " + feed_connector + f'<span style="color:#20c997; font-weight:bold;">{feed_item.get("feed_name", "Unknown")}</span>: {feed_item.get("link", "#")}')
+            feed_connector = dash("└── ") if is_last_feed else dash("├── ")
+            lines.append("        " + feed_connector + f'<span style="color:#6610f2; font-weight:bold;">{feed_item.get("feed_name", "Unknown")}</span>: {feed_item.get("link", "#")}')
     return "\n".join(lines)
 
 def build_unicode_tree(feed_tree_sorted, matrix_aliases):
@@ -362,14 +381,14 @@ DASHBOARD_TEMPLATE = r"""
                   <table class="table table-sm table-bordered">
                     <thead>
                       <tr>
-                        <th>Channel</th>
+                        <th>Server | Channel</th>
                         <th style="width:80px;"># Feeds</th>
                       </tr>
                     </thead>
                     <tbody id="irc_table_body">
-                      {% for channel, feeds in irc_channels.items() %}
+                      {% for composite, feeds in irc_channels.items() %}
                       <tr>
-                        <td>{{ channel }}</td>
+                        <td>{{ composite|safe }}</td>
                         <td>{{ feeds|length }}</td>
                       </tr>
                       {% endfor %}
@@ -512,8 +531,8 @@ DASHBOARD_TEMPLATE = r"""
           }
 
           let ircTable = "";
-          for (const [ch, fs] of Object.entries(data.irc_channels)) {
-            ircTable += `<tr><td>${ch}</td><td>${Object.keys(fs).length}</td></tr>`;
+          for (const [comp, fs] of Object.entries(data.irc_channels)) {
+            ircTable += `<tr><td>${comp}</td><td>${Object.keys(fs).length}</td></tr>`;
           }
           document.getElementById("irc_table_body").innerHTML = ircTable;
 
@@ -547,9 +566,10 @@ DASHBOARD_TEMPLATE = r"""
 """
 
 ##########################################
-# Additional Routes
+# Additional Routes (All Protected)
 ##########################################
 @app.route('/uptime')
+@requires_auth
 def uptime_route():
     uptime_seconds = int(time.time() - start_time)
     hours = uptime_seconds // 3600
@@ -559,6 +579,7 @@ def uptime_route():
     return jsonify({"uptime": uptime_str, "uptime_seconds": uptime_seconds})
 
 @app.route('/')
+@requires_auth
 def index():
     feed.load_feeds()
     try:
@@ -591,7 +612,6 @@ def index():
             server_name = details.get("server", "")
             if server_name and server_name not in irc_servers:
                 irc_servers.append(server_name)
-
     try:
         from irc import current_irc_client
         irc_status = "green" if current_irc_client is not None else "red"
@@ -646,13 +666,32 @@ def index():
     errors_str = "\n".join(errors_deque) if errors_deque else "No errors reported."
     current_year = datetime.datetime.now().year
 
+    # Build IRC channels dict grouping by server.
+    irc_channels = {}
+    for key, feeds_dict in feed.channel_feeds.items():
+        if key == "FuzzyFeeds":
+            continue
+        if "|" in key:
+            server, channel = key.split("|", 1)
+        elif key.startswith('#'):
+            server = config.server
+            channel = key
+        else:
+            continue
+        composite = f"{server}{dash(' | ')}{channel}"
+        if composite in irc_channels:
+            if isinstance(feeds_dict, dict):
+                irc_channels[composite].update(feeds_dict)
+        else:
+            irc_channels[composite] = feeds_dict.copy() if isinstance(feeds_dict, dict) else feeds_dict
+
     return render_template_string(
         DASHBOARD_TEMPLATE,
         uptime=uptime_str,
         total_feeds=total_feeds,
         total_channels=total_channels,
         total_subscriptions=total_subscriptions,
-        irc_channels={k: v for k, v in feed.channel_feeds.items() if k.startswith('#')},
+        irc_channels=irc_channels,
         matrix_rooms={k: v for k, v in feed.channel_feeds.items() if k.startswith('!')},
         discord_channels={k: v for k, v in feed.channel_feeds.items() if k.isdigit()},
         feed_tree_html=feed_tree_html,
@@ -671,6 +710,7 @@ def index():
     )
 
 @app.route('/stats_data')
+@requires_auth
 def stats_data():
     feed.load_feeds()
     try:
@@ -721,12 +761,31 @@ def stats_data():
     errors_str = "\n".join(errors_deque) if errors_deque else "No errors reported."
     current_year = datetime.datetime.now().year
 
+    # Build IRC channels dict grouping by server.
+    irc_channels = {}
+    for key, feeds_dict in feed.channel_feeds.items():
+        if key == "FuzzyFeeds":
+            continue
+        if "|" in key:
+            server, channel = key.split("|", 1)
+        elif key.startswith('#'):
+            server = config.server
+            channel = key
+        else:
+            continue
+        composite = f"{server}{dash(' | ')}{channel}"
+        if composite in irc_channels:
+            if isinstance(feeds_dict, dict):
+                irc_channels[composite].update(feeds_dict)
+        else:
+            irc_channels[composite] = feeds_dict.copy() if isinstance(feeds_dict, dict) else feeds_dict
+
     return {
         "uptime": uptime_str,
         "total_feeds": total_feeds,
         "total_channels": total_channels,
         "total_subscriptions": total_subscriptions,
-        "irc_channels": {k: v for k, v in feed.channel_feeds.items() if k.startswith('#')},
+        "irc_channels": irc_channels,
         "matrix_rooms": {k: v for k, v in feed.channel_feeds.items() if k.startswith('!')},
         "discord_channels": {k: v for k, v in feed.channel_feeds.items() if k.isdigit()},
         "feed_tree_html": feed_tree_html,
@@ -736,6 +795,11 @@ def stats_data():
         "matrix_aliases": matrix_aliases,
         "subscriptions": feed.subscriptions
     }
+
+# New error handler for 400 errors to suppress "Bad request version" details.
+@app.errorhandler(400)
+def handle_bad_request(error):
+    return "Bad Request", 400
 
 if __name__ == '__main__':
     logging.info(f"Dashboard starting on port {dashboard_port}.")
