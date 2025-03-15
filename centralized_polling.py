@@ -24,12 +24,13 @@ script_start_time = time.time()
 # --- Helper Function for Multi-Line IRC Sending ---
 def my_send_multiline(irc_conn, target, message):
     """
-    Splits the given message (which may contain newline characters) into separate lines.
-    For each line (with empty lines replaced by a space), calls send_message().
-    This mimics the working behavior from your old IRC code.
+    Splits the given message using '\n' as the separator (forcing the split)
+    and sends each non-empty line (empty lines are replaced by a space)
+    using the basic send_message() function.
     """
-    from irc import send_message  # Import the working send_message function from your IRC module.
-    for line in message.splitlines():
+    from irc import send_message  # Use the working module-level send_message
+    lines = message.split('\n')
+    for line in lines:
         if not line.strip():
             line = " "  # Replace empty lines with a space.
         send_message(irc_conn, target, line)
@@ -82,18 +83,22 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                         if published_time is not None and published_time <= last_check:
                             logging.info(f"Skipping entry from feed '{feed_name}' published at {datetime.datetime.fromtimestamp(published_time)} (last check was {datetime.datetime.fromtimestamp(last_check)}).")
                             continue
+                        
+                        # Log title and link for debugging.
+                        logging.info(f"Feed '{feed_name}' data - Title: {entry.get('title')}, Link: {entry.get('link')}")
+                        
                         title = entry.title.strip() if entry.get("title") else "No Title"
                         link = entry.link.strip() if entry.get("link") else ""
                         if link and feed.is_link_posted(chan, link):
                             logging.info(f"Channel {chan} already has link: {link}")
                             continue
                         if link:
-                            # Build separate lines for title and link.
+                            # Build the multi-line message with an explicit '\n'.
                             title_msg = f"{feed_name}: {title}"
                             link_msg = f"Link: {link}"
                             full_msg = title_msg + "\n" + link_msg
                             
-                            # Use the provided IRC callback to send the message.
+                            # Send the message using the provided IRC callback.
                             irc_send(chan, full_msg)
                             
                             feed.mark_link_posted(chan, link)
@@ -110,14 +115,14 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
 
 if __name__ == "__main__":
     def test_irc_send(channel, message):
-        # If the channel is a composite key (contains "|"), use the secondary callback.
+        # For testing, simply print the output.
         if "|" in channel:
             parts = channel.split("|", 1)
             actual_channel = parts[1]
             print(f"[Secondary IRC] Channel {actual_channel}:")
         else:
             print(f"[Primary IRC] Channel {channel}:")
-        for line in message.splitlines():
+        for line in message.split('\n'):
             print(line)
     def test_matrix_send(room, message):
         print(f"[Matrix] Room {room}: {message}")
@@ -125,4 +130,3 @@ if __name__ == "__main__":
         print(f"[Discord] Channel {channel}: {message}")
         
     start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=300)
-    
