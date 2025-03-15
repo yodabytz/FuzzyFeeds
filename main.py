@@ -9,6 +9,7 @@ from irc import (
     connect_and_register,
     send_message,
     send_private_message,
+    send_multiline_message,  # Working function for primary IRC
     set_irc_client,
     connect_to_network,
     irc_command_parser
@@ -34,22 +35,28 @@ logging.basicConfig(level=logging.INFO)
 
 # Global primary IRC connection.
 irc_client = None
-# Global dictionary for secondary IRC connections (and also primary stored as composite keys)
-# Composite keys have the format "server|channel"
+# Global dictionary for secondary IRC connections, keyed by composite key "server|channel".
+# We also store primary connections here (with composite keys) for uniformity.
 irc_secondary = {}
 
 # -------------------------------------------------------------------
-# Helper function to send multi-line messages via IRC.
+# Helper function for multi-line sending on secondary IRC.
 def my_send_multiline(irc_conn, target, message):
     """
-    Splits the given message (which may include newlines) into separate lines.
-    For each line (replacing an empty line with a space), calls send_message(irc_conn, target, line).
-    This mimics the working behavior from your old IRC module.
+    Splits the given message (which may include newline characters) into separate lines.
+    For each line (empty lines replaced by a space), it sends a PRIVMSG directly via the socket.
+    This function is used only for secondary IRC connections.
     """
-    for line in message.splitlines():
+    for line in message.split('\n'):
         if not line.strip():
-            line = " "  # Ensure blank lines are not dropped.
-        send_message(irc_conn, target, line)
+            line = " "  # Replace empty lines with a space.
+        # Build the IRC PRIVMSG command.
+        msg = f"PRIVMSG {target} :{line}\r\n".encode("utf-8")
+        try:
+            irc_conn.send(msg)
+        except Exception as ex:
+            logging.error(f"Error sending message on secondary IRC: {ex}")
+        time.sleep(1)  # Delay between lines
 # -------------------------------------------------------------------
 
 def start_dashboard():
@@ -83,8 +90,7 @@ def start_irc():
 def start_additional_irc_networks():
     """
     Reads networks.json and connects to each additional IRC network.
-    For each connection, computes a composite key "server|channel" and stores the connection
-    in the global dictionary irc_secondary.
+    For each connection, computes a composite key "server|channel" and stores it in irc_secondary.
     """
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     networks_file = os.path.join(BASE_DIR, "networks.json")
@@ -113,14 +119,12 @@ def start_discord():
         run_discord_bot()
 
 # -------------------------------------------------------------------
-# Updated IRC send callback for polling.
-# This function uses our helper function my_send_multiline instead of trying to call
-# any method on the socket object.
+# IRC send callback for centralized polling.
 def irc_send_callback(channel, message):
-    # Check if the channel key is composite (contains a pipe).
+    # If the channel key contains a pipe, it's a secondary IRC connection.
     if "|" in channel:
         parts = channel.split("|", 1)
-        composite_key = channel  # Expected format: "server|channel"
+        composite_key = channel  # Composite key in format "server|channel"
         actual_channel = parts[1] if parts[1].startswith("#") else channel
         conn = irc_secondary.get(composite_key)
         if conn:
@@ -128,10 +132,11 @@ def irc_send_callback(channel, message):
         else:
             logging.error(f"No secondary IRC connection found for composite key: {channel}")
     else:
-        # Otherwise, use the primary IRC connection.
+        # Otherwise, use the primary IRC connection with your existing working function.
         global irc_client
         if irc_client:
-            my_send_multiline(irc_client, channel, message)
+            from irc import send_multiline_message
+            send_multiline_message(irc_client, channel, message)
         else:
             logging.error("Primary IRC client not connected; cannot send message.")
 # -------------------------------------------------------------------
