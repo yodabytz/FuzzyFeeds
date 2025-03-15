@@ -98,8 +98,13 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             link_msg = f"Link: {link}"
                             full_msg = title_msg + "\n" + link_msg
                             
-                            # Send the message using the provided IRC callback.
-                            irc_send(chan, full_msg)
+                            # Determine which callback to use based on the channel key.
+                            if chan.startswith("!"):
+                                matrix_send(chan, full_msg)
+                            elif str(chan).isdigit():
+                                discord_send(chan, full_msg)
+                            else:
+                                irc_send(chan, full_msg)
                             
                             feed.mark_link_posted(chan, link)
                             new_feed_count += 1
