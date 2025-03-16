@@ -40,7 +40,8 @@ irc_client = None
 irc_secondary = {}
 
 # -------------------------------------------------------------------
-# Helper function for multi-line sending on secondary IRC.
+# (Legacy) Helper function for multi-line sending on secondary IRC.
+# Not used after this fix.
 def my_send_multiline(irc_conn, target, message):
     """
     Splits the given message (which may include newline characters) into separate lines.
@@ -121,6 +122,11 @@ def start_discord():
 # -------------------------------------------------------------------
 # IRC send callback for centralized polling.
 def irc_send_callback(channel, message):
+    """
+    This function is called by the centralized polling to send messages.
+    It now uses the standard rate-limited, queued send_multiline_message function from irc.py
+    for both primary and secondary IRC connections.
+    """
     # If the channel key contains a pipe, it's a secondary IRC connection.
     if "|" in channel:
         parts = channel.split("|", 1)
@@ -128,11 +134,12 @@ def irc_send_callback(channel, message):
         actual_channel = parts[1] if parts[1].startswith("#") else channel
         conn = irc_secondary.get(composite_key)
         if conn:
-            my_send_multiline(conn, actual_channel, message)
+            from irc import send_multiline_message
+            send_multiline_message(conn, actual_channel, message)
         else:
             logging.error(f"No secondary IRC connection found for composite key: {channel}")
     else:
-        # Otherwise, use the primary IRC connection with your existing working function.
+        # Otherwise, use the primary IRC connection with the standard function.
         global irc_client
         if irc_client:
             from irc import send_multiline_message
