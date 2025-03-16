@@ -181,3 +181,4 @@ if __name__ == '__main__':
     # For testing purposes only.
     client = connect_and_register()
     threading.Thread(target=irc_command_parser, args=(client,), daemon=True).start()
+
