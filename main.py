@@ -5,11 +5,11 @@ import time
 import asyncio
 from flask import Flask
 
-from irc import (
+from irc_client import (
     connect_and_register,
     send_message,
     send_private_message,
-    send_multiline_message,  # Working function for primary IRC
+    send_multiline_message,
     set_irc_client,
     connect_to_network,
     irc_command_parser
@@ -23,7 +23,6 @@ from config import (
     ops,
     admins,
     dashboard_port,
-    channels as config_channels,
     server as default_irc_server
 )
 import commands
@@ -36,28 +35,20 @@ logging.basicConfig(level=logging.INFO)
 # Global primary IRC connection.
 irc_client = None
 # Global dictionary for secondary IRC connections, keyed by composite key "server|channel".
-# We also store primary connections here (with composite keys) for uniformity.
 irc_secondary = {}
 
 # -------------------------------------------------------------------
-# (Legacy) Helper function for multi-line sending on secondary IRC.
-# Not used after this fix.
+# Legacy helper function (unused after fixes)
 def my_send_multiline(irc_conn, target, message):
-    """
-    Splits the given message (which may include newline characters) into separate lines.
-    For each line (empty lines replaced by a space), it sends a PRIVMSG directly via the socket.
-    This function is used only for secondary IRC connections.
-    """
     for line in message.split('\n'):
         if not line.strip():
-            line = " "  # Replace empty lines with a space.
-        # Build the IRC PRIVMSG command.
+            line = " "
         msg = f"PRIVMSG {target} :{line}\r\n".encode("utf-8")
         try:
             irc_conn.send(msg)
         except Exception as ex:
             logging.error(f"Error sending message on secondary IRC: {ex}")
-        time.sleep(1)  # Delay between lines
+        time.sleep(1)
 # -------------------------------------------------------------------
 
 def start_dashboard():
@@ -73,13 +64,16 @@ def irc_command_parser_wrapper(irc_conn):
 
 def start_irc():
     global irc_client
+    from channels import load_channels
     while True:
         try:
             logging.info("Connecting to primary IRC...")
             irc_client = connect_and_register()
             set_irc_client(irc_client)
-            # For primary IRC, build composite keys as "default_irc_server|channel"
-            for ch in config_channels:
+            # Use full IRC channel list from channels.json.
+            channels_data = load_channels()
+            irc_chans = channels_data.get("irc_channels", [])
+            for ch in irc_chans:
                 composite = f"{default_irc_server}|{ch}"
                 irc_secondary[composite] = irc_client
             irc_command_parser(irc_client)
@@ -91,13 +85,12 @@ def start_irc():
 def start_additional_irc_networks():
     """
     Reads networks.json and connects to each additional IRC network.
-    For each connection, computes a composite key "server|channel" and stores it in irc_secondary.
+    For each connection, computes a composite key "server|channel" and stores it.
     """
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     networks_file = os.path.join(BASE_DIR, "networks.json")
     networks = load_json(networks_file, default={})
     for channel_key, net_info in networks.items():
-        # channel_key is the channel (e.g. "#buzzard") on the secondary network.
         server_name = net_info.get("server")
         port = net_info.get("port")
         ssl_flag = net_info.get("ssl", False)
@@ -123,26 +116,23 @@ def start_discord():
 # IRC send callback for centralized polling.
 def irc_send_callback(channel, message):
     """
-    This function is called by the centralized polling to send messages.
-    It now uses the standard rate-limited, queued send_multiline_message function from irc.py
-    for both primary and secondary IRC connections.
+    Called by centralized polling to send messages.
+    Uses rate-limited send_multiline_message for both primary and secondary connections.
     """
-    # If the channel key contains a pipe, it's a secondary IRC connection.
     if "|" in channel:
         parts = channel.split("|", 1)
-        composite_key = channel  # Composite key in format "server|channel"
+        composite_key = channel
         actual_channel = parts[1] if parts[1].startswith("#") else channel
         conn = irc_secondary.get(composite_key)
         if conn:
-            from irc import send_multiline_message
+            from irc_client import send_multiline_message
             send_multiline_message(conn, actual_channel, message)
         else:
             logging.error(f"No secondary IRC connection found for composite key: {channel}")
     else:
-        # Otherwise, use the primary IRC connection with the standard function.
         global irc_client
         if irc_client:
-            from irc import send_multiline_message
+            from irc_client import send_multiline_message
             send_multiline_message(irc_client, channel, message)
         else:
             logging.error("Primary IRC client not connected; cannot send message.")
