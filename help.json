@@ -10,7 +10,8 @@
   "search": "!search <query> - Search for feeds matching a query.",
   "join": "!join <#channel> <adminname> - Join a channel (Admin only).",
   "part": "!part <#channel> - Make the bot leave a channel and remove its settings (Admin only).",
-  "addnetwork": "!addnetwork <server:port> [-ssl] <#channel> <admin> - Connect to another IRC network (bot owner only).",
+  "addnetwork": "!addnetwork <networkname> <server_info> <channels> <admin> - Connect to another IRC network using a network name, server info (e.g., irc.server.com/6667), a comma-separated list of channels, and set its admin.",
+  "delnetwork": "!delnetwork <networkname> - Remove the IRC network configuration identified by the network name.",
   "addsub": "!addsub <feed_name> <URL> - Subscribe privately to a feed.",
   "unsub": "!unsub <feed_name> - Unsubscribe from a feed.",
   "mysubs": "!mysubs - List your private subscriptions.",
@@ -20,8 +21,5 @@
   "settings": "!settings - List all your personal settings.",
   "admin": "!admin - Display admin information.",
   "stats": "!stats - Display uptime, channel feed counts, and user subscription counts.",
-  "quit": "!quit - Shut down the bot.",
-  "reload": "!reload - Reload the configuration.",
-  "restart": "!restart - Restart the bot.",
   "help": "!help [command] - Show help for commands."
 }
