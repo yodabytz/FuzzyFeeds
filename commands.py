@@ -126,7 +126,6 @@ def response_target(actual_channel, integration):
         return actual_channel
     return actual_channel
 
-# The extra parameter 'irc_conn' carries the IRC connection that received the command.
 def handle_centralized_command(integration, send_message_fn, send_private_message_fn, send_multiline_message_fn,
                                user, target, message, is_op_flag, irc_conn=None):
     now = time.time()
@@ -257,14 +256,19 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         if not results:
             send_message_fn(response_target(actual_channel, integration), "No matching feed found.")
             return
+        # Choose the best match by checking if the query is contained within the feed title
         selected = None
         for title, url in results:
-            if title.lower() == query.lower():
+            if query.lower() in title.lower():
                 selected = (title, url)
                 break
         if not selected:
             selected = results[0]
         feed_title, feed_url = selected
+        if integration == "irc":
+            key = composite_key(target, integration)
+        else:
+            key = target
         if key not in feed.channel_feeds:
             feed.channel_feeds[key] = {}
         feed.channel_feeds[key][feed_title] = feed_url
@@ -320,9 +324,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         lines = [f"{title} {url}" for title, url in results]
         multiline_send(send_multiline_message_fn, response_target(actual_channel, integration), "\n".join(lines))
 
-    # --- JOIN COMMAND ---
     elif lower_message.startswith("!join"):
-        # Bot owner or admins only.
         if user.lower() not in [a.lower() for a in admins]:
             send_private_message_fn(user, "Only a bot admin can use !join.")
             return
@@ -349,13 +351,11 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             with open(admin_file, "w") as f:
                 json.dump(admin_mapping, f, indent=4)
             send_message_fn(response_target(actual_channel, integration), f"Joined channel: {join_channel} with admin: {join_admin}")
-            # IMPORTANT: Use the current IRC connection (irc_conn) to join the channel.
             if integration == "irc" and irc_conn:
                 irc_conn.send(f"JOIN {join_channel}\r\n".encode("utf-8"))
         except Exception as e:
             send_message_fn(response_target(actual_channel, integration), f"Error joining channel: {e}")
 
-    # --- PART COMMAND ---
     elif lower_message.startswith("!part"):
         if user.lower() not in [a.lower() for a in admins]:
             send_private_message_fn(user, "Only a bot admin can use !part.")
@@ -398,7 +398,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         except Exception as e:
             send_message_fn(response_target(actual_channel, integration), f"Error parting channel: {e}")
 
-    # --- NEW: ADDNETWORK COMMAND ---
     elif lower_message.startswith("!addnetwork"):
         if integration != "irc":
             send_message_fn(response_target(actual_channel, integration), "This command is for IRC only.")
@@ -406,46 +405,45 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         if user.lower() != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !addnetwork.")
             return
-        parts = message.split()
-        if len(parts) not in [4, 5]:
-            send_message_fn(response_target(actual_channel, integration), "Usage: !addnetwork <server:port> [-ssl] <#channel> <admin>")
+        parts = message.split(maxsplit=4)
+        if len(parts) != 5:
+            send_message_fn(response_target(actual_channel, integration), "Usage: !addnetwork <networkname> <server_info> <channels> <admin>")
             return
-        server_port = parts[1]
-        use_ssl_flag = False
-        channel_index = 2
-        if parts[2].lower() == "-ssl":
-            use_ssl_flag = True
-            channel_index = 3
-        if len(parts) <= channel_index+1:
-            send_message_fn(response_target(actual_channel, integration), "Usage: !addnetwork <server:port> [-ssl] <#channel> <admin>")
+        network_name = parts[1].strip()
+        server_info = parts[2].strip()  # Expected format: irc.server.com/6667
+        channels_str = parts[3].strip()  # Comma-separated list of channels
+        network_admin = parts[4].strip()
+        if "/" not in server_info:
+            send_message_fn(response_target(actual_channel, integration), "Invalid server_info format. Use irc.server.com/6667")
             return
-        network_channel = parts[channel_index]
-        network_admin = parts[channel_index+1]
-        if ':' not in server_port:
-            send_message_fn(response_target(actual_channel, integration), "Invalid server:port format.")
-            return
-        server_name, port_str = server_port.split(":", 1)
+        server_name, port_str = server_info.split("/", 1)
         try:
             port_number = int(port_str)
         except ValueError:
             send_message_fn(response_target(actual_channel, integration), "Invalid port number.")
             return
+        use_ssl_flag = False
+        channels_list = [ch.strip() for ch in channels_str.split(",") if ch.strip()]
+        if not channels_list:
+            send_message_fn(response_target(actual_channel, integration), "No channels provided.")
+            return
         send_message_fn(response_target(actual_channel, integration),
-            f"Connecting to network {server_name}:{port_number} (SSL: {use_ssl_flag}) on channel {network_channel} with admin {network_admin}...")
+             f"Connecting to network {network_name} ({server_name}:{port_number}, SSL: {use_ssl_flag}) on channels {channels_list} with admin {network_admin}...")
         import threading
-        from irc import connect_to_network, irc_command_parser
+        from irc_client import connect_to_network, irc_command_parser
         def connect_new():
-            new_client = connect_to_network(server_name, port_number, use_ssl_flag, network_channel)
+            new_client = connect_to_network(server_name, port_number, use_ssl_flag, channels_list[0])
             if new_client:
                 send_message_fn(response_target(actual_channel, integration),
-                    f"Successfully connected to {server_name}:{port_number} and joined {network_channel}.")
+                    f"Successfully connected to {server_name}:{port_number} and joined {channels_list[0]}.")
                 threading.Thread(target=irc_command_parser, args=(new_client,), daemon=True).start()
                 from persistence import load_json, save_json
                 networks_file = "networks.json"
                 networks = load_json(networks_file, default={})
-                networks[network_channel] = {
+                networks[network_name] = {
                     "server": server_name,
                     "port": port_number,
+                    "Channels": channels_list,
                     "ssl": use_ssl_flag,
                     "admin": network_admin
                 }
@@ -455,7 +453,28 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                     f"Failed to connect to {server_name}:{port_number}.")
         threading.Thread(target=connect_new, daemon=True).start()
 
-    # --- SUBSCRIPTIONS ---
+    elif lower_message.startswith("!delnetwork") or lower_message.startswith("!deletenetwork"):
+        if integration != "irc":
+            send_message_fn(response_target(actual_channel, integration), "This command is for IRC only.")
+            return
+        if user.lower() != admin.lower():
+            send_private_message_fn(user, "Only the bot owner can use !delnetwork.")
+            return
+        parts = message.split(maxsplit=1)
+        if len(parts) != 2:
+            send_message_fn(response_target(actual_channel, integration), "Usage: !delnetwork <networkname>")
+            return
+        network_name = parts[1].strip()
+        from persistence import load_json, save_json
+        networks_file = "networks.json"
+        networks = load_json(networks_file, default={})
+        if network_name in networks:
+            del networks[network_name]
+            save_json(networks_file, networks)
+            send_message_fn(response_target(actual_channel, integration), f"Network '{network_name}' has been deleted.")
+        else:
+            send_message_fn(response_target(actual_channel, integration), f"Network '{network_name}' not found.")
+
     elif lower_message.startswith("!addsub"):
         parts = message.split(" ", 2)
         if len(parts) < 3:
@@ -510,7 +529,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             send_private_message_fn(user, f"You are not subscribed to feed '{feed_name}'.")
 
-    # --- USER SETTINGS ---
     elif lower_message.startswith("!setsetting"):
         parts = message.split(" ", 2)
         if len(parts) < 3:
@@ -551,7 +569,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             send_private_message_fn(user, "No settings found.")
 
-    # --- ADMIN & STATS ---
     elif lower_message.startswith("!admin"):
         try:
             with open(admin_file, "r") as f:
@@ -598,7 +615,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             ]
         multiline_send(send_multiline_message_fn, response_target_value, "\n".join(response_lines))
         
-    # --- NEW: QUIT, RELOAD, RESTART COMMANDS (Bot owner only) ---
     elif lower_message.startswith("!quit"):
         if user.lower() != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !quit.")
@@ -631,4 +647,3 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         
     else:
         send_message_fn(response_target(actual_channel, integration), "Unknown command. Use !help for a list.")
-
