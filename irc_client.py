@@ -36,7 +36,6 @@ def irc_command_parser(irc_client):
     """
     Reads data from the IRC socket, splits incoming messages on "\r\n",
     and dispatches commands that start with '!' using the centralized command handler.
-    Uses default arguments in lambdas to capture the local 'irc_client' properly.
     """
     buffer = ""
     while True:
@@ -63,11 +62,8 @@ def irc_command_parser(irc_client):
                             if len(header_parts) < 2:
                                 continue
                             target = header_parts[1]
-                            # Simple extraction of nick (ignoring hostmask for brevity)
-                            if "!" in prefix and "@" in prefix:
-                                nick = prefix.split("!")[0]
-                            else:
-                                nick = prefix
+                            # Extract nick (ignoring hostmask for brevity)
+                            nick = prefix.split("!")[0] if "!" in prefix else prefix
                             if message_text.startswith("!"):
                                 from commands import handle_centralized_command
                                 from config import admin, ops, admins
@@ -107,16 +103,14 @@ def connect_and_register():
         for line in response.split("\r\n"):
             if line.startswith("PING"):
                 irc.send(f"PONG {line.split()[1]}\r\n".encode("utf-8"))
-            if " 001 " in line:  # Successful registration message
+            if " 001 " in line or "Welcome" in line:
                 connected = True
-                # Load channels from channels.json.
+                from channels import load_channels
                 channels_data = load_channels()
                 joined_channels = channels_data.get("irc_channels", [])
-                # Ensure default channels from config are included.
                 for ch in channels:
                     if ch not in joined_channels:
                         joined_channels.append(ch)
-                # Join each channel.
                 for chan in joined_channels:
                     irc.send(f"JOIN {chan}\r\n".encode("utf-8"))
                     send_message(irc, chan, "FuzzyFeeds has joined the channel!")
@@ -127,35 +121,74 @@ def connect_to_network(server_name, port_number, use_ssl_flag, channel):
     """
     Connects to an alternate IRC server (for !addnetwork).
     Registers the bot and joins the specified channel.
+    Uses a timeout mechanism for registration and accepts registration if a "Welcome" message is detected.
+    After registration, clears the timeout so that the command parser does not exit on timeouts.
     """
     irc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     if use_ssl_flag:
         context = ssl.create_default_context()
         irc = context.wrap_socket(irc, server_hostname=server_name)
-    irc.connect((server_name, port_number))
+    try:
+        irc.connect((server_name, port_number))
+    except Exception as e:
+        logging.error(f"Failed to connect to {server_name}:{port_number} - {e}")
+        return None
+
     irc.send(f"NICK {botnick}\r\n".encode("utf-8"))
     irc.send(f"USER {botnick} 0 * :Python IRC Bot\r\n".encode("utf-8"))
     
     connected = False
-    while not connected:
-        response = irc.recv(2048).decode("utf-8", errors="ignore")
-        print(response)
-        for line in response.split("\r\n"):
-            if line.startswith("PING"):
-                irc.send(f"PONG {line.split()[1]}\r\n".encode("utf-8"))
-            if " 001 " in line:
-                connected = True
-                break
-    irc.send(f"JOIN {channel}\r\n".encode("utf-8"))
-    send_message(irc, channel, "FuzzyFeeds has joined the channel!")
+    start_time_timeout = time.time()
+    TIMEOUT_SECONDS = 30  # maximum wait time for registration
+
+    while not connected and (time.time() - start_time_timeout) < TIMEOUT_SECONDS:
+        try:
+            irc.settimeout(5)
+            response = irc.recv(2048).decode("utf-8", errors="ignore")
+            print(response)
+            for line in response.split("\r\n"):
+                if line.startswith("PING"):
+                    irc.send(f"PONG {line.split()[1]}\r\n".encode("utf-8"))
+                # Accept either the 001 numeric or a "Welcome" message
+                if " 001 " in line or "Welcome" in line:
+                    connected = True
+                    break
+        except socket.timeout:
+            logging.warning(f"Timeout waiting for registration from {server_name}:{port_number}. Retrying...")
+            continue
+        except Exception as e:
+            logging.error(f"Error during registration on {server_name}:{port_number}: {e}")
+            break
+
+    if not connected:
+        logging.error(f"Failed to register on {server_name}:{port_number} within {TIMEOUT_SECONDS} seconds.")
+        try:
+            irc.close()
+        except Exception:
+            pass
+        return None
+
+    # Clear the timeout now that registration is complete so that future recv() calls don't raise timeouts.
+    irc.settimeout(None)
+    
+    try:
+        irc.send(f"JOIN {channel}\r\n".encode("utf-8"))
+        send_message(irc, channel, "FuzzyFeeds has joined the channel!")
+    except Exception as e:
+        logging.error(f"Error joining channel {channel} on {server_name}:{port_number}: {e}")
+        try:
+            irc.close()
+        except Exception:
+            pass
+        return None
+
     threading.Thread(target=process_message_queue, args=(irc,), daemon=True).start()
     return irc
 
 def send_message(irc, target, message):
     """
     Queue a message to be sent to a target channel/user with rate limiting.
-    This function normalizes newline characters (CR, LF, CRLF) to LF,
-    splits the message into individual lines, and queues each line separately.
+    Normalizes newlines and splits the message into lines.
     """
     normalized_message = message.replace("\r\n", "\n").replace("\r", "\n")
     lines = normalized_message.split("\n")
@@ -169,7 +202,7 @@ def send_private_message(irc, user, message):
 
 def send_multiline_message(irc, user, message):
     """
-    Splits the message by normalizing newlines and queues each line as a private message.
+    Splits the message by newlines and queues each line as a private message.
     """
     normalized_message = message.replace("\r\n", "\n").replace("\r", "\n")
     for line in normalized_message.split("\n"):
