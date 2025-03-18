@@ -11,7 +11,7 @@ import sys
 import os
 import importlib
 
-from config import admin, ops, admins, admin_file, server
+from config import admin, ops, admins, admin_file, server, channels as config_channels
 import feed
 import persistence
 import channels
@@ -19,22 +19,27 @@ import users
 
 logging.basicConfig(level=logging.INFO)
 
-# Rate limiting and abuse control constants.
 RATE_LIMIT_SECONDS = 3
-BLOCK_DURATION = 300  # 5 minutes in seconds
+BLOCK_DURATION = 300  # 5 minutes
 VIOLATION_THRESHOLD = 3
 
-# Global dictionaries for per-user rate control.
 last_command_timestamp = {}
 user_abuse = {}
 
-# === Composite Key Helpers for IRC ===
 def get_network_for_channel(channel):
-    networks = persistence.load_json("networks.json", default={})
-    if channel in networks:
-        return networks[channel].get("server", server)
-    else:
+    """
+    Checks if the channel is a primary channel (defined in config_channels).
+    If not, searches networks.json for a network whose "Channels" list includes this channel.
+    Returns the corresponding server if found; otherwise, returns the default server.
+    """
+    if channel in config_channels:
         return server
+    networks = persistence.load_json("networks.json", default={})
+    for net_name, net_info in networks.items():
+        channels_list = net_info.get("Channels", [])
+        if channel in channels_list:
+            return net_info.get("server", server)
+    return server
 
 def composite_key(channel, integration):
     if integration == "irc":
@@ -57,7 +62,6 @@ def get_actual_channel(key, integration):
     if integration == "irc" and "|" in key:
         return key.split("|", 1)[1]
     return key
-# === End Composite Key Helpers ===
 
 def load_help_data():
     try:
@@ -160,7 +164,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
     actual_channel = get_actual_channel(target, integration)
     lower_message = message.lower()
 
-    # --- Command Handlers ---
+    # !addfeed
     if lower_message.startswith("!addfeed"):
         parts = message.split(" ", 2)
         if len(parts) < 3:
@@ -174,6 +178,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         feed.save_feeds()
         send_message_fn(response_target(actual_channel, integration), f"Feed added: {feed_name} ({feed_url})")
 
+    # !delfeed
     elif lower_message.startswith("!delfeed"):
         if not effective_op:
             send_private_message_fn(user, "Not authorized to use !delfeed.")
@@ -197,6 +202,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         feed.save_feeds()
         send_message_fn(response_target(actual_channel, integration), f"Feed removed: {matched}")
 
+    # !listfeeds
     elif lower_message.startswith("!listfeeds"):
         if key in feed.channel_feeds and feed.channel_feeds[key]:
             lines = [f"{name}: {url}" for name, url in feed.channel_feeds[key].items()]
@@ -204,6 +210,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             send_message_fn(response_target(actual_channel, integration), "No feeds found for this channel.")
 
+    # !latest
     elif lower_message.startswith("!latest"):
         parts = message.split(" ", 1)
         if len(parts) < 2:
@@ -228,6 +235,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             send_message_fn(response_target(actual_channel, integration), f"No entry available for {feed_name}.")
 
+    # !getfeed
     elif lower_message.startswith("!getfeed"):
         parts = message.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
@@ -246,6 +254,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             send_message_fn(response_target(actual_channel, integration), f"No entry available for feed {feed_title}.")
 
+    # !getadd
     elif lower_message.startswith("!getadd"):
         parts = message.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
@@ -256,7 +265,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         if not results:
             send_message_fn(response_target(actual_channel, integration), "No matching feed found.")
             return
-        # Choose the best match by checking if the query is contained within the feed title
         selected = None
         for title, url in results:
             if query.lower() in title.lower():
@@ -265,16 +273,13 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         if not selected:
             selected = results[0]
         feed_title, feed_url = selected
-        if integration == "irc":
-            key = composite_key(target, integration)
-        else:
-            key = target
         if key not in feed.channel_feeds:
             feed.channel_feeds[key] = {}
         feed.channel_feeds[key][feed_title] = feed_url
         feed.save_feeds()
         send_message_fn(response_target(actual_channel, integration), f"Feed '{feed_title}' added: {feed_url}")
 
+    # !genfeed
     elif lower_message.startswith("!genfeed"):
         parts = message.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
@@ -297,6 +302,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         except Exception as e:
             send_message_fn(response_target(actual_channel, integration), f"Error generating feed: {e}")
 
+    # !setinterval
     elif lower_message.startswith("!setinterval"):
         parts = message.split(" ", 1)
         if len(parts) < 2:
@@ -311,6 +317,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         except ValueError:
             send_message_fn(response_target(actual_channel, integration), "Invalid number of minutes.")
 
+    # !search
     elif lower_message.startswith("!search"):
         parts = message.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
@@ -324,6 +331,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         lines = [f"{title} {url}" for title, url in results]
         multiline_send(send_multiline_message_fn, response_target(actual_channel, integration), "\n".join(lines))
 
+    # !join
     elif lower_message.startswith("!join"):
         if user.lower() not in [a.lower() for a in admins]:
             send_private_message_fn(user, "Only a bot admin can use !join.")
@@ -356,6 +364,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         except Exception as e:
             send_message_fn(response_target(actual_channel, integration), f"Error joining channel: {e}")
 
+    # !part
     elif lower_message.startswith("!part"):
         if user.lower() not in [a.lower() for a in admins]:
             send_private_message_fn(user, "Only a bot admin can use !part.")
@@ -398,6 +407,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         except Exception as e:
             send_message_fn(response_target(actual_channel, integration), f"Error parting channel: {e}")
 
+    # !addnetwork
     elif lower_message.startswith("!addnetwork"):
         if integration != "irc":
             send_message_fn(response_target(actual_channel, integration), "This command is for IRC only.")
@@ -405,13 +415,14 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         if user.lower() != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !addnetwork.")
             return
+        # New syntax: !addnetwork <networkname> <server_info> <channels> <admin>
         parts = message.split(maxsplit=4)
         if len(parts) != 5:
             send_message_fn(response_target(actual_channel, integration), "Usage: !addnetwork <networkname> <server_info> <channels> <admin>")
             return
         network_name = parts[1].strip()
-        server_info = parts[2].strip()  # Expected format: irc.server.com/6667
-        channels_str = parts[3].strip()  # Comma-separated list of channels
+        server_info = parts[2].strip()  # Format: irc.server.com/6667
+        channels_str = parts[3].strip()  # Comma-separated list
         network_admin = parts[4].strip()
         if "/" not in server_info:
             send_message_fn(response_target(actual_channel, integration), "Invalid server_info format. Use irc.server.com/6667")
@@ -423,19 +434,29 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), "Invalid port number.")
             return
         use_ssl_flag = False
-        channels_list = [ch.strip() for ch in channels_str.split(",") if ch.strip()]
+        channels_list = []
+        for ch in channels_str.split(","):
+            ch = ch.strip()
+            if not ch.startswith("#"):
+                ch = "#" + ch
+            channels_list.append(ch)
         if not channels_list:
             send_message_fn(response_target(actual_channel, integration), "No channels provided.")
             return
         send_message_fn(response_target(actual_channel, integration),
-             f"Connecting to network {network_name} ({server_name}:{port_number}, SSL: {use_ssl_flag}) on channels {channels_list} with admin {network_admin}...")
+            f"Connecting to network {network_name} ({server_name}:{port_number}, SSL: {use_ssl_flag}) on channels {channels_list} with admin {network_admin}...")
         import threading
         from irc_client import connect_to_network, irc_command_parser
         def connect_new():
             new_client = connect_to_network(server_name, port_number, use_ssl_flag, channels_list[0])
             if new_client:
+                for ch in channels_list:
+                    new_client.send(f"JOIN {ch}\r\n".encode("utf-8"))
+                    send_message(new_client, ch, "FuzzyFeeds has joined the channel!")
+                    composite = f"{server_name}|{ch}"
+                    irc_secondary[composite] = new_client
                 send_message_fn(response_target(actual_channel, integration),
-                    f"Successfully connected to {server_name}:{port_number} and joined {channels_list[0]}.")
+                    f"Successfully connected to {server_name}:{port_number} and joined channels: {', '.join(channels_list)}.")
                 threading.Thread(target=irc_command_parser, args=(new_client,), daemon=True).start()
                 from persistence import load_json, save_json
                 networks_file = "networks.json"
@@ -453,6 +474,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                     f"Failed to connect to {server_name}:{port_number}.")
         threading.Thread(target=connect_new, daemon=True).start()
 
+    # !delnetwork
     elif lower_message.startswith("!delnetwork") or lower_message.startswith("!deletenetwork"):
         if integration != "irc":
             send_message_fn(response_target(actual_channel, integration), "This command is for IRC only.")
@@ -475,6 +497,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             send_message_fn(response_target(actual_channel, integration), f"Network '{network_name}' not found.")
 
+    # !addsub
     elif lower_message.startswith("!addsub"):
         parts = message.split(" ", 2)
         if len(parts) < 3:
@@ -489,6 +512,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         feed.save_subscriptions()
         send_private_message_fn(user, f"Subscribed to feed: {feed_name} ({feed_url})")
 
+    # !unsub
     elif lower_message.startswith("!unsub"):
         parts = message.split(" ", 1)
         if len(parts) < 2:
@@ -503,6 +527,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             send_private_message_fn(user, f"Not subscribed to feed '{feed_name}'.")
 
+    # !mysubs
     elif lower_message.startswith("!mysubs"):
         uname = user
         if uname in feed.subscriptions and feed.subscriptions[uname]:
@@ -511,6 +536,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             send_private_message_fn(user, "No subscriptions found.")
 
+    # !latestsub
     elif lower_message.startswith("!latestsub"):
         parts = message.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
@@ -529,6 +555,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             send_private_message_fn(user, f"You are not subscribed to feed '{feed_name}'.")
 
+    # !setsetting
     elif lower_message.startswith("!setsetting"):
         parts = message.split(" ", 2)
         if len(parts) < 3:
@@ -545,6 +572,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         users.save_users()
         send_private_message_fn(user, f"Setting '{key_setting}' set to '{value}'.")
         
+    # !getsetting
     elif lower_message.startswith("!getsetting"):
         parts = message.split(" ", 1)
         if len(parts) < 2:
@@ -559,6 +587,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             send_private_message_fn(user, f"No setting found for '{key_setting}'.")
             
+    # !settings
     elif lower_message.startswith("!settings"):
         import users
         users.add_user(user)
@@ -569,6 +598,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             send_private_message_fn(user, "No settings found.")
 
+    # !admin
     elif lower_message.startswith("!admin"):
         try:
             with open(admin_file, "r") as f:
@@ -589,6 +619,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         except Exception as e:
             send_private_message_fn(user, f"Error reading admin info: {e}")
             
+    # !stats
     elif lower_message.startswith("!stats"):
         response_target_value = response_target(actual_channel, integration)
         uptime_seconds = int(time.time() - __import__("config").start_time)
@@ -615,12 +646,14 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             ]
         multiline_send(send_multiline_message_fn, response_target_value, "\n".join(response_lines))
         
+    # !quit
     elif lower_message.startswith("!quit"):
         if user.lower() != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !quit.")
             return
         send_message_fn(response_target(actual_channel, integration), "Shutting down...")
         os._exit(0)
+    # !reload
     elif lower_message.startswith("!reload"):
         if user.lower() != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !reload.")
@@ -630,13 +663,14 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), "Configuration reloaded.")
         except Exception as e:
             send_message_fn(response_target(actual_channel, integration), f"Error reloading config: {e}")
+    # !restart
     elif lower_message.startswith("!restart"):
         if user.lower() != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !restart.")
             return
         send_message_fn(response_target(actual_channel, integration), "Restarting bot...")
         os.execv(sys.executable, [sys.executable] + sys.argv)
-        
+    # !help
     elif lower_message.startswith("!help"):
         parts = message.split(" ", 1)
         if len(parts) == 2:
@@ -644,6 +678,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             help_text = get_help()
         multiline_send(send_multiline_message_fn, user, help_text)
-        
     else:
         send_message_fn(response_target(actual_channel, integration), "Unknown command. Use !help for a list.")
+
