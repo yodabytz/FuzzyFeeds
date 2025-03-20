@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import socket
 import threading
 import time
@@ -58,7 +59,7 @@ def connect_and_register():
             connected = False
             start_time_timeout = time.time()
             TIMEOUT_SECONDS = 30
-            irc.settimeout(5)
+            irc.settimeout(15)  # Increased from 5 to 15 seconds
             while not connected and (time.time() - start_time_timeout) < TIMEOUT_SECONDS:
                 response = irc.recv(2048).decode("utf-8", errors="ignore")
                 logging.debug(f"Received: {response}")
@@ -104,8 +105,8 @@ def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel):
             
             connected = False
             start_time_timeout = time.time()
-            TIMEOUT_SECONDS = 30
-            irc.settimeout(5)
+            TIMEOUT_SECONDS = 30  # Total wait time
+            irc.settimeout(15)  # Increased from 5 to 15 seconds per read
             while not connected and (time.time() - start_time_timeout) < TIMEOUT_SECONDS:
                 response = irc.recv(2048).decode("utf-8", errors="ignore")
                 logging.debug(f"Received: {response}")
