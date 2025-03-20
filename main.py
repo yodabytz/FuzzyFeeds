@@ -15,7 +15,7 @@ try:
         set_irc_client,
         connect_to_network,
         irc_command_parser,
-        message_queue  # Added to use the existing queue
+        message_queue
     )
     logging.info("Imported irc_client successfully")
 except Exception as e:
@@ -98,11 +98,19 @@ def start_primary_irc():
                     composite = f"{default_irc_server}|{ch}"
                     irc_secondary[composite] = irc_client
                 logging.info(f"Primary IRC connected; channels: {config_channels}")
-                irc_command_parser(irc_client)
+                parser_thread = threading.Thread(target=irc_command_parser, args=(irc_client,), daemon=True)
+                parser_thread.start()
+                parser_thread.join()  # Wait for disconnect
+                logging.info(f"Primary IRC connection to {default_irc_server} lost, retrying...")
+                with connection_lock:
+                    connection_status["primary"][default_irc_server] = False
+                irc_client = None
             else:
                 logging.error("connect_and_register returned None")
                 with connection_lock:
                     connection_status["primary"][default_irc_server] = False
+                logging.info("Reconnecting to primary IRC in 30 seconds...")
+                time.sleep(30)
         except Exception as e:
             logging.error(f"Primary IRC error: {e}")
             with connection_lock:
@@ -135,23 +143,29 @@ def manage_secondary_network(network_name, net_info):
                     composite = f"{srv}|{ch}"
                     irc_secondary[composite] = client
                     logging.info(f"[{network_name}] Registered {composite} in irc_secondary")
-                threading.Thread(target=irc_command_parser, args=(client,), daemon=True).start()
-                # Process any queued messages after connecting
+                parser_thread = threading.Thread(target=irc_command_parser, args=(client,), daemon=True)
+                parser_thread.start()
                 while not message_queue.empty():
                     target, msg = message_queue.get()
                     if target.startswith("#"):
                         send_multiline_message(client, target, msg)
                     message_queue.task_done()
+                parser_thread.join()  # Wait for disconnect
+                logging.info(f"[{network_name}] Connection to {srv}:{prt} lost, retrying...")
+                with connection_lock:
+                    connection_status["secondary"][srv] = False
             else:
                 logging.error(f"[{network_name}] Connection failed")
                 with connection_lock:
                     connection_status["secondary"][srv] = False
+                logging.info(f"[{network_name}] Retrying in 30 seconds...")
+                time.sleep(30)
         except Exception as e:
             logging.error(f"[{network_name}] Exception: {e}")
             with connection_lock:
                 connection_status["secondary"][srv] = False
-        logging.info(f"[{network_name}] Retrying in 30 seconds...")
-        time.sleep(30)
+            logging.info(f"[{network_name}] Retrying in 30 seconds...")
+            time.sleep(30)
 
 def start_secondary_irc_networks():
     logging.info("Starting secondary IRC networks thread")
@@ -184,51 +198,40 @@ def irc_send_callback(channel, message):
         actual_channel = composite.split("|", 1)[1]
         conn = irc_secondary.get(composite)
         if conn:
-            send_multiline_message(conn, actual_channel, message)
+            for line in message.split('\n'):
+                send_message(conn, actual_channel, line)
         else:
             logging.error(f"No IRC connection for composite key: {composite}, queuing message")
-            message_queue.put((actual_channel, message))  # Queue message if connection is down
+            message_queue.put((actual_channel, message))
     else:
         global irc_client
         if irc_client:
-            send_multiline_message(irc_client, channel, message)
+            for line in message.split('\n'):
+                send_message(irc_client, channel, line)
         else:
             logging.error("Primary IRC client not connected, queuing message")
-            message_queue.put((channel, message))  # Queue message if primary is down
+            message_queue.put((channel, message))
 
 if __name__ == "__main__":
     logging.info("Main script starting")
     try:
         disable_matrix_feed_loop()
-        logging.info("WELLDisabled Matrix feed loop")
+        logging.info("Disabled Matrix feed loop")
         disable_discord_feed_loop()
         logging.info("Disabled Discord feed loop")
 
-        # Start primary IRC thread
-        logging.info("Launching primary IRC thread")
         threading.Thread(target=start_primary_irc, daemon=True).start()
-
-        # Start secondary IRC networks first and give them time to connect
-        logging.info("Launching secondary IRC networks thread")
         threading.Thread(target=start_secondary_irc_networks, daemon=True).start()
-        time.sleep(5)  # Allow secondary networks to establish connections
-
-        # Start dashboard thread
-        logging.info("Launching dashboard thread")
+        time.sleep(5)
         threading.Thread(target=start_dashboard, daemon=True).start()
 
-        # Matrix and Discord callbacks
         matrix_callback = None
         if enable_matrix:
             from matrix_integration import send_message as matrix_send_message
-            matrix_callback = lambda room, msg: asyncio.run_coroutine_threadsafe(
-                matrix_send_message(room, msg), asyncio.get_event_loop()
-            )
+            matrix_callback = lambda room, msg: matrix_send_message(room, msg)
 
         discord_callback = send_discord_message if enable_discord else None
 
-        # Start polling thread after secondary networks are initialized
-        logging.info("Launching polling thread")
         threading.Thread(target=centralized_polling.start_polling, args=(
             irc_send_callback,
             matrix_callback,
@@ -236,13 +239,9 @@ if __name__ == "__main__":
             300
         ), daemon=True).start()
 
-        # Start Matrix and Discord threads
         if enable_matrix:
-            logging.info("Launching Matrix thread")
             threading.Thread(target=start_matrix, daemon=True).start()
-
         if enable_discord:
-            logging.info("Launching Discord thread")
             threading.Thread(target=start_discord, daemon=True).start()
 
         logging.info("All threads launched, entering main loop")
