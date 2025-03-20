@@ -5,80 +5,113 @@ import time
 import asyncio
 from flask import Flask
 
-from irc_client import (
-    connect_and_register,
-    send_message,
-    send_private_message,
-    send_multiline_message,
-    set_irc_client,
-    connect_to_network,
-    irc_command_parser
-)
-from matrix_integration import start_matrix_bot, disable_feed_loop as disable_matrix_feed_loop
-from discord_integration import bot, run_discord_bot, disable_feed_loop as disable_discord_feed_loop
-from dashboard import app  # Flask web dashboard
-from config import (
-    enable_discord,
-    admin,
-    ops,
-    admins,
-    dashboard_port,
-    server as default_irc_server,
-    channels as config_channels  # Primary channels (e.g., ["#main"])
-)
-import centralized_polling
-from persistence import load_json
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
+
+try:
+    from irc_client import (
+        connect_and_register,
+        send_message,
+        send_multiline_message,
+        set_irc_client,
+        connect_to_network,
+        irc_command_parser
+    )
+    logging.info("Imported irc_client successfully")
+except Exception as e:
+    logging.error(f"Failed to import irc_client: {e}")
+    raise
+
+try:
+    from matrix_integration import start_matrix_bot, disable_feed_loop as disable_matrix_feed_loop
+    logging.info("Imported matrix_integration successfully")
+except Exception as e:
+    logging.error(f"Failed to import matrix_integration: {e}")
+    raise
+
+try:
+    from discord_integration import (
+        bot,
+        run_discord_bot,
+        disable_feed_loop as disable_discord_feed_loop,
+        send_discord_message
+    )
+    logging.info("Imported discord_integration successfully")
+except Exception as e:
+    logging.error(f"Failed to import discord_integration: {e}")
+    raise
+
+try:
+    from config import (
+        enable_matrix,
+        enable_discord,
+        admin,
+        ops,
+        admins,
+        dashboard_port,
+        server as default_irc_server,
+        channels as config_channels
+    )
+    logging.info("Imported config successfully")
+except Exception as e:
+    logging.error(f"Failed to import config: {e}")
+    raise
+
+try:
+    import centralized_polling
+    logging.info("Imported centralized_polling successfully")
+except Exception as e:
+    logging.error(f"Failed to import centralized_polling: {e}")
+    raise
+
+try:
+    from persistence import load_json
+    logging.info("Imported persistence successfully")
+except Exception as e:
+    logging.error(f"Failed to import persistence: {e}")
+    raise
+
 import os
+from dashboard import app
+from connection_state import connection_status, connection_lock
 
-# Set logging to DEBUG for detailed output.
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s: %(message)s')
-
-# Global connection variables.
-irc_client = None  # Primary IRC connection (from config.py)
-irc_secondary = {}  # Dictionary for all IRC connections keyed by "server|channel"
+irc_client = None
+irc_secondary = {}
 
 def start_dashboard():
     logging.info(f"Starting Dashboard on port {dashboard_port}...")
     app.logger.setLevel(logging.INFO)
     app.run(host='0.0.0.0', port=dashboard_port)
 
-def irc_command_parser_wrapper(irc_conn):
-    try:
-        irc_command_parser(irc_conn)
-    except Exception as e:
-        logging.error(f"Error in IRC command parser thread: {e}")
-
 def start_primary_irc():
-    """
-    Connect to the primary IRC server using channels defined in config_channels.
-    Immediately spawn a dedicated thread for command parsing.
-    """
     global irc_client
+    logging.info("Starting primary IRC thread")
     while True:
         try:
-            logging.debug("Connecting to primary IRC server...")
-            irc_client = connect_and_register()  # This function joins channels from config_channels.
-            set_irc_client(irc_client)
-            for ch in config_channels:
-                composite = f"{default_irc_server}|{ch}"
-                irc_secondary[composite] = irc_client
-                logging.debug(f"Registered primary channel: {composite}")
-            logging.info(f"Primary IRC connected; channels: {config_channels}")
-            # Spawn a dedicated thread for command parsing.
-            threading.Thread(target=irc_command_parser_wrapper, args=(irc_client,), daemon=True).start()
-            # Now keep this thread alive (blocking).
-            while True:
-                time.sleep(5)
+            logging.info(f"Connecting to primary IRC server {default_irc_server}...")
+            irc_client = connect_and_register()
+            if irc_client:
+                set_irc_client(irc_client)
+                with connection_lock:
+                    connection_status["primary"][default_irc_server] = True
+                for ch in config_channels:
+                    composite = f"{default_irc_server}|{ch}"
+                    irc_secondary[composite] = irc_client
+                logging.info(f"Primary IRC connected; channels: {config_channels}")
+                irc_command_parser(irc_client)
+            else:
+                logging.error("connect_and_register returned None")
+                with connection_lock:
+                    connection_status["primary"][default_irc_server] = False
         except Exception as e:
             logging.error(f"Primary IRC error: {e}")
+            with connection_lock:
+                connection_status["primary"][default_irc_server] = False
+            irc_client = None
             logging.info("Reconnecting to primary IRC in 30 seconds...")
             time.sleep(30)
 
 def manage_secondary_network(network_name, net_info):
-    """
-    For each secondary network (from networks.json), try to connect and join all channels.
-    This function runs in an infinite loop to retry on failure.
-    """
+    global irc_secondary
     srv = net_info.get("server")
     prt = net_info.get("port")
     sslf = net_info.get("ssl", False)
@@ -86,121 +119,118 @@ def manage_secondary_network(network_name, net_info):
     if not channels_list:
         logging.error(f"[{network_name}] No channels defined.")
         return
-
+    logging.info(f"[{network_name}] Starting secondary IRC thread for {srv}")
     while True:
         try:
-            logging.info(f"[{network_name}] Attempting connection to {srv}:{prt} using initial channel {channels_list[0]}...")
+            logging.info(f"[{network_name}] Attempting connection to {srv}:{prt}...")
             client = connect_to_network(srv, prt, sslf, channels_list[0])
             if client:
-                logging.info(f"[{network_name}] Connected to {srv}:{prt}. Now joining channels: {channels_list}")
+                logging.info(f"[{network_name}] Connected to {srv}:{prt}")
+                with connection_lock:
+                    connection_status["secondary"][srv] = True
                 for ch in channels_list:
-                    join_cmd = f"JOIN {ch}\r\n"
-                    try:
-                        client.send(join_cmd.encode("utf-8"))
-                        logging.info(f"[{network_name}] Sent JOIN for {ch}.")
-                    except Exception as je:
-                        logging.error(f"[{network_name}] Error sending JOIN for {ch}: {je}")
+                    client.send(f"JOIN {ch}\r\n".encode("utf-8"))
                     send_message(client, ch, "FuzzyFeeds has joined the channel!")
                     composite = f"{srv}|{ch}"
                     irc_secondary[composite] = client
-                    logging.info(f"[{network_name}] Registered composite key: {composite}")
-                # Spawn a dedicated command parser thread for this connection.
-                threading.Thread(target=irc_command_parser_wrapper, args=(client,), daemon=True).start()
-                # Block here as long as connection is active.
-                while True:
-                    time.sleep(5)
+                threading.Thread(target=irc_command_parser, args=(client,), daemon=True).start()
             else:
-                logging.error(f"[{network_name}] Failed to connect to {srv}:{prt} (client is None).")
+                logging.error(f"[{network_name}] Connection failed")
+                with connection_lock:
+                    connection_status["secondary"][srv] = False
         except Exception as e:
-            logging.error(f"[{network_name}] Exception during connection/JOIN: {e}")
-        logging.info(f"[{network_name}] Connection lost or failed. Retrying in 30 seconds...")
+            logging.error(f"[{network_name}] Exception: {e}")
+            with connection_lock:
+                connection_status["secondary"][srv] = False
+        logging.info(f"[{network_name}] Retrying in 30 seconds...")
         time.sleep(30)
 
 def start_secondary_irc_networks():
-    """
-    Reads networks.json and spawns a thread for each secondary network.
-    """
+    logging.info("Starting secondary IRC networks thread")
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     networks_file = os.path.join(BASE_DIR, "networks.json")
     networks = load_json(networks_file, default={})
     if not networks:
-        logging.info("No secondary networks defined in networks.json.")
+        logging.info("No secondary networks defined in networks.json")
     for network_name, net_info in networks.items():
         threading.Thread(target=manage_secondary_network, args=(network_name, net_info), daemon=True).start()
 
 def start_matrix():
-    logging.info("Starting Matrix integration...")
-    start_matrix_bot()
+    if enable_matrix:
+        logging.info("Starting Matrix integration...")
+        start_matrix_bot()
+    else:
+        logging.info("Matrix integration disabled in config")
 
 def start_discord():
     if enable_discord:
         logging.info("Starting Discord integration...")
         run_discord_bot()
+    else:
+        logging.info("Discord integration disabled in config")
 
 def irc_send_callback(channel, message):
-    """
-    Callback for centralized polling. Sends messages via the correct IRC connection.
-    """
+    logging.info(f"IRC send callback for {channel}: {message}")
     if "|" in channel:
-        composite = channel  # Format: "server|#channel"
+        composite = channel
         actual_channel = composite.split("|", 1)[1]
         conn = irc_secondary.get(composite)
         if conn:
-            from irc_client import send_multiline_message
             send_multiline_message(conn, actual_channel, message)
         else:
             logging.error(f"No IRC connection for composite key: {composite}")
     else:
         global irc_client
         if irc_client:
-            from irc_client import send_multiline_message
             send_multiline_message(irc_client, channel, message)
         else:
-            logging.error("Primary IRC client not connected; cannot send message.")
-
-def start_centralized_polling():
-    def matrix_send(room, message):
-        try:
-            from matrix_integration import send_message as send_matrix_message
-            asyncio.run_coroutine_threadsafe(send_matrix_message(room, message), asyncio.get_event_loop())
-        except Exception as e:
-            logging.error(f"Error sending Matrix message: {e}")
-
-    def discord_send(channel, message):
-        try:
-            from discord_integration import send_discord_message
-            send_discord_message(channel, message)
-        except Exception as e:
-            logging.error(f"Error sending Discord message: {e}")
-
-    threading.Thread(target=lambda: centralized_polling.start_polling(
-        irc_send_callback, matrix_send, discord_send, poll_interval=300
-    ), daemon=True).start()
+            logging.error("Primary IRC client not connected")
 
 if __name__ == "__main__":
-    disable_matrix_feed_loop()
-    disable_discord_feed_loop()
+    logging.info("Main script starting")
+    try:
+        disable_matrix_feed_loop()
+        logging.info("Disabled Matrix feed loop")
+        disable_discord_feed_loop()
+        logging.info("Disabled Discord feed loop")
 
-    # Start Dashboard
-    dashboard_thread = threading.Thread(target=start_dashboard, daemon=True)
-    dashboard_thread.start()
+        logging.info("Launching primary IRC thread")
+        threading.Thread(target=start_primary_irc, daemon=True).start()
 
-    # Start Centralized Polling
-    start_centralized_polling()
+        logging.info("Launching secondary IRC networks thread")
+        threading.Thread(target=start_secondary_irc_networks, daemon=True).start()
 
-    # Start Matrix and Discord integrations
-    matrix_thread = threading.Thread(target=start_matrix, daemon=True)
-    matrix_thread.start()
+        logging.info("Launching dashboard thread")
+        threading.Thread(target=start_dashboard, daemon=True).start()
 
-    discord_thread = threading.Thread(target=start_discord, daemon=True)
-    discord_thread.start()
+        matrix_callback = None
+        if enable_matrix:
+            from matrix_integration import send_message as matrix_send_message
+            matrix_callback = lambda room, msg: asyncio.run_coroutine_threadsafe(
+                matrix_send_message(room, msg), asyncio.get_event_loop()
+            )
 
-    # Start secondary IRC networks
-    start_secondary_irc_networks()
+        discord_callback = send_discord_message if enable_discord else None
 
-    # Start primary IRC connection
-    primary_thread = threading.Thread(target=start_primary_irc, daemon=True)
-    primary_thread.start()
+        logging.info("Launching polling thread")
+        threading.Thread(target=centralized_polling.start_polling, args=(
+            irc_send_callback,
+            matrix_callback,
+            discord_callback,
+            300
+        ), daemon=True).start()
 
-    while True:
-        time.sleep(1)
+        if enable_matrix:
+            logging.info("Launching Matrix thread")
+            threading.Thread(target=start_matrix, daemon=True).start()
+
+        if enable_discord:
+            logging.info("Launching Discord thread")
+            threading.Thread(target=start_discord, daemon=True).start()
+
+        logging.info("All threads launched, entering main loop")
+        while True:
+            time.sleep(1)
+    except Exception as e:
+        logging.error(f"Main script failed: {e}")
+        raise
