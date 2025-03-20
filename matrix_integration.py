@@ -23,32 +23,10 @@ from channels import load_channels
 logging.basicConfig(level=logging.INFO)
 
 GRACE_PERIOD = 5
-POSTED_FILE = "matrix_posted.json"
 
 # Global instance and event loop for Matrix integration.
 matrix_bot_instance = None
 matrix_event_loop = None
-
-# --- Per-Room Posted Feeds Storage ---
-def load_posted_articles():
-    if os.path.exists(POSTED_FILE):
-        try:
-            with open(POSTED_FILE, "r") as f:
-                data = json.load(f)
-                return {room: set(links) for room, links in data.items()}
-        except Exception as e:
-            logging.error(f"Error loading {POSTED_FILE}: {e}")
-            return {}
-    return {}
-
-def save_posted_articles(posted_dict):
-    try:
-        serializable = {room: list(links) for room, links in posted_dict.items()}
-        with open(POSTED_FILE, "w") as f:
-            json.dump(serializable, f, indent=4)
-    except Exception as e:
-        logging.error(f"Error saving {POSTED_FILE}: {e}")
-# --- End Per-Room Posted Feeds Storage ---
 
 matrix_room_names = {}
 
@@ -73,7 +51,7 @@ def get_localpart(matrix_id):
         return matrix_id.split(":", 1)[0].lstrip("@")
     return matrix_id
 
-# --- Matrix DM Helper Functions (no longer used for command responses) ---
+# --- Matrix DM Helper Functions ---
 matrix_dm_rooms = {}
 
 async def update_direct_messages(room_id, user):
@@ -156,7 +134,6 @@ class MatrixBot:
         self.password = password
         self.start_time = 0
         self.processing_enabled = False
-        self.posted_articles = load_posted_articles()
         self.client.add_event_callback(self.message_callback, RoomMessageText)
         self.last_help_timestamp = {}  # For rate-limiting !help commands
 
@@ -227,20 +204,6 @@ class MatrixBot:
             await self.process_command(room, event.body, event.sender)
 
     async def send_message(self, room_id, message):
-        link = None
-        for line in message.splitlines():
-            if line.startswith("Link:"):
-                link = line[len("Link:"):].strip()
-                break
-        if link:
-            if room_id not in self.posted_articles:
-                self.posted_articles[room_id] = set()
-            if link in self.posted_articles[room_id]:
-                logging.info(f"Link already posted in {room_id}: {link}")
-                return
-            else:
-                self.posted_articles[room_id].add(link)
-                save_posted_articles(self.posted_articles)
         try:
             await self.client.room_send(
                 room_id,
@@ -273,19 +236,14 @@ def send_matrix_message(room, message):
     if matrix_event_loop is None:
         logging.error("Matrix event loop not available.")
         return
-    # Schedule the sending coroutine on the global matrix_event_loop.
     matrix_event_loop.call_soon_threadsafe(
         lambda: asyncio.ensure_future(matrix_bot_instance.send_message(room, message), loop=matrix_event_loop)
     )
 
-# Export send_matrix_message for legacy compatibility.
+# Export send_matrix_message for compatibility
 send_message = send_matrix_message
 
 def start_matrix_bot():
-    """
-    Initializes and runs the Matrix bot.
-    This function now schedules the bot's run() coroutine and then runs the event loop forever.
-    """
     global matrix_bot_instance, matrix_event_loop
     loop = asyncio.new_event_loop()
     matrix_event_loop = loop
@@ -298,9 +256,8 @@ def start_matrix_bot():
     matrix_bot_instance = bot_instance
     for room in matrix_channels:
         if room not in feed.channel_feeds:
-            feed.channel_feeds[room] = {}  # Start with empty feeds
+            feed.channel_feeds[room] = {}
     try:
-        # Schedule the bot's run() coroutine and then run the loop forever.
         loop.create_task(bot_instance.run())
         loop.run_forever()
     except Exception as e:
