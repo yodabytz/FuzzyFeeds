@@ -136,6 +136,12 @@ def manage_secondary_network(network_name, net_info):
                     irc_secondary[composite] = client
                     logging.info(f"[{network_name}] Registered {composite} in irc_secondary")
                 threading.Thread(target=irc_command_parser, args=(client,), daemon=True).start()
+                # Process any queued messages after connecting
+                while not message_queue.empty():
+                    target, msg = message_queue.get()
+                    if target.startswith("#"):
+                        send_multiline_message(client, target, msg)
+                    message_queue.task_done()
             else:
                 logging.error(f"[{network_name}] Connection failed")
                 with connection_lock:
@@ -194,7 +200,7 @@ if __name__ == "__main__":
     logging.info("Main script starting")
     try:
         disable_matrix_feed_loop()
-        logging.info("Disabled Matrix feed loop")
+        logging.info("WELLDisabled Matrix feed loop")
         disable_discord_feed_loop()
         logging.info("Disabled Discord feed loop")
 
