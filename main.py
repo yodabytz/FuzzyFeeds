@@ -14,7 +14,8 @@ try:
         send_multiline_message,
         set_irc_client,
         connect_to_network,
-        irc_command_parser
+        irc_command_parser,
+        message_queue  # Added to use the existing queue
     )
     logging.info("Imported irc_client successfully")
 except Exception as e:
@@ -125,7 +126,7 @@ def manage_secondary_network(network_name, net_info):
             logging.info(f"[{network_name}] Attempting connection to {srv}:{prt}...")
             client = connect_to_network(srv, prt, sslf, channels_list[0])
             if client:
-                logging.info(f"[{network_name}] Connected to {srv}:{prt}")
+                logging.info(f"[{network_name}] Connection established, channels joined: {channels_list}")
                 with connection_lock:
                     connection_status["secondary"][srv] = True
                 for ch in channels_list:
@@ -133,6 +134,7 @@ def manage_secondary_network(network_name, net_info):
                     send_message(client, ch, "FuzzyFeeds has joined the channel!")
                     composite = f"{srv}|{ch}"
                     irc_secondary[composite] = client
+                    logging.info(f"[{network_name}] Registered {composite} in irc_secondary")
                 threading.Thread(target=irc_command_parser, args=(client,), daemon=True).start()
             else:
                 logging.error(f"[{network_name}] Connection failed")
@@ -178,13 +180,15 @@ def irc_send_callback(channel, message):
         if conn:
             send_multiline_message(conn, actual_channel, message)
         else:
-            logging.error(f"No IRC connection for composite key: {composite}")
+            logging.error(f"No IRC connection for composite key: {composite}, queuing message")
+            message_queue.put((actual_channel, message))  # Queue message if connection is down
     else:
         global irc_client
         if irc_client:
             send_multiline_message(irc_client, channel, message)
         else:
-            logging.error("Primary IRC client not connected")
+            logging.error("Primary IRC client not connected, queuing message")
+            message_queue.put((channel, message))  # Queue message if primary is down
 
 if __name__ == "__main__":
     logging.info("Main script starting")
@@ -194,15 +198,20 @@ if __name__ == "__main__":
         disable_discord_feed_loop()
         logging.info("Disabled Discord feed loop")
 
+        # Start primary IRC thread
         logging.info("Launching primary IRC thread")
         threading.Thread(target=start_primary_irc, daemon=True).start()
 
+        # Start secondary IRC networks first and give them time to connect
         logging.info("Launching secondary IRC networks thread")
         threading.Thread(target=start_secondary_irc_networks, daemon=True).start()
+        time.sleep(5)  # Allow secondary networks to establish connections
 
+        # Start dashboard thread
         logging.info("Launching dashboard thread")
         threading.Thread(target=start_dashboard, daemon=True).start()
 
+        # Matrix and Discord callbacks
         matrix_callback = None
         if enable_matrix:
             from matrix_integration import send_message as matrix_send_message
@@ -212,6 +221,7 @@ if __name__ == "__main__":
 
         discord_callback = send_discord_message if enable_discord else None
 
+        # Start polling thread after secondary networks are initialized
         logging.info("Launching polling thread")
         threading.Thread(target=centralized_polling.start_polling, args=(
             irc_send_callback,
@@ -220,6 +230,7 @@ if __name__ == "__main__":
             300
         ), daemon=True).start()
 
+        # Start Matrix and Discord threads
         if enable_matrix:
             logging.info("Launching Matrix thread")
             threading.Thread(target=start_matrix, daemon=True).start()
