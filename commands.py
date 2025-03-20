@@ -27,11 +27,6 @@ last_command_timestamp = {}
 user_abuse = {}
 
 def get_network_for_channel(channel):
-    """
-    Checks if the channel is a primary channel (defined in config_channels).
-    If not, searches networks.json for a network whose "Channels" list includes this channel.
-    Returns the corresponding server if found; otherwise, returns the default server.
-    """
     if channel in config_channels:
         return server
     networks = persistence.load_json("networks.json", default={})
@@ -415,15 +410,23 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         if user.lower() != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !addnetwork.")
             return
-        # New syntax: !addnetwork <networkname> <server_info> <channels> <admin>
-        parts = message.split(maxsplit=4)
-        if len(parts) != 5:
-            send_message_fn(response_target(actual_channel, integration), "Usage: !addnetwork <networkname> <server_info> <channels> <admin>")
+        parts = message.split()
+        if len(parts) < 5:
+            send_message_fn(response_target(actual_channel, integration), "Usage: !addnetwork <networkname> <server_info> <channels> <admin> [-ssl]")
             return
+        
         network_name = parts[1].strip()
-        server_info = parts[2].strip()  # Format: irc.server.com/6667
-        channels_str = parts[3].strip()  # Comma-separated list
-        network_admin = parts[4].strip()
+        server_info = parts[2].strip()
+        use_ssl_flag = "-ssl" in parts
+        channels_idx = 3 if not use_ssl_flag else 4
+        admin_idx = 4 if not use_ssl_flag else 5
+        if len(parts) <= admin_idx:
+            send_message_fn(response_target(actual_channel, integration), "Usage: !addnetwork <networkname> <server_info> <channels> <admin> [-ssl]")
+            return
+        
+        channels_str = parts[channels_idx].strip()
+        network_admin = parts[admin_idx].strip()
+
         if "/" not in server_info:
             send_message_fn(response_target(actual_channel, integration), "Invalid server_info format. Use irc.server.com/6667")
             return
@@ -433,46 +436,74 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         except ValueError:
             send_message_fn(response_target(actual_channel, integration), "Invalid port number.")
             return
-        use_ssl_flag = False
-        channels_list = []
-        for ch in channels_str.split(","):
-            ch = ch.strip()
-            if not ch.startswith("#"):
-                ch = "#" + ch
-            channels_list.append(ch)
+        channels_list = [ch.strip() if ch.startswith("#") else "#" + ch.strip() for ch in channels_str.split(",")]
         if not channels_list:
             send_message_fn(response_target(actual_channel, integration), "No channels provided.")
             return
+
+        logging.info(f"[!addnetwork] Starting connection attempt for {network_name} ({server_name}:{port_number}, SSL: {use_ssl_flag})")
         send_message_fn(response_target(actual_channel, integration),
             f"Connecting to network {network_name} ({server_name}:{port_number}, SSL: {use_ssl_flag}) on channels {channels_list} with admin {network_admin}...")
+        
         import threading
-        from irc_client import connect_to_network, irc_command_parser
+        import os
+        from irc_client import connect_to_network, irc_command_parser, send_message
+        global irc_secondary
         def connect_new():
-            new_client = connect_to_network(server_name, port_number, use_ssl_flag, channels_list[0])
-            if new_client:
-                for ch in channels_list:
-                    new_client.send(f"JOIN {ch}\r\n".encode("utf-8"))
-                    send_message(new_client, ch, "FuzzyFeeds has joined the channel!")
-                    composite = f"{server_name}|{ch}"
-                    irc_secondary[composite] = new_client
+            try:
+                logging.info(f"[!addnetwork] Thread started for {server_name}:{port_number}")
+                new_client = connect_to_network(server_name, port_number, use_ssl_flag, channels_list[0])
+                if new_client:
+                    logging.info(f"[!addnetwork] Connected to {server_name}:{port_number}")
+                    for ch in channels_list:
+                        new_client.send(f"JOIN {ch}\r\n".encode("utf-8"))
+                        send_message(new_client, ch, "FuzzyFeeds has joined the channel!")
+                        composite = f"{server_name}|{ch}"
+                        irc_secondary[composite] = new_client
+                        logging.info(f"[!addnetwork] Joined {ch}, registered {composite}")
+                    send_message_fn(response_target(actual_channel, integration),
+                        f"Successfully connected to {server_name}:{port_number} and joined channels: {', '.join(channels_list)}.")
+                    threading.Thread(target=irc_command_parser, args=(new_client,), daemon=True).start()
+                    return True
+                else:
+                    logging.error(f"[!addnetwork] Failed to connect to {server_name}:{port_number}")
+                    send_message_fn(response_target(actual_channel, integration),
+                        f"Failed to connect to {server_name}:{port_number}.")
+                    return False
+            except Exception as e:
+                logging.error(f"[!addnetwork] Exception in connect_new: {e}")
                 send_message_fn(response_target(actual_channel, integration),
-                    f"Successfully connected to {server_name}:{port_number} and joined channels: {', '.join(channels_list)}.")
-                threading.Thread(target=irc_command_parser, args=(new_client,), daemon=True).start()
-                from persistence import load_json, save_json
-                networks_file = "networks.json"
-                networks = load_json(networks_file, default={})
-                networks[network_name] = {
-                    "server": server_name,
-                    "port": port_number,
-                    "Channels": channels_list,
-                    "ssl": use_ssl_flag,
-                    "admin": network_admin
-                }
+                    f"Error connecting to {server_name}:{port_number}: {e}")
+                return False
+        
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        networks_file = os.path.join(BASE_DIR, "networks.json")
+        
+        connection_thread = threading.Thread(target=connect_new, daemon=True)
+        connection_thread.start()
+        logging.info(f"[!addnetwork] Connection thread launched for {network_name}")
+        connection_thread.join()
+        
+        from persistence import load_json, save_json
+        networks = load_json(networks_file, default={})
+        if connection_thread.is_alive() or not hasattr(connection_thread, 'result') or connection_thread.result:
+            logging.info(f"[!addnetwork] Preparing to save {network_name} to {networks_file}")
+            networks[network_name] = {
+                "server": server_name,
+                "port": port_number,
+                "Channels": channels_list,
+                "ssl": use_ssl_flag,
+                "admin": network_admin
+            }
+            try:
                 save_json(networks_file, networks)
-            else:
+                logging.info(f"[!addnetwork] Successfully saved {network_name} to {networks_file}")
                 send_message_fn(response_target(actual_channel, integration),
-                    f"Failed to connect to {server_name}:{port_number}.")
-        threading.Thread(target=connect_new, daemon=True).start()
+                    f"Network {network_name} saved to configuration.")
+            except Exception as e:
+                logging.error(f"[!addnetwork] Failed to save {network_name} to {networks_file}: {e}")
+                send_message_fn(response_target(actual_channel, integration),
+                    f"Connected but failed to save network config: {e}")
 
     # !delnetwork
     elif lower_message.startswith("!delnetwork") or lower_message.startswith("!deletenetwork"):
@@ -618,14 +649,14 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             multiline_send(send_multiline_message_fn, response_target(actual_channel, integration), output)
         except Exception as e:
             send_private_message_fn(user, f"Error reading admin info: {e}")
-            
+
     # !stats
     elif lower_message.startswith("!stats"):
         response_target_value = response_target(actual_channel, integration)
         uptime_seconds = int(time.time() - __import__("config").start_time)
         uptime = str(datetime.timedelta(seconds=uptime_seconds))
-        if user.lower() == __import__("config").admin.lower() or user.lower() in [a.lower() for a in __import__("config").admins]:
-            irc_keys = [k for k in feed.channel_feeds if k.startswith("#")]
+        if user.lower() == admin.lower() or user.lower() in [a.lower() for a in admins]:
+            irc_keys = [k for k in feed.channel_feeds if "|" in k or k.startswith("#")]
             discord_keys = [k for k in feed.channel_feeds if k.isdigit()]
             matrix_keys = [k for k in feed.channel_feeds if k.startswith("!")]
             irc_feed_count = sum(len(feed.channel_feeds[k]) for k in irc_keys)
@@ -645,7 +676,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                 f"Channel '{target}' Feeds: {num_channel_feeds}"
             ]
         multiline_send(send_multiline_message_fn, response_target_value, "\n".join(response_lines))
-        
+
     # !quit
     elif lower_message.startswith("!quit"):
         if user.lower() != admin.lower():
@@ -653,6 +684,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             return
         send_message_fn(response_target(actual_channel, integration), "Shutting down...")
         os._exit(0)
+    
     # !reload
     elif lower_message.startswith("!reload"):
         if user.lower() != admin.lower():
@@ -663,6 +695,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), "Configuration reloaded.")
         except Exception as e:
             send_message_fn(response_target(actual_channel, integration), f"Error reloading config: {e}")
+    
     # !restart
     elif lower_message.startswith("!restart"):
         if user.lower() != admin.lower():
@@ -670,6 +703,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             return
         send_message_fn(response_target(actual_channel, integration), "Restarting bot...")
         os.execv(sys.executable, [sys.executable] + sys.argv)
+    
     # !help
     elif lower_message.startswith("!help"):
         parts = message.split(" ", 1)
@@ -678,6 +712,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             help_text = get_help()
         multiline_send(send_multiline_message_fn, user, help_text)
+    
     else:
         send_message_fn(response_target(actual_channel, integration), "Unknown command. Use !help for a list.")
-
