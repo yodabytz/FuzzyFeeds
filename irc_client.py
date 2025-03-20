@@ -5,7 +5,7 @@ import time
 import logging
 import ssl
 import queue
-from config import ops  # For irc_command_parser
+from config import ops
 
 botnick = "FuzzyFeeds"
 irc_client = None
@@ -59,15 +59,17 @@ def connect_and_register():
             connected = False
             start_time_timeout = time.time()
             TIMEOUT_SECONDS = 30
-            irc.settimeout(15)  # Increased from 5 to 15 seconds
+            irc.settimeout(15)
             while not connected and (time.time() - start_time_timeout) < TIMEOUT_SECONDS:
                 response = irc.recv(2048).decode("utf-8", errors="ignore")
                 logging.debug(f"Received: {response}")
                 for line in response.split("\r\n"):
                     if line.startswith("PING"):
                         irc.send(f"PONG {line.split()[1]}\r\n".encode("utf-8"))
+                        logging.debug("Sent PONG response")
                     if " 001 " in line or "Welcome" in line:
                         connected = True
+                        logging.info(f"Successfully connected to {server}:{port}")
                         break
             if not connected:
                 logging.error(f"Failed to register on {server}:{port} after attempt {attempt+1}")
@@ -101,20 +103,30 @@ def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel):
                 logging.info(f"SSL context initialized for {server_name}")
             irc.connect((server_name, port_number))
             irc.send(f"NICK {botnick}\r\n".encode("utf-8"))
+            logging.debug(f"Sent NICK {botnick}")
             irc.send(f"USER {botnick} 0 * :Python IRC Bot\r\n".encode("utf-8"))
+            logging.debug(f"Sent USER {botnick}")
             
             connected = False
             start_time_timeout = time.time()
-            TIMEOUT_SECONDS = 30  # Total wait time
-            irc.settimeout(15)  # Increased from 5 to 15 seconds per read
+            TIMEOUT_SECONDS = 30
+            irc.settimeout(15)
             while not connected and (time.time() - start_time_timeout) < TIMEOUT_SECONDS:
                 response = irc.recv(2048).decode("utf-8", errors="ignore")
-                logging.debug(f"Received: {response}")
+                if not response:
+                    logging.warning(f"No response from {server_name}:{port_number}, may have disconnected")
+                    break
+                logging.debug(f"Received from {server_name}:{port_number}: {response}")
                 for line in response.split("\r\n"):
                     if line.startswith("PING"):
                         irc.send(f"PONG {line.split()[1]}\r\n".encode("utf-8"))
+                        logging.debug(f"Sent PONG to {server_name}:{port_number}")
                     if " 001 " in line or "Welcome" in line:
                         connected = True
+                        logging.info(f"Successfully connected to {server_name}:{port_number}")
+                        break
+                    elif line.startswith(":") and "ERROR" in line:
+                        logging.error(f"Server error from {server_name}:{port_number}: {line}")
                         break
             if not connected:
                 logging.error(f"Failed to register on {server_name}:{port_number} after attempt {attempt+1}")
@@ -122,8 +134,8 @@ def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel):
                 attempt += 1
                 continue
             irc.settimeout(None)
-            irc.send(f"JOIN {initial_channel}\r\n".encode("utf-8"))
-            send_message(irc, initial_channel, "FuzzyFeeds has joined the channel!")
+            irc.send(f"JOIN {initial_channel}\r\n".encode("utf-8"))  # Join initial channel only
+            # Removed redundant join message here
             threading.Thread(target=process_message_queue, args=(irc,), daemon=True).start()
             return irc
         except ssl.SSLError as ssl_err:
@@ -179,3 +191,4 @@ def irc_command_parser(irc_conn):
         except Exception as e:
             logging.error(f"Error in irc_command_parser: {e}")
             break
+
