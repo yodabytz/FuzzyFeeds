@@ -6,11 +6,10 @@ import logging
 import json
 from collections import deque
 from flask import Flask, jsonify, render_template_string, request, Response
-import config  # Needed to reference config.server
+import config
 
 from config import start_time, dashboard_port, dashboard_username, dashboard_password
 import feed
-# Ensure feeds and subscriptions are loaded
 feed.load_feeds()
 try:
     from feed import load_subscriptions
@@ -24,13 +23,12 @@ except ImportError:
     matrix_room_names = {}
 
 from persistence import load_json
+from connection_state import connection_status, connection_lock
 
 MATRIX_ALIASES_FILE = os.path.join(os.path.dirname(__file__), "matrix_aliases.json")
 
-# Reduce Werkzeug logs
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
-# Log handler that captures ERROR messages in memory so we can display them.
 MAX_ERRORS = 50
 errors_deque = deque()
 
@@ -46,11 +44,8 @@ handler = DashboardErrorHandler()
 handler.setLevel(logging.ERROR)
 logging.getLogger().addHandler(handler)
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
-##########################################
-# Authentication Helpers
-##########################################
 from functools import wraps
 
 def check_auth(username, password):
@@ -71,24 +66,11 @@ def requires_auth(f):
          return f(*args, **kwargs)
     return decorated
 
-##########################################
-# Feed Tree Building Functions
-##########################################
 def build_feed_tree(networks):
-    """
-    Build a nested dictionary structure from feed.channel_feeds.
-    For IRC:
-      - If the key contains a pipe ("|"), split into server and channel.
-      - If it starts with '#' (non‑composite), use config.server.
-      - Skip keys exactly equal to "FuzzyFeeds".
-    Matrix keys (starting with '!') and Discord keys (all digits) are handled as before.
-    Returns:
-      { server: { channel: [ {feed_name, link}, ... ], ... }, ... }
-    """
     tree = {}
     for key, feeds_dict in feed.channel_feeds.items():
         if key == "FuzzyFeeds":
-            continue  # Skip unwanted branch.
+            continue
         if "|" in key:
             server, channel = key.split("|", 1)
         elif key.startswith("#"):
@@ -113,7 +95,6 @@ def build_feed_tree(networks):
     return tree
 
 def sort_feed_tree(feed_tree):
-    # Order: IRC (order 1), Matrix (order 2), Discord (order 3)
     def order_key(server):
         s = server.lower()
         if s == "matrix":
@@ -124,19 +105,10 @@ def sort_feed_tree(feed_tree):
             return (1, s)
     return sorted(feed_tree.items(), key=lambda x: order_key(x[0]))
 
-##########################################
-# Section Tree Builders with Updated Styling
-##########################################
-# Helper to wrap text (connector dashes and pipes) in light gray.
 def dash(text):
     return f'<span style="color:#d3d3d3;">{text}</span>'
 
 def build_irc_tree(irc_tree):
-    """
-    Build a multiline string for the IRC section.
-    Server/channel headings and feed names keep their colors.
-    Only the connector dashes and vertical bars are rendered in light gray.
-    """
     lines = []
     base_indent = ""
     server_keys = list(irc_tree.keys())
@@ -166,10 +138,6 @@ def build_irc_tree(irc_tree):
     return "\n".join(lines)
 
 def build_matrix_tree(matrix_tree, matrix_aliases):
-    """
-    Build a multiline string for the Matrix section.
-    Only the line connectors (including vertical bars) are in light gray.
-    """
     lines = []
     header_line = dash("└── ") + f'<span style="color:#d63384; font-weight:bold;">Matrix</span>'
     lines.append(header_line)
@@ -193,10 +161,6 @@ def build_matrix_tree(matrix_tree, matrix_aliases):
     return "\n".join(lines)
 
 def build_discord_tree(discord_tree):
-    """
-    Build a multiline string for the Discord section.
-    Only the connector dashes are in light gray.
-    """
     lines = []
     channel_keys = sorted(discord_tree.keys())
     for idx, channel in enumerate(channel_keys):
@@ -207,13 +171,12 @@ def build_discord_tree(discord_tree):
         for f_idx, feed_item in enumerate(feeds):
             is_last_feed = (f_idx == len(feeds) - 1)
             feed_connector = dash("└── ") if is_last_feed else dash("├── ")
-            lines.append("        " + feed_connector + f'<span style="color:#6610f2; font-weight:bold;">{feed_item.get("feed_name", "Unknown")}</span>: {feed_item.get("link", "#")}')
+            feed_name = feed_item.get("feed_name", "Unknown")
+            feed_link = feed_item.get("link", "#")
+            lines.append("        " + feed_connector + f'<span style="color:#6610f2; font-weight:bold;">{feed_name}</span>: {feed_link}')
     return "\n".join(lines)
 
 def build_unicode_tree(feed_tree_sorted, matrix_aliases):
-    """
-    Build the complete feed tree with sections for IRC, Matrix, and Discord.
-    """
     new_tree = {"IRC": {}, "Matrix": {}, "Discord": {}}
     for server, channels in feed_tree_sorted:
         if server.lower() == "matrix":
@@ -236,9 +199,6 @@ def build_unicode_tree(feed_tree_sorted, matrix_aliases):
         tree_sections.append(build_discord_tree(new_tree["Discord"]))
     return "\n".join(tree_sections)
 
-##########################################
-# Flask App and Routes
-##########################################
 app = Flask(__name__)
 
 DASHBOARD_TEMPLATE = r"""
@@ -247,68 +207,21 @@ DASHBOARD_TEMPLATE = r"""
 <head>
     <meta charset="UTF-8">
     <title>FuzzyFeeds Dashboard</title>
-    <!-- Google Fonts: Passion One (title) & Montserrat (body) -->
     <link href="https://fonts.googleapis.com/css2?family=Passion+One&family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
-    <!-- Bootstrap CSS -->
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
-    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/static/images/favicon.ico" type="image/x-icon">
     <style>
-      body {
-          font-family: 'Montserrat', sans-serif;
-          padding-top: 60px;
-      }
-      h1 {
-          font-family: 'Passion One', sans-serif;
-          font-size: 3rem;
-      }
-      .container {
-          max-width: 1400px;
-      }
-      .card {
-          margin-bottom: 20px;
-          border-radius: 15px;
-          box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-      }
-      .footer {
-          text-align: center;
-          margin-top: 20px;
-          color: #777;
-      }
-      .logo-img {
-          margin-right: 10px;
-      }
-      pre.tree {
-          background: #f8f9fa;
-          padding: 15px;
-          border: 1px solid #dee2e6;
-          border-radius: 5px;
-          white-space: pre-wrap;
-          font-family: monospace;
-          font-size: 14px;
-      }
-      /* Styles for server status dots */
-      .status-dot {
-          height: 10px;
-          width: 10px;
-          border-radius: 50%;
-          display: inline-block;
-          margin-right: 5px;
-      }
+      body { font-family: 'Montserrat', sans-serif; padding-top: 60px; }
+      h1 { font-family: 'Passion One', sans-serif; font-size: 3rem; }
+      .container { max-width: 1400px; }
+      .card { margin-bottom: 20px; border-radius: 15px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+      .footer { text-align: center; margin-top: 20px; color: #777; }
+      .logo-img { margin-right: 10px; }
+      pre.tree { background: #f8f9fa; padding: 15px; border: 1px solid #dee2e6; border-radius: 5px; white-space: pre-wrap; font-family: monospace; font-size: 14px; }
+      .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
       .status-green { background-color: green; }
       .status-red { background-color: red; }
-      /* Go-to-top arrow */
-      #goTop {
-          position: fixed;
-          bottom: 20px;
-          right: 20px;
-          background-color: #007bff;
-          color: white;
-          padding: 10px 15px;
-          border-radius: 50%;
-          text-align: center;
-          cursor: pointer;
-          z-index: 1000;
-      }
+      #goTop { position: fixed; bottom: 20px; right: 20px; background-color: #007bff; color: white; padding: 10px 15px; border-radius: 50%; text-align: center; cursor: pointer; z-index: 1000; }
     </style>
 </head>
 <body>
@@ -323,9 +236,7 @@ DASHBOARD_TEMPLATE = r"""
         </h1>
         <p class="lead">Monitor uptime, feeds, subscriptions, and errors.</p>
         
-        <!-- Top cards -->
         <div class="row">
-          <!-- Stats card -->
           <div class="col-md-4">
               <div class="card">
                   <div class="card-header bg-primary text-white" style="font-weight:600;">Stats</div>
@@ -333,7 +244,7 @@ DASHBOARD_TEMPLATE = r"""
                       <h5 class="card-title" id="uptime">Uptime: {{ uptime }}</h5>
                       <p>
                         {% for server in irc_servers %}
-                          <span class="status-dot {% if irc_status == 'green' %}status-green{% else %}status-red{% endif %}"></span>
+                          <span class="status-dot {% if server in irc_status and irc_status[server] == 'green' %}status-green{% else %}status-red{% endif %}"></span>
                           <span style="font-weight:600;">IRC Server:</span> {{ server }}<br>
                         {% endfor %}
                         <span class="status-dot {% if matrix_status == 'green' %}status-green{% else %}status-red{% endif %}"></span>
@@ -344,7 +255,6 @@ DASHBOARD_TEMPLATE = r"""
                   </div>
               </div>
           </div>
-          <!-- Total Channel Feeds card -->
           <div class="col-md-4">
               <div class="card">
                   <div class="card-header bg-success text-white" style="font-weight:600;">Total Channel Feeds</div>
@@ -354,7 +264,6 @@ DASHBOARD_TEMPLATE = r"""
                   </div>
               </div>
           </div>
-          <!-- User Subscriptions card -->
           <div class="col-md-4">
               <div class="card">
                   <div class="card-header bg-info text-white" style="font-weight:600;">User Subscriptions</div>
@@ -370,9 +279,7 @@ DASHBOARD_TEMPLATE = r"""
           </div>
         </div>
 
-        <!-- Integration tables -->
         <div class="row">
-            <!-- IRC -->
             <div class="col-md-4">
               <div class="card">
                 <div class="card-header bg-secondary text-white" style="font-weight:600;">IRC Channels</div>
@@ -400,7 +307,6 @@ DASHBOARD_TEMPLATE = r"""
                 </div>
               </div>
             </div>
-            <!-- Matrix -->
             <div class="col-md-4">
               <div class="card">
                 <div class="card-header bg-secondary text-white" style="font-weight:600;">Matrix Rooms</div>
@@ -436,7 +342,6 @@ DASHBOARD_TEMPLATE = r"""
                 </div>
               </div>
             </div>
-            <!-- Discord -->
             <div class="col-md-4">
               <div class="card">
                 <div class="card-header bg-secondary text-white" style="font-weight:600;">Discord Channels</div>
@@ -466,7 +371,6 @@ DASHBOARD_TEMPLATE = r"""
             </div>
         </div>
         
-        <!-- Fuzzy Tree Section -->
         <div class="row">
           <div class="col-md-12">
               <div class="card">
@@ -478,7 +382,6 @@ DASHBOARD_TEMPLATE = r"""
           </div>
         </div>
         
-        <!-- Errors Section -->
         <div class="row">
           <div class="col-md-12">
               <div class="card">
@@ -490,13 +393,12 @@ DASHBOARD_TEMPLATE = r"""
           </div>
         </div>
     </div>
-    <div id="goTop" onclick="window.scrollTo({top: 0, behavior: 'smooth'});">&#8679;</div>
+    <div id="goTop" onclick="window.scrollTo({top: 0, behavior: 'smooth'});">⇧</div>
     <div class="footer">
-      <p>&copy; FuzzyFeeds <span id="current_year">{{ current_year }}</span></p>
+      <p>© FuzzyFeeds <span id="current_year">{{ current_year }}</span></p>
     </div>
 
     <script>
-      // Uptime polling
       let uptimeInterval = setInterval(function(){
           fetch('/uptime').then(response => {
               if (!response.ok) throw new Error('Failed');
@@ -565,9 +467,6 @@ DASHBOARD_TEMPLATE = r"""
 </html>
 """
 
-##########################################
-# Additional Routes (All Protected)
-##########################################
 @app.route('/uptime')
 @requires_auth
 def uptime_route():
@@ -597,26 +496,29 @@ def index():
     networks_file = os.path.join(BASE_DIR, "networks.json")
     networks = load_json(networks_file, default={}) if os.path.exists(networks_file) else {}
 
-    # Ensure channels from networks.json are present in feed.channel_feeds.
     for channel in networks.keys():
         if channel not in feed.channel_feeds:
             feed.channel_feeds[channel] = {}
 
-    # Aggregate IRC server names: include default IRC and any from networks.json.
     irc_servers = []
+    irc_status = {}
     default_irc = config.server
     if default_irc:
         irc_servers.append(default_irc)
-    for channel, details in networks.items():
-        if channel.startswith("#"):
-            server_name = details.get("server", "")
-            if server_name and server_name not in irc_servers:
-                irc_servers.append(server_name)
-    try:
-        from irc import current_irc_client
-        irc_status = "green" if current_irc_client is not None else "red"
-    except Exception:
-        irc_status = "red"
+        with connection_lock:
+            irc_status[default_irc] = "green" if connection_status["primary"].get(default_irc, False) else "red"
+        if irc_status[default_irc] == "red":
+            logging.info(f"Primary IRC {default_irc} reported as disconnected")
+
+    for network_name, details in networks.items():
+        server_name = details.get("server", "")
+        if server_name and server_name not in irc_servers:
+            irc_servers.append(server_name)
+            with connection_lock:
+                irc_status[server_name] = "green" if connection_status["secondary"].get(server_name, False) else "red"
+            if irc_status[server_name] == "red":
+                logging.info(f"Secondary IRC {server_name} reported as disconnected")
+
     try:
         from matrix_integration import matrix_bot_instance
         matrix_status = "green" if matrix_bot_instance is not None else "red"
@@ -637,36 +539,13 @@ def index():
     total_channels = len(feed.channel_feeds)
     total_subscriptions = sum(len(subs) for subs in feed.subscriptions.values())
 
-    # Build the feed tree and sort it.
     feed_tree = build_feed_tree(networks)
     feed_tree_sorted = sort_feed_tree(feed_tree)
-    # Build section trees
-    new_tree = {"IRC": {}, "Matrix": {}, "Discord": {}}
-    for server, channels in feed_tree_sorted:
-        if server.lower() == "matrix":
-            new_tree["Matrix"].update(channels)
-        elif server.lower() == "discord":
-            new_tree["Discord"].update(channels)
-        else:
-            if server not in new_tree["IRC"]:
-                new_tree["IRC"][server] = {}
-            new_tree["IRC"][server].update(channels)
-    tree_sections = []
-    if new_tree["IRC"]:
-        tree_sections.append("IRC")
-        tree_sections.append(build_irc_tree(new_tree["IRC"]))
-    if new_tree["Matrix"]:
-        tree_sections.append("Matrix")
-        tree_sections.append(build_matrix_tree(new_tree["Matrix"], matrix_aliases))
-    if new_tree["Discord"]:
-        tree_sections.append("Discord")
-        tree_sections.append(build_discord_tree(new_tree["Discord"]))
-    feed_tree_html = "\n".join(tree_sections)
+    feed_tree_html = build_unicode_tree(feed_tree_sorted, matrix_aliases)
 
     errors_str = "\n".join(errors_deque) if errors_deque else "No errors reported."
     current_year = datetime.datetime.now().year
 
-    # Build IRC channels dict grouping by server.
     irc_channels = {}
     for key, feeds_dict in feed.channel_feeds.items():
         if key == "FuzzyFeeds":
@@ -736,32 +615,11 @@ def stats_data():
 
     feed_tree = build_feed_tree(networks)
     feed_tree_sorted = sort_feed_tree(feed_tree)
-    new_tree = {"IRC": {}, "Matrix": {}, "Discord": {}}
-    for server, channels in feed_tree_sorted:
-        if server.lower() == "matrix":
-            new_tree["Matrix"].update(channels)
-        elif server.lower() == "discord":
-            new_tree["Discord"].update(channels)
-        else:
-            if server not in new_tree["IRC"]:
-                new_tree["IRC"][server] = {}
-            new_tree["IRC"][server].update(channels)
-    tree_sections = []
-    if new_tree["IRC"]:
-        tree_sections.append("IRC")
-        tree_sections.append(build_irc_tree(new_tree["IRC"]))
-    if new_tree["Matrix"]:
-        tree_sections.append("Matrix")
-        tree_sections.append(build_matrix_tree(new_tree["Matrix"], matrix_aliases))
-    if new_tree["Discord"]:
-        tree_sections.append("Discord")
-        tree_sections.append(build_discord_tree(new_tree["Discord"]))
-    feed_tree_html = "\n".join(tree_sections)
+    feed_tree_html = build_unicode_tree(feed_tree_sorted, matrix_aliases)
 
     errors_str = "\n".join(errors_deque) if errors_deque else "No errors reported."
     current_year = datetime.datetime.now().year
 
-    # Build IRC channels dict grouping by server.
     irc_channels = {}
     for key, feeds_dict in feed.channel_feeds.items():
         if key == "FuzzyFeeds":
@@ -796,7 +654,6 @@ def stats_data():
         "subscriptions": feed.subscriptions
     }
 
-# New error handler for 400 errors to suppress "Bad request version" details.
 @app.errorhandler(400)
 def handle_bad_request(error):
     return "Bad Request", 400
