@@ -24,7 +24,6 @@ script_start_time = time.time()
 def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
     logging.info("Centralized polling started.")
     while True:
-        # Reload feeds each loop to ensure we have the latest channel and feed data
         feed.load_feeds()
         current_time = time.time()
         channels_to_check = list(feed.channel_feeds.keys())
@@ -74,7 +73,6 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             logging.info(f"Channel {chan} already has link: {link}")
                             continue
                         if link:
-                            # Instead of sending one multi-line message, send two separate messages:
                             title_msg = f"{feed_name}: {title}"
                             link_msg = f"Link: {link}"
                             
