@@ -212,6 +212,9 @@ def irc_send_callback(channel, message):
             logging.error("Primary IRC client not connected, queuing message")
             message_queue.put((channel, message))
 
+def run_polling():
+    asyncio.run(centralized_polling.start_polling(irc_send_callback, matrix_send_message, send_discord_message))
+
 if __name__ == "__main__":
     logging.info("Main script starting")
     try:
@@ -232,12 +235,7 @@ if __name__ == "__main__":
 
         discord_callback = send_discord_message if enable_discord else None
 
-        threading.Thread(target=centralized_polling.start_polling, args=(
-            irc_send_callback,
-            matrix_callback,
-            discord_callback,
-            300
-        ), daemon=True).start()
+        threading.Thread(target=run_polling, daemon=True).start()
 
         if enable_matrix:
             threading.Thread(target=start_matrix, daemon=True).start()
