@@ -131,7 +131,7 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
 async def start_polling(irc_send, matrix_send, discord_send, poll_interval=default_interval):
     logging.info("Centralized async polling started.")
     scheduler = FeedScheduler()
-    feed.load_feeds()
+    feed.load_feeds()  # Initial load
     for chan in feed.channel_feeds.keys():
         if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
             feed.last_check_times = {}
@@ -139,6 +139,7 @@ async def start_polling(irc_send, matrix_send, discord_send, poll_interval=defau
         scheduler.add_channel(chan, feed.channel_intervals.get(chan, poll_interval))
 
     while True:
+        feed.load_feeds()  # Reload feeds before each cycle for freshness
         next_time, chan = scheduler.get_next()
         if not chan:
             await asyncio.sleep(1)
