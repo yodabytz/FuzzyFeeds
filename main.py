@@ -212,18 +212,14 @@ def irc_send_callback(channel, message):
             logging.error("Primary IRC client not connected, queuing message")
             message_queue.put((channel, message))
 
-async def run_polling_async(irc_send, matrix_send, discord_send):
-    logging.info("Starting async polling loop...")
-    await centralized_polling.start_polling(irc_send, matrix_send, discord_send)
-
 def run_polling():
     logging.info("Starting polling thread...")
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(run_polling_async(irc_send_callback, matrix_send_message, send_discord_message))
+        loop.run_until_complete(centralized_polling.start_polling(irc_send_callback, matrix_send_message, send_discord_message))
     except Exception as e:
-        logging.error(f"Polling thread failed: {e}")
+        logging.error(f"Polling loop failed: {e}")
     finally:
         loop.close()
 
@@ -244,10 +240,13 @@ if __name__ == "__main__":
         if enable_matrix:
             from matrix_integration import send_message as matrix_send_message
             matrix_callback = lambda room, msg: matrix_send_message(room, msg)
+        else:
+            matrix_send_message = lambda room, msg: logging.info(f"Matrix send disabled: {room}: {msg}")
 
         discord_callback = send_discord_message if enable_discord else None
 
-        threading.Thread(target=run_polling, daemon=True).start()
+        polling_thread = threading.Thread(target=run_polling, daemon=True)
+        polling_thread.start()
 
         if enable_matrix:
             threading.Thread(target=start_matrix, daemon=True).start()
