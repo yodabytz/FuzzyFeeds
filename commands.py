@@ -312,6 +312,30 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         except ValueError:
             send_message_fn(response_target(actual_channel, integration), "Invalid number of minutes.")
 
+    # !setbatch
+    elif lower_message.startswith("!setbatch"):
+        if not effective_op:
+            send_private_message_fn(user, "Not authorized to use !setbatch.")
+            return
+        parts = message.split(" ", 1)
+        if len(parts) < 2:
+            send_message_fn(response_target(actual_channel, integration), "Usage: !setbatch <size|off>")
+            return
+        value = parts[1].strip().lower()
+        if value == "off":
+            feed.channel_settings[key] = {"batch_size": 0}
+            send_message_fn(response_target(actual_channel, integration), "Batching disabled.")
+        else:
+            try:
+                size = int(value)
+                if size < 1:
+                    raise ValueError
+                feed.channel_settings[key] = {"batch_size": size}
+                send_message_fn(response_target(actual_channel, integration), f"Batch size set to {size}.")
+            except ValueError:
+                send_message_fn(response_target(actual_channel, integration), "Invalid size. Use a number > 0 or 'off'.")
+        feed.save_channel_settings()
+
     # !search
     elif lower_message.startswith("!search"):
         parts = message.split(" ", 1)
