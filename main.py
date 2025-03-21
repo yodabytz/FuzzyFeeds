@@ -212,12 +212,20 @@ def irc_send_callback(channel, message):
             logging.error("Primary IRC client not connected, queuing message")
             message_queue.put((channel, message))
 
+async def run_polling_async(irc_send, matrix_send, discord_send):
+    logging.info("Starting async polling loop...")
+    await centralized_polling.start_polling(irc_send, matrix_send, discord_send)
+
 def run_polling():
     logging.info("Starting polling thread...")
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        asyncio.run(centralized_polling.start_polling(irc_send_callback, matrix_send_message, send_discord_message))
+        loop.run_until_complete(run_polling_async(irc_send_callback, matrix_send_message, send_discord_message))
     except Exception as e:
         logging.error(f"Polling thread failed: {e}")
+    finally:
+        loop.close()
 
 if __name__ == "__main__":
     logging.info("Main script starting")
