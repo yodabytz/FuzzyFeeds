@@ -213,7 +213,11 @@ def irc_send_callback(channel, message):
             message_queue.put((channel, message))
 
 def run_polling():
-    asyncio.run(centralized_polling.start_polling(irc_send_callback, matrix_send_message, send_discord_message))
+    logging.info("Starting polling thread...")
+    try:
+        asyncio.run(centralized_polling.start_polling(irc_send_callback, matrix_send_message, send_discord_message))
+    except Exception as e:
+        logging.error(f"Polling thread failed: {e}")
 
 if __name__ == "__main__":
     logging.info("Main script starting")
