@@ -8,95 +8,154 @@ intervals, checks each feed for new entries. When a new entry is found, it uses 
 provided callback functions to send messages to the appropriate integration channel/room.
 """
 
+import aiohttp
+import asyncio
+import heapq
 import time
 import logging
 import feedparser
 import datetime
+from io import BytesIO
 
 import feed
-from config import default_interval
+from config import default_interval, BATCH_SIZE, BATCH_DELAY
 
 logging.basicConfig(level=logging.INFO)
 
-# Global variable for initial setup.
+# Global variable for initial setup
 script_start_time = time.time()
 
-def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
-    logging.info("Centralized polling started.")
-    while True:
-        feed.load_feeds()
-        current_time = time.time()
-        channels_to_check = list(feed.channel_feeds.keys())
-        logging.info(f"Checking {len(channels_to_check)} channels for new feeds: {channels_to_check}")
-        
+async def fetch_feed_conditional(session, url, last_modified=None, etag=None):
+    headers = {}
+    if last_modified:
+        headers["If-Modified-Since"] = last_modified
+    if etag:
+        headers["If-None-Match"] = etag
+    try:
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+            if response.status == 304:
+                return None
+            elif response.status == 200:
+                content = await response.read()
+                parsed = feedparser.parse(BytesIO(content))
+                if parsed.bozo:
+                    logging.warning(f"Error parsing feed at {url}: {parsed.bozo_exception}")
+                    return None
+                return {
+                    "feed": parsed,
+                    "last_modified": response.headers.get("Last-Modified"),
+                    "etag": response.headers.get("ETag")
+                }
+            return None
+    except Exception as e:
+        logging.error(f"Error fetching {url}: {e}")
+        return None
+
+def send_to_platform(chan, msg, irc_send, matrix_send, discord_send):
+    if chan.startswith("!"):
+        matrix_send(chan, msg)
+    elif str(chan).isdigit():
+        discord_send(chan, msg)
+    else:
+        irc_send(chan, msg)
+
+class FeedScheduler:
+    def __init__(self):
+        self.queue = []  # (next_check_time, channel)
+        self.lock = threading.Lock()
+
+    def add_channel(self, channel, interval):
+        with self.lock:
+            next_check = time.time() + interval
+            heapq.heappush(self.queue, (next_check, channel))
+
+    def get_next(self):
+        with self.lock:
+            if not self.queue:
+                return None, None
+            return heapq.heappop(self.queue)
+
+    def reschedule(self, channel, interval):
+        self.add_channel(channel, interval)
+
+async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_send):
+    current_time = time.time()
+    last_check = feed.last_check_times.get(chan, script_start_time)
+    interval = feed.channel_intervals.get(chan, default_interval)
+    if current_time - last_check < interval:
+        return 0
+
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_feed_conditional(session, url, *feed.feed_metadata.get(url, {}).values()) 
+                 for url in feeds_to_check.values()]
+        results = await asyncio.gather(*tasks)
+
+    updates = []
+    for (feed_name, feed_url), result in zip(feeds_to_check.items(), results):
+        if result and result["feed"]:
+            entry = result["feed"].entries[0]
+            published_time = None
+            if entry.get("published_parsed"):
+                published_time = time.mktime(entry.published_parsed)
+            elif entry.get("updated_parsed"):
+                published_time = time.mktime(entry.updated_parsed)
+            if published_time and published_time > last_check:
+                link = entry.get("link", "").strip()
+                if link and not feed.is_link_posted(chan, link):
+                    title = entry.get("title", "No Title").strip()
+                    updates.append((feed_name, title, link))
+                    feed.mark_link_posted(chan, link)
+                    feed.feed_metadata[feed_url] = {"last_modified": result["last_modified"], "etag": result["etag"]}
+
+    if not updates:
+        logging.info(f"No new feeds found in {chan}.")
+        feed.last_check_times[chan] = current_time
+        return 0
+
+    batch_size = feed.channel_settings.get(chan, {}).get("batch_size", BATCH_SIZE)
+    if batch_size <= 0:
+        batch_size = 1
+    batches = [updates[i:i + batch_size] for i in range(0, len(updates), batch_size)]
+    for i, batch in enumerate(batches):
+        msg = "New Feeds" + (" (continued)" if i > 0 else "") + ":\n"
+        for j, (feed_name, title, link) in enumerate(batch, 1 + i * batch_size):
+            msg += f"{j}. {feed_name}: {title} - {link}\n"
+        send_to_platform(chan, msg.strip(), irc_send, matrix_send, discord_send)
+        if i < len(batches) - 1:
+            await asyncio.sleep(BATCH_DELAY)
+
+    feed.last_check_times[chan] = current_time
+    logging.info(f"Posted {len(updates)} new feeds in {chan}.")
+    return len(updates)
+
+async def start_polling(irc_send, matrix_send, discord_send, poll_interval=default_interval):
+    logging.info("Centralized async polling started.")
+    scheduler = FeedScheduler()
+    feed.load_feeds()
+    for chan in feed.channel_feeds.keys():
         if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
             feed.last_check_times = {}
-        for chan in channels_to_check:
-            feed.last_check_times.setdefault(chan, script_start_time)
-            
-            feeds_to_check = feed.channel_feeds.get(chan)
-            if not feeds_to_check:
-                logging.warning(f"No feed dictionary found for channel {chan}; skipping.")
-                continue
-                
-            interval = feed.channel_intervals.get(chan, default_interval)
-            last_check = feed.last_check_times.get(chan, script_start_time)
-            logging.info(f"Channel {chan}: Last check at {datetime.datetime.fromtimestamp(last_check)}, current time {datetime.datetime.fromtimestamp(current_time)}, interval {interval}s")
-            
-            if current_time - last_check >= interval:
-                new_feed_count = 0
-                for feed_name, feed_url in feeds_to_check.items():
-                    try:
-                        parsed_feed = feedparser.parse(feed_url)
-                        if parsed_feed.bozo:
-                            logging.warning(f"Error parsing feed '{feed_name}' ({feed_url}): {parsed_feed.bozo_exception}")
-                            continue
-                        entries = parsed_feed.get("entries")
-                        if not entries:
-                            logging.info(f"No entries in feed '{feed_name}' ({feed_url}).")
-                            continue
-                        entry = entries[0]
-                        published_time = None
-                        if entry.get("published_parsed"):
-                            published_time = time.mktime(entry.published_parsed)
-                        elif entry.get("updated_parsed"):
-                            published_time = time.mktime(entry.updated_parsed)
-                        if published_time is not None and published_time <= last_check:
-                            logging.info(f"Skipping entry from feed '{feed_name}' published at {datetime.datetime.fromtimestamp(published_time)} (last check was {datetime.datetime.fromtimestamp(last_check)}).")
-                            continue
-                        
-                        logging.info(f"Feed '{feed_name}' data - Title: {entry.get('title')}, Link: {entry.get('link')}")
-                        
-                        title = entry.title.strip() if entry.get("title") else "No Title"
-                        link = entry.link.strip() if entry.get("link") else ""
-                        if link and feed.is_link_posted(chan, link):
-                            logging.info(f"Channel {chan} already has link: {link}")
-                            continue
-                        if link:
-                            title_msg = f"{feed_name}: {title}"
-                            link_msg = f"Link: {link}"
-                            
-                            if chan.startswith("!"):
-                                matrix_send(chan, title_msg)
-                                matrix_send(chan, link_msg)
-                            elif str(chan).isdigit():
-                                discord_send(chan, title_msg)
-                                discord_send(chan, link_msg)
-                            else:
-                                irc_send(chan, title_msg)
-                                irc_send(chan, link_msg)
-                            
-                            feed.mark_link_posted(chan, link)
-                            new_feed_count += 1
-                    except Exception as e:
-                        logging.error(f"Error checking feed '{feed_name}' at {feed_url}: {e}")
-                if new_feed_count > 0:
-                    logging.info(f"Posted {new_feed_count} new feeds in {chan}.")
-                else:
-                    logging.info(f"No new feeds found in {chan}.")
-                feed.last_check_times[chan] = current_time
-        logging.info(f"Finished checking feeds. Next check in {poll_interval} seconds.")
-        time.sleep(poll_interval)
+        feed.last_check_times.setdefault(chan, script_start_time)
+        scheduler.add_channel(chan, feed.channel_intervals.get(chan, poll_interval))
+
+    while True:
+        next_time, chan = scheduler.get_next()
+        if not chan:
+            await asyncio.sleep(1)
+            continue
+        current_time = time.time()
+        if current_time < next_time:
+            await asyncio.sleep(next_time - current_time)
+
+        feeds_to_check = feed.channel_feeds.get(chan, {})
+        if not feeds_to_check:
+            logging.warning(f"No feed dictionary found for channel {chan}; skipping.")
+            scheduler.reschedule(chan, feed.channel_intervals.get(chan, poll_interval))
+            continue
+
+        new_feed_count = await process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_send)
+        scheduler.reschedule(chan, feed.channel_intervals.get(chan, poll_interval))
+        logging.info(f"Finished checking {chan}. Next check in {feed.channel_intervals.get(chan, poll_interval)} seconds.")
 
 if __name__ == "__main__":
     def test_irc_send(channel, message):
@@ -108,9 +167,11 @@ if __name__ == "__main__":
             print(f"[Primary IRC] Channel {channel}:")
         for line in message.split('\n'):
             print(line)
+
     def test_matrix_send(room, message):
         print(f"[Matrix] Room {room}: {message}")
+
     def test_discord_send(channel, message):
         print(f"[Discord] Channel {channel}: {message}")
-        
-    start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=300)
+
+    asyncio.run(start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=300))
