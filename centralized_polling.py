@@ -15,7 +15,7 @@ import time
 import logging
 import feedparser
 import datetime
-import threading
+import threading  # Added to fix NameError
 from io import BytesIO
 
 import feed
@@ -34,7 +34,9 @@ async def fetch_feed_conditional(session, url, last_modified=None, etag=None):
         headers["If-None-Match"] = etag
     try:
         async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
-            if response.status == 200:
+            if response.status == 304:
+                return None
+            elif response.status == 200:
                 content = await response.read()
                 parsed = feedparser.parse(BytesIO(content))
                 if parsed.bozo:
@@ -51,21 +53,17 @@ async def fetch_feed_conditional(session, url, last_modified=None, etag=None):
         return None
 
 def send_to_platform(chan, msg, irc_send, matrix_send, discord_send):
-    logging.info(f"Routing message to platform: {chan}")
     if chan.startswith("!"):
-        logging.info(f"Sending to Matrix: {chan}")
         matrix_send(chan, msg)
     elif str(chan).isdigit():
-        logging.info(f"Sending to Discord: {chan}")
         discord_send(chan, msg)
     else:
-        logging.info(f"Sending to IRC: {chan}")
         irc_send(chan, msg)
 
 class FeedScheduler:
     def __init__(self):
         self.queue = []  # (next_check_time, channel)
-        self.lock = threading.Lock()
+        self.lock = threading.Lock()  # Now works with threading imported
 
     def add_channel(self, channel, interval):
         with self.lock:
@@ -82,12 +80,10 @@ class FeedScheduler:
         self.add_channel(channel, interval)
 
 async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_send):
-    feed.load_feeds()
     current_time = time.time()
     last_check = feed.last_check_times.get(chan, script_start_time)
     interval = feed.channel_intervals.get(chan, default_interval)
     if current_time - last_check < interval:
-        logging.info(f"Skipping {chan}: too soon since last check")
         return 0
 
     async with aiohttp.ClientSession() as session:
@@ -122,10 +118,11 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
         batch_size = 1
     batches = [updates[i:i + batch_size] for i in range(0, len(updates), batch_size)]
     for i, batch in enumerate(batches):
-        msg = "New Feeds" + (" (continued)" if i > 0 else "") + ":\n"
-        for j, (feed_name, title, link) in enumerate(batch, 1 + i * batch_size):
-            msg += f"{j}. {feed_name}: {title} - {link}\n"
-        send_to_platform(chan, msg.strip(), irc_send, matrix_send, discord_send)
+        for feed_name, title, link in batch:
+            title_msg = f"New Feed from {feed_name}: {title}"
+            link_msg = f"Link: {link}"
+            send_to_platform(chan, title_msg, irc_send, matrix_send, discord_send)
+            send_to_platform(chan, link_msg, irc_send, matrix_send, discord_send)
         if i < len(batches) - 1:
             await asyncio.sleep(BATCH_DELAY)
 
@@ -136,7 +133,7 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
 async def start_polling(irc_send, matrix_send, discord_send, poll_interval=default_interval):
     logging.info("Centralized async polling started.")
     scheduler = FeedScheduler()
-    feed.load_feeds()  # Initial load for scheduler setup
+    feed.load_feeds()
     for chan in feed.channel_feeds.keys():
         if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
             feed.last_check_times = {}
