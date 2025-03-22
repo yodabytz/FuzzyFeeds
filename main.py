@@ -100,7 +100,7 @@ def start_primary_irc():
                 logging.info(f"Primary IRC connected; channels: {config_channels}")
                 parser_thread = threading.Thread(target=irc_command_parser, args=(irc_client,), daemon=True)
                 parser_thread.start()
-                parser_thread.join()  # Wait for disconnect
+                parser_thread.join()
                 logging.info(f"Primary IRC connection to {default_irc_server} lost, retrying...")
                 with connection_lock:
                     connection_status["primary"][default_irc_server] = False
@@ -129,12 +129,14 @@ def manage_secondary_network(network_name, net_info):
         logging.error(f"[{network_name}] No channels defined.")
         return
     logging.info(f"[{network_name}] Starting secondary IRC thread for {srv}")
+    attempt = 0
     while True:
+        attempt += 1
         try:
-            logging.info(f"[{network_name}] Attempting connection to {srv}:{prt}...")
+            logging.info(f"[{network_name}] Attempt {attempt} to connect to {srv}:{prt} (SSL: {sslf})")
             client = connect_to_network(srv, prt, sslf, channels_list[0])
             if client:
-                logging.info(f"[{network_name}] Connection established, channels joined: {channels_list}")
+                logging.info(f"[{network_name}] Connection established to {srv}:{prt}, joining channels: {channels_list}")
                 with connection_lock:
                     connection_status["secondary"][srv] = True
                 for ch in channels_list:
@@ -150,22 +152,24 @@ def manage_secondary_network(network_name, net_info):
                     if target.startswith("#"):
                         send_multiline_message(client, target, msg)
                     message_queue.task_done()
-                parser_thread.join()  # Wait for disconnect
+                parser_thread.join()
                 logging.info(f"[{network_name}] Connection to {srv}:{prt} lost, retrying...")
                 with connection_lock:
                     connection_status["secondary"][srv] = False
             else:
-                logging.error(f"[{network_name}] Connection failed")
+                logging.error(f"[{network_name}] Connection failed (returned None)")
                 with connection_lock:
                     connection_status["secondary"][srv] = False
-                logging.info(f"[{network_name}] Retrying in 30 seconds...")
-                time.sleep(30)
+                wait_time = min(60, 5 * attempt)  # Faster backoff, max 60s
+                logging.info(f"[{network_name}] Retrying in {wait_time} seconds...")
+                time.sleep(wait_time)
         except Exception as e:
-            logging.error(f"[{network_name}] Exception: {e}")
+            logging.error(f"[{network_name}] Connection attempt {attempt} to {srv}:{prt} failed: {e}")
             with connection_lock:
                 connection_status["secondary"][srv] = False
-            logging.info(f"[{network_name}] Retrying in 30 seconds...")
-            time.sleep(30)
+            wait_time = min(60, 5 * attempt)
+            logging.info(f"[{network_name}] Retrying in {wait_time} seconds...")
+            time.sleep(wait_time)
 
 def start_secondary_irc_networks():
     logging.info("Starting secondary IRC networks thread")
@@ -212,16 +216,21 @@ def irc_send_callback(channel, message):
             logging.error("Primary IRC client not connected, queuing message")
             message_queue.put((channel, message))
 
+async def run_polling_async():
+    logging.info("Entering async polling function...")
+    if enable_matrix:
+        from matrix_integration import send_message as matrix_send_message
+    else:
+        matrix_send_message = lambda room, msg: logging.info(f"Matrix send disabled: {room}: {msg}")
+    discord_callback = send_discord_message if enable_discord else lambda chan, msg: logging.info(f"Discord send disabled: {chan}: {msg}")
+    await centralized_polling.start_polling(irc_send_callback, matrix_send_message, discord_callback)
+
 def run_polling():
     logging.info("Starting polling thread...")
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(centralized_polling.start_polling(irc_send_callback, matrix_send_message, send_discord_message))
+        asyncio.run(run_polling_async())
     except Exception as e:
-        logging.error(f"Polling loop failed: {e}")
-    finally:
-        loop.close()
+        logging.error(f"Polling thread failed: {e}")
 
 if __name__ == "__main__":
     logging.info("Main script starting")
@@ -236,17 +245,9 @@ if __name__ == "__main__":
         time.sleep(5)
         threading.Thread(target=start_dashboard, daemon=True).start()
 
-        matrix_callback = None
-        if enable_matrix:
-            from matrix_integration import send_message as matrix_send_message
-            matrix_callback = lambda room, msg: matrix_send_message(room, msg)
-        else:
-            matrix_send_message = lambda room, msg: logging.info(f"Matrix send disabled: {room}: {msg}")
-
-        discord_callback = send_discord_message if enable_discord else None
-
         polling_thread = threading.Thread(target=run_polling, daemon=True)
         polling_thread.start()
+        logging.info("Polling thread launched")
 
         if enable_matrix:
             threading.Thread(target=start_matrix, daemon=True).start()
