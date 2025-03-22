@@ -51,12 +51,15 @@ async def fetch_feed_conditional(session, url, last_modified=None, etag=None):
         return None
 
 def send_to_platform(chan, msg, irc_send, matrix_send, discord_send):
-    logging.info(f"Sending to platform: {chan}")
+    logging.info(f"Routing message to platform: {chan}")
     if chan.startswith("!"):
+        logging.info(f"Sending to Matrix: {chan}")
         matrix_send(chan, msg)
     elif str(chan).isdigit():
+        logging.info(f"Sending to Discord: {chan}")
         discord_send(chan, msg)
     else:
+        logging.info(f"Sending to IRC: {chan}")
         irc_send(chan, msg)
 
 class FeedScheduler:
@@ -79,7 +82,7 @@ class FeedScheduler:
         self.add_channel(channel, interval)
 
 async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_send):
-    feed.load_feeds()  # Load feeds just before checking
+    feed.load_feeds()
     current_time = time.time()
     last_check = feed.last_check_times.get(chan, script_start_time)
     interval = feed.channel_intervals.get(chan, default_interval)
