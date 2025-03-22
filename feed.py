@@ -138,4 +138,4 @@ def check_feeds(send_message_func, channels_to_check=None):
     except Exception as e:
         logging.error(f"Error in check_feeds: {e}")
 
-load_subscriptions()  # Only load subscriptions at startup
+load_subscriptions()
