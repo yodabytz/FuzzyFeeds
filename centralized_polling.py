@@ -16,14 +16,14 @@ import logging
 import feedparser
 import datetime
 from io import BytesIO
-import threading  # <-- Added threading import
+import threading  # <-- Needed for FeedScheduler
 
 import feed
 from config import default_interval, BATCH_SIZE, BATCH_DELAY
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
-# Global variable for initial setup.
+# Global variable for initial setup
 script_start_time = time.time()
 
 async def fetch_feed_conditional(session, url, last_modified=None, etag=None):
@@ -124,19 +124,20 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
     batches = [updates[i:i + batch_size] for i in range(0, len(updates), batch_size)]
     for i, batch in enumerate(batches):
         for feed_name, title, link in batch:
-            # For IRC, send Title and Link as separate messages.
             title_msg = f"New Feed from {feed_name}: {title}"
             link_msg = f"Link: {link}"
-            if chan.startswith("!"):
+            # For Matrix and Discord, send normally.
+            if chan.startswith("!") or str(chan).isdigit():
+                logging.info(f"Sending to {chan} -> Title: {title_msg}")
                 matrix_send(chan, title_msg)
+                logging.info(f"Sending to {chan} -> Link: {link_msg}")
                 matrix_send(chan, link_msg)
-            elif str(chan).isdigit():
-                discord_send(chan, title_msg)
-                discord_send(chan, link_msg)
             else:
+                # Assume IRC: send Title then delay then Link.
+                logging.info(f"Sending to IRC channel {chan} -> Title: {title_msg}")
                 irc_send(chan, title_msg)
-                # Insert a short delay to ensure messages are processed separately.
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1)  # Increased delay for IRC
+                logging.info(f"Sending to IRC channel {chan} -> Link: {link_msg}")
                 irc_send(chan, link_msg)
         if i < len(batches) - 1:
             await asyncio.sleep(BATCH_DELAY)
@@ -176,17 +177,12 @@ async def start_polling(irc_send, matrix_send, discord_send, poll_interval=defau
 
 if __name__ == "__main__":
     def test_irc_send(channel, message):
-        if "|" in channel:
-            parts = channel.split('|', 1)
-            actual_channel = parts[1]
-            print(f"[Secondary IRC] Channel {actual_channel}:")
-        else:
-            print(f"[Primary IRC] Channel {channel}:")
-        for line in message.split('\n'):
-            print(line)
+        print(f"[Test IRC] Channel {channel}: {message}")
+
     def test_matrix_send(room, message):
-        print(f"[Matrix] Room {room}: {message}")
+        print(f"[Test Matrix] Room {room}: {message}")
+
     def test_discord_send(channel, message):
-        print(f"[Discord] Channel {channel}: {message}")
+        print(f"[Test Discord] Channel {channel}: {message}")
 
     asyncio.run(start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=300))
