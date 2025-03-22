@@ -160,7 +160,7 @@ def manage_secondary_network(network_name, net_info):
                 logging.error(f"[{network_name}] Connection failed (returned None)")
                 with connection_lock:
                     connection_status["secondary"][srv] = False
-                wait_time = min(60, 5 * attempt)  # Faster backoff, max 60s
+                wait_time = min(60, 5 * attempt)
                 logging.info(f"[{network_name}] Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
         except Exception as e:
@@ -196,24 +196,26 @@ def start_discord():
         logging.info("Discord integration disabled in config")
 
 def irc_send_callback(channel, message):
-    logging.info(f"IRC send callback for {channel}: {message}")
+    logging.info(f"Attempting IRC send to {channel}: {message}")
     if "|" in channel:
         composite = channel
-        actual_channel = composite.split("|", 1)[1]
+        server, actual_channel = composite.split("|", 1)
         conn = irc_secondary.get(composite)
         if conn:
+            logging.info(f"Sending to secondary IRC {composite}")
             for line in message.split('\n'):
                 send_message(conn, actual_channel, line)
         else:
-            logging.error(f"No IRC connection for composite key: {composite}, queuing message")
+            logging.error(f"No connection for {composite}, queuing message")
             message_queue.put((actual_channel, message))
     else:
         global irc_client
         if irc_client:
+            logging.info(f"Sending to primary IRC {channel}")
             for line in message.split('\n'):
                 send_message(irc_client, channel, line)
         else:
-            logging.error("Primary IRC client not connected, queuing message")
+            logging.error(f"Primary IRC client not connected for {channel}, queuing message")
             message_queue.put((channel, message))
 
 async def run_polling_async():
