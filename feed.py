@@ -21,9 +21,13 @@ feed_metadata = {}  # {feed_url: {"last_modified": str, "etag": str}}
 channel_settings = {}
 default_interval = 300
 subscriptions_loaded = False
+feeds_loaded = False
 
 def load_feeds():
-    global channels, channel_feeds, channel_intervals, last_check_times
+    global channels, channel_feeds, channel_intervals, last_check_times, feeds_loaded
+    if feeds_loaded:
+        logging.info("[feed.py] Feeds already loaded this cycle, skipping reload.")
+        return
     channels_data = load_json(CHANNELS_FILE, default={"irc_channels": [], "discord_channels": [], "matrix_channels": []})
     channels = channels_data.get("irc_channels", []) + channels_data.get("discord_channels", []) + channels_data.get("matrix_channels", [])
     
@@ -50,6 +54,7 @@ def load_feeds():
             channel_intervals[chan] = loaded_intervals[chan]
         last_check_times[chan] = 0
     load_posted_links()
+    feeds_loaded = True
 
 def load_subscriptions():
     global subscriptions, subscriptions_loaded
@@ -61,8 +66,10 @@ def load_subscriptions():
     logging.info(f"[feed.py] Loaded user subscriptions: {sum(len(subs) for subs in subscriptions.values())} subscriptions.")
 
 def save_feeds():
+    global feeds_loaded
     save_json(FEEDS_FILE, channel_feeds)
     save_json("feed_metadata.json", feed_metadata)
+    feeds_loaded = False  # Reset after save to allow reload
 
 def save_subscriptions():
     save_json(SUBSCRIPTIONS_FILE, subscriptions)
@@ -131,5 +138,4 @@ def check_feeds(send_message_func, channels_to_check=None):
     except Exception as e:
         logging.error(f"Error in check_feeds: {e}")
 
-# No initial load here—moved to polling
-load_subscriptions()
+load_subscriptions()  # Only load subscriptions at startup
