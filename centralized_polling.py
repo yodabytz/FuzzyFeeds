@@ -51,6 +51,7 @@ async def fetch_feed_conditional(session, url, last_modified=None, etag=None):
         return None
 
 def send_to_platform(chan, msg, irc_send, matrix_send, discord_send):
+    logging.info(f"Sending to platform: {chan}")
     if chan.startswith("!"):
         matrix_send(chan, msg)
     elif str(chan).isdigit():
@@ -78,11 +79,12 @@ class FeedScheduler:
         self.add_channel(channel, interval)
 
 async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_send):
-    feed.load_feeds()  # Load feeds just before checking for freshness
+    feed.load_feeds()  # Load feeds just before checking
     current_time = time.time()
     last_check = feed.last_check_times.get(chan, script_start_time)
     interval = feed.channel_intervals.get(chan, default_interval)
     if current_time - last_check < interval:
+        logging.info(f"Skipping {chan}: too soon since last check")
         return 0
 
     async with aiohttp.ClientSession() as session:
