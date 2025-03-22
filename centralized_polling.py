@@ -15,6 +15,7 @@ import time
 import logging
 import feedparser
 import datetime
+import threading
 from io import BytesIO
 
 import feed
@@ -33,9 +34,7 @@ async def fetch_feed_conditional(session, url, last_modified=None, etag=None):
         headers["If-None-Match"] = etag
     try:
         async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
-            if response.status == 304:
-                return None
-            elif response.status == 200:
+            if response.status == 200:
                 content = await response.read()
                 parsed = feedparser.parse(BytesIO(content))
                 if parsed.bozo:
@@ -79,6 +78,7 @@ class FeedScheduler:
         self.add_channel(channel, interval)
 
 async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_send):
+    feed.load_feeds()  # Load feeds just before checking for freshness
     current_time = time.time()
     last_check = feed.last_check_times.get(chan, script_start_time)
     interval = feed.channel_intervals.get(chan, default_interval)
@@ -131,7 +131,7 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
 async def start_polling(irc_send, matrix_send, discord_send, poll_interval=default_interval):
     logging.info("Centralized async polling started.")
     scheduler = FeedScheduler()
-    feed.load_feeds()  # Initial load
+    feed.load_feeds()  # Initial load for scheduler setup
     for chan in feed.channel_feeds.keys():
         if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
             feed.last_check_times = {}
@@ -139,7 +139,6 @@ async def start_polling(irc_send, matrix_send, discord_send, poll_interval=defau
         scheduler.add_channel(chan, feed.channel_intervals.get(chan, poll_interval))
 
     while True:
-        feed.load_feeds()  # Reload feeds before each cycle for freshness
         next_time, chan = scheduler.get_next()
         if not chan:
             await asyncio.sleep(1)
