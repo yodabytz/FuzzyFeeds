@@ -95,18 +95,13 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
     for (feed_name, feed_url), result in zip(feeds_to_check.items(), results):
         if result and result["feed"]:
             entry = result["feed"].entries[0]
-            published_time = None
-            if entry.get("published_parsed"):
-                published_time = time.mktime(entry.published_parsed)
-            elif entry.get("updated_parsed"):
-                published_time = time.mktime(entry.updated_parsed)
-            if published_time and published_time > last_check:
-                link = entry.get("link", "").strip()
-                if link and not feed.is_link_posted(chan, link):
-                    title = entry.get("title", "No Title").strip()
-                    updates.append((feed_name, title, link))
-                    feed.mark_link_posted(chan, link)
-                    feed.feed_metadata[feed_url] = {"last_modified": result["last_modified"], "etag": result["etag"]}
+            # Instead of checking published_time, always check if link has not been posted.
+            link = entry.get("link", "").strip()
+            if link and not feed.is_link_posted(chan, link):
+                title = entry.get("title", "No Title").strip()
+                updates.append((feed_name, title, link))
+                feed.mark_link_posted(chan, link)
+                feed.feed_metadata[feed_url] = {"last_modified": result["last_modified"], "etag": result["etag"]}
 
     if not updates:
         logging.info(f"No new feeds found in {chan}.")
@@ -129,7 +124,7 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
             await asyncio.sleep(BATCH_DELAY)
 
     feed.last_check_times[chan] = current_time
-    logging.info(f"Posted {len(updates)} new feed entr{'y' if len(updates) == 1 else 'ies'} in {chan}.")
+    logging.info(f"Posted {len(updates)} new feed entr{'y' if len(updates)==1 else 'ies'} in {chan}.")
     return len(updates)
 
 async def start_polling(irc_send, matrix_send, discord_send, poll_interval=default_interval):
