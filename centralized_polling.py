@@ -5,7 +5,7 @@ centralized_polling.py
 This module implements centralized polling for RSS/Atom feeds for all integrations:
 IRC, Matrix, and Discord. It uses the feed data from feed.py and, at configurable
 intervals, checks each feed for new entries. When a new entry is found, it uses the
-provided callback functions to send messages to the appropriate integration channel/room.
+provided callback functions to send messages (Title and Link) to the appropriate integration.
 """
 
 import aiohttp
@@ -16,7 +16,7 @@ import logging
 import feedparser
 import datetime
 from io import BytesIO
-import threading  # <-- Needed for FeedScheduler
+import threading  # Needed for FeedScheduler
 
 import feed
 from config import default_interval, BATCH_SIZE, BATCH_DELAY
@@ -40,7 +40,7 @@ async def fetch_feed_conditional(session, url, last_modified=None, etag=None):
                 content = await response.read()
                 parsed = feedparser.parse(BytesIO(content))
                 if parsed.bozo:
-                    logging.warning(f"Error parsing feed at {url}: {parsed.bozo_exception}")
+                    logging.warning(f"Error parsing feed at {url}")
                     return None
                 return {
                     "feed": parsed,
@@ -87,7 +87,7 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
         return 0
 
     async with aiohttp.ClientSession() as session:
-        tasks = [fetch_feed_conditional(session, url, *feed.feed_metadata.get(url, {}).values()) 
+        tasks = [fetch_feed_conditional(session, url, *feed.feed_metadata.get(url, {}).values())
                  for url in feeds_to_check.values()]
         results = await asyncio.gather(*tasks)
 
@@ -100,18 +100,13 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
                 published_time = time.mktime(entry.published_parsed)
             elif entry.get("updated_parsed"):
                 published_time = time.mktime(entry.updated_parsed)
-            if published_time is not None and published_time <= last_check:
-                continue
-            logging.info(f"Feed '{feed_name}' data - Title: {entry.get('title')}, Link: {entry.get('link')}")
-            title = entry.title.strip() if entry.get("title") else "No Title"
-            link = entry.link.strip() if entry.get("link") else ""
-            if link and feed.is_link_posted(chan, link):
-                logging.info(f"Channel {chan} already has link: {link}")
-                continue
-            if link:
-                updates.append((feed_name, title, link))
-                feed.mark_link_posted(chan, link)
-                feed.feed_metadata[feed_url] = {"last_modified": result["last_modified"], "etag": result["etag"]}
+            if published_time and published_time > last_check:
+                link = entry.get("link", "").strip()
+                if link and not feed.is_link_posted(chan, link):
+                    title = entry.get("title", "No Title").strip()
+                    updates.append((feed_name, title, link))
+                    feed.mark_link_posted(chan, link)
+                    feed.feed_metadata[feed_url] = {"last_modified": result["last_modified"], "etag": result["etag"]}
 
     if not updates:
         logging.info(f"No new feeds found in {chan}.")
@@ -126,24 +121,15 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
         for feed_name, title, link in batch:
             title_msg = f"New Feed from {feed_name}: {title}"
             link_msg = f"Link: {link}"
-            # For Matrix and Discord, send normally.
-            if chan.startswith("!") or str(chan).isdigit():
-                logging.info(f"Sending to {chan} -> Title: {title_msg}")
-                matrix_send(chan, title_msg)
-                logging.info(f"Sending to {chan} -> Link: {link_msg}")
-                matrix_send(chan, link_msg)
-            else:
-                # Assume IRC: send Title then delay then Link.
-                logging.info(f"Sending to IRC channel {chan} -> Title: {title_msg}")
-                irc_send(chan, title_msg)
-                await asyncio.sleep(1)  # Increased delay for IRC
-                logging.info(f"Sending to IRC channel {chan} -> Link: {link_msg}")
-                irc_send(chan, link_msg)
+            send_to_platform(chan, title_msg, irc_send, matrix_send, discord_send)
+            await asyncio.sleep(0.5)
+            send_to_platform(chan, link_msg, irc_send, matrix_send, discord_send)
+            await asyncio.sleep(0.5)
         if i < len(batches) - 1:
             await asyncio.sleep(BATCH_DELAY)
 
     feed.last_check_times[chan] = current_time
-    logging.info(f"Posted {len(updates)} new feeds in {chan}.")
+    logging.info(f"Posted {len(updates)} new feed entr{'y' if len(updates) == 1 else 'ies'} in {chan}.")
     return len(updates)
 
 async def start_polling(irc_send, matrix_send, discord_send, poll_interval=default_interval):
@@ -151,8 +137,6 @@ async def start_polling(irc_send, matrix_send, discord_send, poll_interval=defau
     scheduler = FeedScheduler()
     feed.load_feeds()
     for chan in feed.channel_feeds.keys():
-        if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
-            feed.last_check_times = {}
         feed.last_check_times.setdefault(chan, script_start_time)
         scheduler.add_channel(chan, feed.channel_intervals.get(chan, poll_interval))
 
@@ -171,7 +155,7 @@ async def start_polling(irc_send, matrix_send, discord_send, poll_interval=defau
             scheduler.reschedule(chan, feed.channel_intervals.get(chan, poll_interval))
             continue
 
-        new_feed_count = await process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_send)
+        await process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_send)
         scheduler.reschedule(chan, feed.channel_intervals.get(chan, poll_interval))
         logging.info(f"Finished checking {chan}. Next check in {feed.channel_intervals.get(chan, poll_interval)} seconds.")
 
