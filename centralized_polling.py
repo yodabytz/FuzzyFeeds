@@ -2,10 +2,9 @@
 """
 centralized_polling.py
 
-This module implements centralized polling for RSS/Atom feeds for all integrations:
-IRC, Matrix, and Discord. It uses the feed data from feed.py and, at configurable
-intervals, checks each feed for new entries. When new entries are found, it sends
-the Title and Link to the appropriate integration.
+This module polls RSS/Atom feeds for all integrations (IRC, Matrix, Discord) at set intervals.
+It sends new feed updates (Title and Link) to each integration and uses a persistent list of
+posted links (loaded from posted_links.json via feed.py) to avoid reposting old entries.
 """
 
 import aiohttp
@@ -23,10 +22,22 @@ from config import default_interval, BATCH_SIZE, BATCH_DELAY
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
-# Global variable for initial setup – loaded once.
+# Global startup time – do not reload feed data each poll.
 script_start_time = time.time()
 
+def normalize_channel_key(chan):
+    """
+    For IRC channels (composite keys in the format "server|#channel"),
+    normalize the channel part to lower-case.
+    For other channels (Matrix, Discord) return as-is.
+    """
+    if "|" in chan:
+        server, channel = chan.split("|", 1)
+        return f"{server}|{channel.lower()}"
+    return chan
+
 def get_entry_time(entry):
+    # Return the published time if available; otherwise updated time; else 0.
     if entry.get("published_parsed"):
         return time.mktime(entry.published_parsed)
     elif entry.get("updated_parsed"):
@@ -75,7 +86,7 @@ def send_to_platform(chan, msg, irc_send, matrix_send, discord_send):
 
 class FeedScheduler:
     def __init__(self):
-        self.queue = []  # Each item: (next_check_time, channel)
+        self.queue = []  # Items: (next_check_time, channel)
         self.lock = threading.Lock()
 
     def add_channel(self, channel, interval):
@@ -94,8 +105,10 @@ class FeedScheduler:
 
 async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_send):
     current_time = time.time()
-    last_check = feed.last_check_times.get(chan, script_start_time)
-    interval = feed.channel_intervals.get(chan, default_interval)
+    # Normalize channel key for consistent posted-links lookups.
+    norm_chan = normalize_channel_key(chan)
+    last_check = feed.last_check_times.get(norm_chan, script_start_time)
+    interval = feed.channel_intervals.get(norm_chan, default_interval)
     if current_time - last_check < interval:
         return 0
 
@@ -111,40 +124,42 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
         if result is None:
             continue
         if result.get("ratelimited"):
-            logging.warning(f"Skipping feed {feed_name} due to ratelimiting.")
+            logging.warning(f"Skipping feed '{feed_name}' due to rate limiting.")
             continue
         if "feed" in result:
             entries = result["feed"].entries
-            # Sort entries by published time if available; otherwise by natural order.
-            sorted_entries = sorted(entries, key=lambda e: get_entry_time(e))
+            valid_entries = [e for e in entries if get_entry_time(e) > 0]
+            sorted_entries = sorted(valid_entries, key=get_entry_time)
             for entry in sorted_entries:
-                # Instead of using timestamps to filter new entries, rely solely on posted_links.
-                link = entry.get("link", "").strip()
-                if link and not feed.is_link_posted(chan, link):
-                    title = entry.get("title", "No Title").strip()
-                    updates.append((feed_name, title, link))
-                    feed.mark_link_posted(chan, link)
-                    feed.feed_metadata[feed_url] = {
-                        "last_modified": result.get("last_modified"),
-                        "etag": result.get("etag")
-                    }
+                entry_time = get_entry_time(entry)
+                # Only process entries newer than last check.
+                if entry_time > last_check:
+                    link = entry.get("link", "").strip()
+                    if link and not feed.is_link_posted(norm_chan, link):
+                        title = entry.get("title", "No Title").strip()
+                        updates.append((feed_name, title, link))
+                        feed.mark_link_posted(norm_chan, link)
+                        feed.feed_metadata[feed_url] = {
+                            "last_modified": result.get("last_modified"),
+                            "etag": result.get("etag")
+                        }
     if not updates:
-        logging.info(f"No new feeds found in {chan}.")
-        feed.last_check_times[chan] = current_time
+        logging.info(f"No new feeds found in {norm_chan}.")
+        feed.last_check_times[norm_chan] = current_time
         return 0
 
-    batch_size = feed.channel_settings.get(chan, {}).get("batch_size", BATCH_SIZE)
+    batch_size = feed.channel_settings.get(norm_chan, {}).get("batch_size", BATCH_SIZE)
     if batch_size <= 0:
         batch_size = 1
     batches = [updates[i:i + batch_size] for i in range(0, len(updates), batch_size)]
     for batch in batches:
         for feed_name, title, link in batch:
-            send_to_platform(chan, f"New Feed from {feed_name}: {title}", irc_send, matrix_send, discord_send)
+            send_to_platform(norm_chan, f"New Feed from {feed_name}: {title}", irc_send, matrix_send, discord_send)
             await asyncio.sleep(0.5)
-            send_to_platform(chan, f"Link: {link}", irc_send, matrix_send, discord_send)
+            send_to_platform(norm_chan, f"Link: {link}", irc_send, matrix_send, discord_send)
             await asyncio.sleep(0.5)
-    feed.last_check_times[chan] = current_time
-    logging.info(f"Posted {len(updates)} new feed entr{'y' if len(updates)==1 else 'ies'} in {chan}.")
+    feed.last_check_times[norm_chan] = current_time
+    logging.info(f"Posted {len(updates)} new feed entr{'y' if len(updates)==1 else 'ies'} in {norm_chan}.")
     return len(updates)
 
 async def start_polling(irc_send, matrix_send, discord_send, poll_interval=default_interval):
@@ -152,8 +167,9 @@ async def start_polling(irc_send, matrix_send, discord_send, poll_interval=defau
     scheduler = FeedScheduler()
     # Do not reload feeds here so that posted_links remains intact.
     for chan in feed.channel_feeds.keys():
-        feed.last_check_times.setdefault(chan, script_start_time)
-        scheduler.add_channel(chan, feed.channel_intervals.get(chan, poll_interval))
+        norm_chan = normalize_channel_key(chan)
+        feed.last_check_times.setdefault(norm_chan, script_start_time)
+        scheduler.add_channel(norm_chan, feed.channel_intervals.get(norm_chan, poll_interval))
     while True:
         next_time, chan = scheduler.get_next()
         if not chan:
