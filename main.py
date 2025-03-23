@@ -49,8 +49,7 @@ try:
         ops,
         admins,
         dashboard_port,
-        server as default_irc_server,
-        channels as config_channels
+        server as default_irc_server
     )
     logging.info("Imported config successfully")
 except Exception as e:
@@ -75,6 +74,13 @@ import os
 from dashboard import app
 from connection_state import connection_status, connection_lock
 
+# Import IRC channel list from channels.json
+from channels import load_channels
+channels_data = load_channels()
+primary_irc_channels = channels_data.get("irc_channels", [])
+if not primary_irc_channels:
+    primary_irc_channels = ["#main"]  # fallback to config if channels.json is empty
+
 irc_client = None
 irc_secondary = {}
 
@@ -94,10 +100,11 @@ def start_primary_irc():
                 set_irc_client(irc_client)
                 with connection_lock:
                     connection_status["primary"][default_irc_server] = True
-                for ch in config_channels:
-                    composite = f"{default_irc_server}|{ch}"
+                # Use the list loaded from channels.json
+                for ch in primary_irc_channels:
+                    composite = f"{default_irc_server}|{ch.lower()}"
                     irc_secondary[composite] = irc_client
-                logging.info(f"Primary IRC connected; channels: {config_channels}")
+                logging.info(f"Primary IRC connected; channels: {primary_irc_channels}")
                 parser_thread = threading.Thread(target=irc_command_parser, args=(irc_client,), daemon=True)
                 parser_thread.start()
                 parser_thread.join()  # Wait for disconnect
@@ -140,12 +147,20 @@ def manage_secondary_network(network_name, net_info):
                 for ch in channels_list:
                     client.send(f"JOIN {ch}\r\n".encode("utf-8"))
                     send_message(client, ch, "FuzzyFeeds has joined the channel!")
-                    composite = f"{srv}|{ch}"
+                    composite = f"{srv}|{ch.lower()}"
                     irc_secondary[composite] = client
                     logging.info(f"[{network_name}] Registered composite key: {composite}")
-                threading.Thread(target=irc_command_parser, args=(client,), daemon=True).start()
-                while True:
-                    time.sleep(5)
+                parser_thread = threading.Thread(target=irc_command_parser, args=(client,), daemon=True)
+                parser_thread.start()
+                while not message_queue.empty():
+                    target, msg = message_queue.get()
+                    if target.startswith("#"):
+                        send_multiline_message(client, target, msg)
+                    message_queue.task_done()
+                parser_thread.join()  # Wait for disconnect
+                logging.info(f"[{network_name}] Connection to {srv}:{prt} lost, retrying...")
+                with connection_lock:
+                    connection_status["secondary"][srv] = False
             else:
                 logging.error(f"[{network_name}] Connection failed")
                 with connection_lock:
@@ -205,7 +220,6 @@ def irc_send_callback(channel, message):
             message_queue.put((channel, message))
 
 def run_polling():
-    from matrix_integration import send_message as matrix_send_message
     asyncio.run(centralized_polling.start_polling(irc_send_callback, matrix_send_message, send_discord_message))
 
 if __name__ == "__main__":
