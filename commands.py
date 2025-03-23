@@ -17,7 +17,7 @@ import persistence
 import channels
 import users
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
 RATE_LIMIT_SECONDS = 3
 BLOCK_DURATION = 300  # 5 minutes
@@ -365,6 +365,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), "Error: Channel must start with '#'")
             return
         try:
+            import os  # Explicitly import os here
             channels_data = channels.load_channels()
             if join_channel not in channels_data["irc_channels"]:
                 channels_data["irc_channels"].append(join_channel)
@@ -397,6 +398,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), "Error: Channel must start with '#'")
             return
         try:
+            import os  # Explicitly import os here
             channels_data = channels.load_channels()
             if part_channel in channels_data["irc_channels"]:
                 channels_data["irc_channels"].remove(part_channel)
@@ -484,7 +486,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                         send_message(new_client, ch, "FuzzyFeeds has joined the channel!")
                         composite = f"{server_name}|{ch}"
                         irc_secondary[composite] = new_client
-                        logging.info(f"[!addnetwork] Joined {ch}, registered {composite}")
+                        logging.info(f"[!addnetwork] Registered composite key: {composite}")
                     send_message_fn(response_target(actual_channel, integration),
                         f"Successfully connected to {server_name}:{port_number} and joined channels: {', '.join(channels_list)}.")
                     threading.Thread(target=irc_command_parser, args=(new_client,), daemon=True).start()
@@ -626,7 +628,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         user_data["settings"][key_setting] = value
         users.save_users()
         send_private_message_fn(user, f"Setting '{key_setting}' set to '{value}'.")
-        
+
     # !getsetting
     elif lower_message.startswith("!getsetting"):
         parts = message.split(" ", 1)
@@ -641,7 +643,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_private_message_fn(user, f"{key_setting}: {user_data['settings'][key_setting]}")
         else:
             send_private_message_fn(user, f"No setting found for '{key_setting}'.")
-            
+
     # !settings
     elif lower_message.startswith("!settings"):
         import users
