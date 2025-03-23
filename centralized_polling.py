@@ -23,10 +23,9 @@ from config import default_interval, BATCH_SIZE, BATCH_DELAY
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
-# Global variable for initial setup – only loaded once.
+# Global variable for initial setup – loaded once.
 script_start_time = time.time()
 
-# Helper function to get the entry timestamp.
 def get_entry_time(entry):
     if entry.get("published_parsed"):
         return time.mktime(entry.published_parsed)
@@ -45,6 +44,10 @@ async def fetch_feed_conditional(session, url, last_modified=None, etag=None):
         async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
             if response.status == 304:
                 return None
+            elif response.status == 429:
+                logging.warning(f"Got 429 response (ratelimited) for feed: {url}")
+                # Return a special dict so that process_channel knows this URL is rate-limited.
+                return {"ratelimited": True}
             elif response.status == 200:
                 content = await response.read()
                 parsed = feedparser.parse(BytesIO(content))
@@ -56,7 +59,9 @@ async def fetch_feed_conditional(session, url, last_modified=None, etag=None):
                     "last_modified": response.headers.get("Last-Modified"),
                     "etag": response.headers.get("ETag")
                 }
-            return None
+            else:
+                logging.error(f"Unexpected status code {response.status} for feed: {url}")
+                return None
     except Exception as e:
         logging.error(f"Error fetching {url}: {e}")
         return None
@@ -103,10 +108,19 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
         results = await asyncio.gather(*tasks)
 
     updates = []
+    # Process each feed URL's result.
     for (feed_name, feed_url), result in zip(feeds_to_check.items(), results):
-        if result and result["feed"]:
+        if result is None:
+            continue
+        # If we got ratelimited for this URL, skip it (do not mark any entries).
+        if result.get("ratelimited"):
+            logging.warning(f"Skipping feed {feed_name} due to ratelimiting.")
+            continue
+        if result.get("feed"):
             entries = result["feed"].entries
+            # Filter entries that have a valid timestamp.
             valid_entries = [e for e in entries if get_entry_time(e) is not None]
+            # Sort entries by time (oldest first)
             sorted_entries = sorted(valid_entries, key=get_entry_time)
             for entry in sorted_entries:
                 entry_time = get_entry_time(entry)
@@ -117,8 +131,8 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
                         updates.append((feed_name, title, link))
                         feed.mark_link_posted(chan, link)
                         feed.feed_metadata[feed_url] = {
-                            "last_modified": result["last_modified"],
-                            "etag": result["etag"]
+                            "last_modified": result.get("last_modified"),
+                            "etag": result.get("etag")
                         }
     if not updates:
         logging.info(f"No new feeds found in {chan}.")
@@ -165,6 +179,7 @@ async def start_polling(irc_send, matrix_send, discord_send, poll_interval=defau
         logging.info(f"Finished checking {chan}. Next check in {feed.channel_intervals.get(chan, poll_interval)} seconds.")
 
 if __name__ == "__main__":
+    # Test functions for standalone testing.
     def test_irc_send(channel, message):
         print(f"[Test IRC] Channel {channel}: {message}")
 
