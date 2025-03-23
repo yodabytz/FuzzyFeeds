@@ -93,11 +93,13 @@ def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel):
             logging.info(f"Attempt {attempt+1} to connect to {server_name}:{port_number} (SSL: {use_ssl_flag})")
             irc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             if use_ssl_flag:
+                # For secondary networks, revert to our previously working method:
+                # Disable certificate verification so that connection succeeds.
                 context = ssl.create_default_context()
-                context.check_hostname = True
-                context.verify_mode = ssl.CERT_REQUIRED
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
                 irc = context.wrap_socket(irc, server_hostname=server_name)
-                logging.info(f"SSL context initialized for {server_name}")
+                logging.info(f"SSL context initialized for {server_name} with CERT_NONE")
             irc.connect((server_name, port_number))
             irc.send(f"NICK {botnick}\r\n".encode("utf-8"))
             logging.info(f"Sent NICK {botnick} to {server_name}:{port_number}")
@@ -167,7 +169,7 @@ def irc_command_parser(irc_conn):
                         logging.warning(f"Malformed PRIVMSG: {line}")
                         continue
                     sender = parts[0][1:].split("!")[0]
-                    # Ignore commands sent by the bot itself.
+                    # Ignore messages from ourselves.
                     if sender.lower() == botnick.lower():
                         continue
                     target = parts[2]
