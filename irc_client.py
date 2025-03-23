@@ -5,9 +5,8 @@ import time
 import logging
 import ssl
 import queue
-from config import ops
+from config import ops, botnick
 
-botnick = "FuzzyFeeds"
 irc_client = None
 message_queue = queue.Queue()
 
@@ -168,6 +167,9 @@ def irc_command_parser(irc_conn):
                         logging.warning(f"Malformed PRIVMSG: {line}")
                         continue
                     sender = parts[0][1:].split("!")[0]
+                    # Ignore commands sent by the bot itself.
+                    if sender.lower() == botnick.lower():
+                        continue
                     target = parts[2]
                     message = " ".join(parts[3:])[1:]
                     logging.info(f"[IRC Parser] Command from {sender} in {target}")
