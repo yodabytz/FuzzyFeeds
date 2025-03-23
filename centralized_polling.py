@@ -4,8 +4,8 @@ centralized_polling.py
 
 This module implements centralized polling for RSS/Atom feeds for all integrations:
 IRC, Matrix, and Discord. It uses the feed data from feed.py and, at configurable
-intervals, checks each feed for new entries. When a new entry is found, it uses the
-provided callback functions to send messages (Title and Link) to the appropriate integration.
+intervals, checks each feed for new entries. When new entries are found, it sends
+the Title and Link to the appropriate integration.
 """
 
 import aiohttp
@@ -16,7 +16,7 @@ import logging
 import feedparser
 import datetime
 from io import BytesIO
-import threading  # Needed for FeedScheduler
+import threading
 
 import feed
 from config import default_interval, BATCH_SIZE, BATCH_DELAY
@@ -62,7 +62,7 @@ def send_to_platform(chan, msg, irc_send, matrix_send, discord_send):
 
 class FeedScheduler:
     def __init__(self):
-        self.queue = []  # (next_check_time, channel)
+        self.queue = []  # Each item: (next_check_time, channel)
         self.lock = threading.Lock()
 
     def add_channel(self, channel, interval):
@@ -92,22 +92,34 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
         results = await asyncio.gather(*tasks)
 
     updates = []
+    # Iterate over each feed URL result
     for (feed_name, feed_url), result in zip(feeds_to_check.items(), results):
         if result and result["feed"]:
-            entry = result["feed"].entries[0]
-            # Instead of checking published_time, always check if link has not been posted.
-            link = entry.get("link", "").strip()
-            if link and not feed.is_link_posted(chan, link):
-                title = entry.get("title", "No Title").strip()
-                updates.append((feed_name, title, link))
-                feed.mark_link_posted(chan, link)
-                feed.feed_metadata[feed_url] = {"last_modified": result["last_modified"], "etag": result["etag"]}
-
+            # Process all entries in the feed sorted by published time (oldest first)
+            entries = result["feed"].entries
+            # Only consider entries with a published_parsed value
+            sorted_entries = sorted(
+                [e for e in entries if e.get("published_parsed")],
+                key=lambda e: time.mktime(e.published_parsed)
+            )
+            for entry in sorted_entries:
+                published_time = time.mktime(entry.published_parsed)
+                if published_time > last_check:
+                    link = entry.get("link", "").strip()
+                    if link and not feed.is_link_posted(chan, link):
+                        title = entry.get("title", "No Title").strip()
+                        updates.append((feed_name, title, link))
+                        feed.mark_link_posted(chan, link)
+                        feed.feed_metadata[feed_url] = {
+                            "last_modified": result["last_modified"],
+                            "etag": result["etag"]
+                        }
     if not updates:
         logging.info(f"No new feeds found in {chan}.")
         feed.last_check_times[chan] = current_time
         return 0
 
+    # Post each update as two separate messages (Title then Link) with delays
     batch_size = feed.channel_settings.get(chan, {}).get("batch_size", BATCH_SIZE)
     if batch_size <= 0:
         batch_size = 1
@@ -120,9 +132,6 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
             await asyncio.sleep(0.5)
             send_to_platform(chan, link_msg, irc_send, matrix_send, discord_send)
             await asyncio.sleep(0.5)
-        if i < len(batches) - 1:
-            await asyncio.sleep(BATCH_DELAY)
-
     feed.last_check_times[chan] = current_time
     logging.info(f"Posted {len(updates)} new feed entr{'y' if len(updates)==1 else 'ies'} in {chan}.")
     return len(updates)
@@ -155,6 +164,7 @@ async def start_polling(irc_send, matrix_send, discord_send, poll_interval=defau
         logging.info(f"Finished checking {chan}. Next check in {feed.channel_intervals.get(chan, poll_interval)} seconds.")
 
 if __name__ == "__main__":
+    # Test functions for standalone testing.
     def test_irc_send(channel, message):
         print(f"[Test IRC] Channel {channel}: {message}")
 
