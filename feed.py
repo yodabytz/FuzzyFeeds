@@ -16,18 +16,14 @@ channel_feeds = {}
 channel_intervals = {}
 last_check_times = {}
 subscriptions = {}
+# Use a dict of sets in memory, but save as lists in JSON.
 posted_links = {}
 feed_metadata = {}  # {feed_url: {"last_modified": str, "etag": str}}
 channel_settings = {}
 default_interval = 300
-subscriptions_loaded = False
-feeds_loaded = False
 
 def load_feeds():
-    global channels, channel_feeds, channel_intervals, last_check_times, feeds_loaded
-    if feeds_loaded:
-        logging.info("[feed.py] Feeds already loaded this cycle, skipping reload.")
-        return
+    global channels, channel_feeds, channel_intervals, last_check_times
     channels_data = load_json(CHANNELS_FILE, default={"irc_channels": [], "discord_channels": [], "matrix_channels": []})
     channels = channels_data.get("irc_channels", []) + channels_data.get("discord_channels", []) + channels_data.get("matrix_channels", [])
     
@@ -40,10 +36,10 @@ def load_feeds():
                 channels.append(composite_key)
         logging.info(f"[feed.py] Loaded {len(net_channels)} channels from network {network_name}")
 
-    channel_feeds = load_json(FEEDS_FILE, default={})
+    channel_feeds.update(load_json(FEEDS_FILE, default={}))
     feed_metadata.update(load_json("feed_metadata.json", default={}))
     channel_settings.update(load_json("channel_settings.json", default={}))
-    total_feeds = sum(len(feeds) for feeds in channel_feeds.values())
+    total_feeds = sum(len(feeds) for feeds in channel_feeds.values() if isinstance(feeds, dict))
     logging.info(f"[feed.py] Loaded {len(channel_feeds)} channels with {total_feeds} feeds.")
     
     loaded_intervals = load_json("intervals.json", default={})
@@ -54,33 +50,31 @@ def load_feeds():
             channel_intervals[chan] = loaded_intervals[chan]
         last_check_times[chan] = 0
     load_posted_links()
-    feeds_loaded = True
 
 def load_subscriptions():
-    global subscriptions, subscriptions_loaded
-    if subscriptions_loaded:
-        logging.info("[feed.py] Subscriptions already loaded, skipping reload.")
-        return
+    global subscriptions
     subscriptions = load_json(SUBSCRIPTIONS_FILE, default={})
-    subscriptions_loaded = True
     logging.info(f"[feed.py] Loaded user subscriptions: {sum(len(subs) for subs in subscriptions.values())} subscriptions.")
 
 def save_feeds():
-    global feeds_loaded
     save_json(FEEDS_FILE, channel_feeds)
     save_json("feed_metadata.json", feed_metadata)
-    feeds_loaded = False  # Reset after save to allow reload
 
 def save_subscriptions():
     save_json(SUBSCRIPTIONS_FILE, subscriptions)
 
 def load_posted_links():
     global posted_links
+    # Load as dict of lists, convert each list to a set for fast lookup.
     data = load_json(POSTED_LINKS_FILE, default={})
-    posted_links = {chan: set(links) for chan, links in data.items()}
+    posted_links.clear()
+    for chan, links in data.items():
+        posted_links[chan] = set(links)
 
 def save_posted_links():
-    save_json(POSTED_LINKS_FILE, posted_links)
+    # Convert each set to a list so it is JSON serializable.
+    serializable = {chan: list(links) for chan, links in posted_links.items()}
+    save_json(POSTED_LINKS_FILE, serializable)
 
 def save_channel_settings():
     save_json("channel_settings.json", channel_settings)
@@ -95,6 +89,7 @@ def mark_link_posted(channel, link):
         posted_links[channel] = set()
     posted_links[channel].add(link)
     if len(posted_links[channel]) > 1000:
+        # Keep only the 1000 most recent links.
         posted_links[channel] = set(list(posted_links[channel])[-1000:])
     save_posted_links()
 
@@ -138,4 +133,5 @@ def check_feeds(send_message_func, channels_to_check=None):
     except Exception as e:
         logging.error(f"Error in check_feeds: {e}")
 
+load_feeds()
 load_subscriptions()
