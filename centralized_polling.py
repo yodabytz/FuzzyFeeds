@@ -23,8 +23,17 @@ from config import default_interval, BATCH_SIZE, BATCH_DELAY
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
-# Global variable for initial setup
+# Global variable for initial setup – only loaded once.
 script_start_time = time.time()
+
+# Helper function to get the entry timestamp.
+def get_entry_time(entry):
+    if entry.get("published_parsed"):
+        return time.mktime(entry.published_parsed)
+    elif entry.get("updated_parsed"):
+        return time.mktime(entry.updated_parsed)
+    else:
+        return None
 
 async def fetch_feed_conditional(session, url, last_modified=None, etag=None):
     headers = {}
@@ -87,24 +96,21 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
         return 0
 
     async with aiohttp.ClientSession() as session:
-        tasks = [fetch_feed_conditional(session, url, *feed.feed_metadata.get(url, {}).values())
-                 for url in feeds_to_check.values()]
+        tasks = [
+            fetch_feed_conditional(session, url, *feed.feed_metadata.get(url, {}).values())
+            for url in feeds_to_check.values()
+        ]
         results = await asyncio.gather(*tasks)
 
     updates = []
-    # Iterate over each feed URL result
     for (feed_name, feed_url), result in zip(feeds_to_check.items(), results):
         if result and result["feed"]:
-            # Process all entries in the feed sorted by published time (oldest first)
             entries = result["feed"].entries
-            # Only consider entries with a published_parsed value
-            sorted_entries = sorted(
-                [e for e in entries if e.get("published_parsed")],
-                key=lambda e: time.mktime(e.published_parsed)
-            )
+            valid_entries = [e for e in entries if get_entry_time(e) is not None]
+            sorted_entries = sorted(valid_entries, key=get_entry_time)
             for entry in sorted_entries:
-                published_time = time.mktime(entry.published_parsed)
-                if published_time > last_check:
+                entry_time = get_entry_time(entry)
+                if entry_time and entry_time > last_check:
                     link = entry.get("link", "").strip()
                     if link and not feed.is_link_posted(chan, link):
                         title = entry.get("title", "No Title").strip()
@@ -119,18 +125,16 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
         feed.last_check_times[chan] = current_time
         return 0
 
-    # Post each update as two separate messages (Title then Link) with delays
+    # Post updates in batches.
     batch_size = feed.channel_settings.get(chan, {}).get("batch_size", BATCH_SIZE)
     if batch_size <= 0:
         batch_size = 1
     batches = [updates[i:i + batch_size] for i in range(0, len(updates), batch_size)]
-    for i, batch in enumerate(batches):
+    for batch in batches:
         for feed_name, title, link in batch:
-            title_msg = f"New Feed from {feed_name}: {title}"
-            link_msg = f"Link: {link}"
-            send_to_platform(chan, title_msg, irc_send, matrix_send, discord_send)
+            send_to_platform(chan, f"New Feed from {feed_name}: {title}", irc_send, matrix_send, discord_send)
             await asyncio.sleep(0.5)
-            send_to_platform(chan, link_msg, irc_send, matrix_send, discord_send)
+            send_to_platform(chan, f"Link: {link}", irc_send, matrix_send, discord_send)
             await asyncio.sleep(0.5)
     feed.last_check_times[chan] = current_time
     logging.info(f"Posted {len(updates)} new feed entr{'y' if len(updates)==1 else 'ies'} in {chan}.")
@@ -139,11 +143,10 @@ async def process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_s
 async def start_polling(irc_send, matrix_send, discord_send, poll_interval=default_interval):
     logging.info("Centralized async polling started.")
     scheduler = FeedScheduler()
-    feed.load_feeds()
+    # Do not reload feeds here so that posted_links remains intact.
     for chan in feed.channel_feeds.keys():
         feed.last_check_times.setdefault(chan, script_start_time)
         scheduler.add_channel(chan, feed.channel_intervals.get(chan, poll_interval))
-
     while True:
         next_time, chan = scheduler.get_next()
         if not chan:
@@ -152,19 +155,16 @@ async def start_polling(irc_send, matrix_send, discord_send, poll_interval=defau
         current_time = time.time()
         if current_time < next_time:
             await asyncio.sleep(next_time - current_time)
-
         feeds_to_check = feed.channel_feeds.get(chan, {})
         if not feeds_to_check:
             logging.warning(f"No feed dictionary found for channel {chan}; skipping.")
             scheduler.reschedule(chan, feed.channel_intervals.get(chan, poll_interval))
             continue
-
         await process_channel(chan, feeds_to_check, irc_send, matrix_send, discord_send)
         scheduler.reschedule(chan, feed.channel_intervals.get(chan, poll_interval))
         logging.info(f"Finished checking {chan}. Next check in {feed.channel_intervals.get(chan, poll_interval)} seconds.")
 
 if __name__ == "__main__":
-    # Test functions for standalone testing.
     def test_irc_send(channel, message):
         print(f"[Test IRC] Channel {channel}: {message}")
 
