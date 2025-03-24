@@ -1,8 +1,9 @@
+# feed.py (updated with careful migration of plain keys to composite keys in feeds and posted_links)
+
 import feedparser
 import time
 import logging
 import json
-import ssl
 from persistence import load_json, save_json
 
 FEEDS_FILE = "feeds.json"
@@ -23,9 +24,8 @@ def load_feeds():
     global channels, channel_feeds, channel_intervals, last_check_times
     channels_data = load_json(CHANNELS_FILE, default={"irc_channels": [], "discord_channels": [], "matrix_rooms": []})
     channels = channels_data.get("irc_channels", []) + channels_data.get("discord_channels", []) + channels_data.get("matrix_rooms", [])
-    
+
     networks = load_json(NETWORKS_FILE, default={})
-    # For each network, add composite keys to channels list.
     for network_name, net_info in networks.items():
         net_channels = net_info.get("Channels", [])
         for chan in net_channels:
@@ -34,33 +34,12 @@ def load_feeds():
                 channels.append(composite_key)
         logging.info(f"[feed.py] Loaded {len(net_channels)} channels from network {network_name}")
 
+    global channel_feeds
     channel_feeds = load_json(FEEDS_FILE, default={})
     total_feeds = sum(len(feeds) for feeds in channel_feeds.values())
     logging.info(f"[feed.py] Loaded {len(channel_feeds)} channels with {total_feeds} feeds.")
-    
-    # --- Migration Step ---
-    # For IRC channels defined in secondary networks, if a plain channel key exists (e.g. "#buzzard")
-    # merge its feeds into the composite key (e.g. "irc.collectiveirc.net|#buzzard") and remove the plain key.
-    networks = load_json(NETWORKS_FILE, default={})
-    migrated_keys = []
-    for net_name, net_info in networks.items():
-        server_name = net_info.get("server")
-        for chan in net_info.get("Channels", []):
-            if chan in channel_feeds:
-                composite_key = f"{server_name}|{chan}"
-                if composite_key not in channel_feeds:
-                    channel_feeds[composite_key] = channel_feeds[chan]
-                else:
-                    # Merge the feeds from the plain key into the composite key.
-                    channel_feeds[composite_key].update(channel_feeds[chan])
-                migrated_keys.append(chan)
-    for key in migrated_keys:
-        if key in channel_feeds:
-            del channel_feeds[key]
-    if migrated_keys:
-        save_feeds()
-        logging.info(f"[feed.py] Migrated plain channel keys to composite keys: {migrated_keys}")
-    # --- End Migration ---
+
+    migrate_plain_keys_to_composite()
 
     loaded_intervals = load_json("intervals.json", default={})
     for chan in channels:
@@ -70,6 +49,48 @@ def load_feeds():
             channel_intervals[chan] = loaded_intervals[chan]
         last_check_times[chan] = 0
     load_posted_links()
+
+def migrate_plain_keys_to_composite():
+    """Migrate plain keys to composite keys for both feeds and posted_links."""
+    networks = load_json(NETWORKS_FILE, default={})
+
+    # Migrate feeds
+    migrated_feeds = []
+    for net_info in networks.values():
+        server_name = net_info.get("server")
+        for chan in net_info.get("Channels", []):
+            if chan in channel_feeds:
+                composite_key = f"{server_name}|{chan}"
+                if composite_key not in channel_feeds:
+                    channel_feeds[composite_key] = channel_feeds[chan]
+                else:
+                    channel_feeds[composite_key].update(channel_feeds[chan])
+                del channel_feeds[chan]
+                migrated_feeds.append(chan)
+
+    if migrated_feeds:
+        save_json(FEEDS_FILE, channel_feeds)
+        logging.info(f"Migrated plain keys in feeds.json: {migrated_feeds}")
+
+    # Migrate posted_links
+    global posted_links
+    posted_links = load_json(POSTED_LINKS_FILE, default={})
+    migrated_links = []
+    for net_info in networks.values():
+        server_name = net_info.get("server")
+        for chan in net_info.get("Channels", []):
+            if chan in posted_links:
+                composite_key = f"{server_name}|{chan}"
+                if composite_key not in posted_links:
+                    posted_links[composite_key] = posted_links[chan]
+                else:
+                    posted_links[composite_key].extend(posted_links[chan])
+                del posted_links[chan]
+                migrated_links.append(chan)
+
+    if migrated_links:
+        save_json(POSTED_LINKS_FILE, posted_links)
+        logging.info(f"Migrated plain keys in posted_links.json: {migrated_links}")
 
 def load_subscriptions():
     global subscriptions
