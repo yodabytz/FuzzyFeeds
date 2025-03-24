@@ -47,7 +47,11 @@ def process_message_queue(irc):
             logging.error(f"Error processing message queue: {e}")
 
 def connect_and_register():
-    from config import server, port, channels
+    from config import server, port
+    # Load IRC channels from channels.json
+    import channels as chan_module
+    channels_data = chan_module.load_channels()
+    irc_channels = channels_data.get("irc_channels", [])
     attempt = 0
     while attempt < 3:
         try:
@@ -77,9 +81,10 @@ def connect_and_register():
                 attempt += 1
                 continue
             irc.settimeout(None)
-            for channel in channels:
+            # Join all channels from channels.json without announcing
+            for channel in irc_channels:
                 irc.send(f"JOIN {channel}\r\n".encode("utf-8"))
-                send_message(irc, channel, "FuzzyFeeds has joined the channel!")
+                # Removed any announcement message.
             threading.Thread(target=process_message_queue, args=(irc,), daemon=True).start()
             return irc
         except Exception as e:
@@ -134,8 +139,8 @@ def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel):
                 attempt += 1
                 continue
             irc.settimeout(None)
-            irc.send(f"JOIN {initial_channel}\r\n".encode("utf-8"))  # Join initial channel only
-            # Removed redundant join message here
+            irc.send(f"JOIN {initial_channel}\r\n".encode("utf-8"))  # Join initial channel only.
+            # Announcement removed here as well.
             threading.Thread(target=process_message_queue, args=(irc,), daemon=True).start()
             return irc
         except ssl.SSLError as ssl_err:
@@ -191,4 +196,3 @@ def irc_command_parser(irc_conn):
         except Exception as e:
             logging.error(f"Error in irc_command_parser: {e}")
             break
-
