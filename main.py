@@ -1,116 +1,252 @@
 #!/usr/bin/env python3
-"""
-centralized_polling.py
-
-This module implements centralized polling for RSS/Atom feeds for all integrations:
-IRC, Matrix, and Discord. It uses the feed data from feed.py and, at configurable
-intervals, checks each feed for new entries. When a new entry is found, it uses the
-provided callback functions to send messages to the appropriate integration channel/room.
-"""
-
-import time
 import logging
-import feedparser
-import datetime
+import threading
+import time
+import asyncio
+from flask import Flask
 
-import feed
-from config import default_interval
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
-logging.basicConfig(level=logging.INFO)
+try:
+    from irc_client import (
+        connect_and_register,
+        send_message,
+        send_multiline_message,
+        set_irc_client,
+        connect_to_network,
+        irc_command_parser,
+        message_queue
+    )
+    logging.info("Imported irc_client successfully")
+except Exception as e:
+    logging.error(f"Failed to import irc_client: {e}")
+    raise
 
-# Global variable for initial setup.
-script_start_time = time.time()
+try:
+    from matrix_integration import start_matrix_bot, disable_feed_loop as disable_matrix_feed_loop
+    logging.info("Imported matrix_integration successfully")
+except Exception as e:
+    logging.error(f"Failed to import matrix_integration: {e}")
+    raise
 
-def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
-    logging.info("Centralized polling started.")
+try:
+    from discord_integration import (
+        bot,
+        run_discord_bot,
+        disable_feed_loop as disable_discord_feed_loop,
+        send_discord_message
+    )
+    logging.info("Imported discord_integration successfully")
+except Exception as e:
+    logging.error(f"Failed to import discord_integration: {e}")
+    raise
+
+try:
+    from config import (
+        enable_matrix,
+        enable_discord,
+        admin,
+        ops,
+        admins,
+        dashboard_port,
+        server as default_irc_server,
+        channels as config_channels
+    )
+    logging.info("Imported config successfully")
+except Exception as e:
+    logging.error(f"Failed to import config: {e}")
+    raise
+
+try:
+    import centralized_polling
+    logging.info("Imported centralized_polling successfully")
+except Exception as e:
+    logging.error(f"Failed to import centralized_polling: {e}")
+    raise
+
+try:
+    from persistence import load_json
+    logging.info("Imported persistence successfully")
+except Exception as e:
+    logging.error(f"Failed to import persistence: {e}")
+    raise
+
+import os
+from dashboard import app
+from connection_state import connection_status, connection_lock
+
+irc_client = None
+irc_secondary = {}
+
+def start_dashboard():
+    logging.info(f"Starting Dashboard on port {dashboard_port}...")
+    app.logger.setLevel(logging.INFO)
+    app.run(host='0.0.0.0', port=dashboard_port)
+
+def start_primary_irc():
+    global irc_client
+    logging.info("Starting primary IRC thread")
     while True:
-        feed.load_feeds()
-        current_time = time.time()
-        channels_to_check = list(feed.channel_feeds.keys())
-        logging.info(f"Checking {len(channels_to_check)} channels for new feeds: {channels_to_check}")
-        
-        if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
-            feed.last_check_times = {}
-        for chan in channels_to_check:
-            feed.last_check_times.setdefault(chan, script_start_time)
-            
-            feeds_to_check = feed.channel_feeds.get(chan)
-            if not feeds_to_check:
-                logging.warning(f"No feed dictionary found for channel {chan}; skipping.")
-                continue
-                
-            interval = feed.channel_intervals.get(chan, default_interval)
-            last_check = feed.last_check_times.get(chan, script_start_time)
-            logging.info(f"Channel {chan}: Last check at {datetime.datetime.fromtimestamp(last_check)}, current time {datetime.datetime.fromtimestamp(current_time)}, interval {interval}s")
-            
-            if current_time - last_check >= interval:
-                new_feed_count = 0
-                for feed_name, feed_url in feeds_to_check.items():
-                    try:
-                        parsed_feed = feedparser.parse(feed_url)
-                        if parsed_feed.bozo:
-                            logging.warning(f"Error parsing feed '{feed_name}' ({feed_url}): {parsed_feed.bozo_exception}")
-                            continue
-                        entries = parsed_feed.get("entries")
-                        if not entries:
-                            logging.info(f"No entries in feed '{feed_name}' ({feed_url}).")
-                            continue
-                        entry = entries[0]
-                        published_time = None
-                        if entry.get("published_parsed"):
-                            published_time = time.mktime(entry.published_parsed)
-                        elif entry.get("updated_parsed"):
-                            published_time = time.mktime(entry.updated_parsed)
-                        if published_time is not None and published_time <= last_check:
-                            logging.info(f"Skipping entry from feed '{feed_name}' published at {datetime.datetime.fromtimestamp(published_time)} (last check was {datetime.datetime.fromtimestamp(last_check)}).")
-                            continue
-                        
-                        logging.info(f"Feed '{feed_name}' data - Title: {entry.get('title')}, Link: {entry.get('link')}")
-                        
-                        title = entry.title.strip() if entry.get("title") else "No Title"
-                        link = entry.link.strip() if entry.get("link") else ""
-                        if link and feed.is_link_posted(chan, link):
-                            logging.info(f"Channel {chan} already has link: {link}")
-                            continue
-                        if link:
-                            title_msg = f"{feed_name}: {title}"
-                            link_msg = f"Link: {link}"
-                            
-                            if chan.startswith("!"):
-                                matrix_send(chan, title_msg)
-                                matrix_send(chan, link_msg)
-                            elif str(chan).isdigit():
-                                discord_send(chan, title_msg)
-                                discord_send(chan, link_msg)
-                            else:
-                                irc_send(chan, title_msg)
-                                irc_send(chan, link_msg)
-                            
-                            feed.mark_link_posted(chan, link)
-                            new_feed_count += 1
-                    except Exception as e:
-                        logging.error(f"Error checking feed '{feed_name}' at {feed_url}: {e}")
-                if new_feed_count > 0:
-                    logging.info(f"Posted {new_feed_count} new feeds in {chan}.")
-                else:
-                    logging.info(f"No new feeds found in {chan}.")
-                feed.last_check_times[chan] = current_time
-        logging.info(f"Finished checking feeds. Next check in {poll_interval} seconds.")
-        time.sleep(poll_interval)
+        try:
+            logging.info(f"Connecting to primary IRC server {default_irc_server}...")
+            irc_client = connect_and_register()
+            if irc_client:
+                set_irc_client(irc_client)
+                with connection_lock:
+                    connection_status["primary"][default_irc_server] = True
+                for ch in config_channels:
+                    composite = f"{default_irc_server}|{ch}"
+                    irc_secondary[composite] = irc_client
+                logging.info(f"Primary IRC connected; channels: {config_channels}")
+                parser_thread = threading.Thread(target=irc_command_parser, args=(irc_client,), daemon=True)
+                parser_thread.start()
+                parser_thread.join()  # Wait for disconnect
+                logging.info(f"Primary IRC connection to {default_irc_server} lost, retrying...")
+                with connection_lock:
+                    connection_status["primary"][default_irc_server] = False
+                irc_client = None
+            else:
+                logging.error("connect_and_register returned None")
+                with connection_lock:
+                    connection_status["primary"][default_irc_server] = False
+                logging.info("Reconnecting to primary IRC in 30 seconds...")
+                time.sleep(30)
+        except Exception as e:
+            logging.error(f"Primary IRC error: {e}")
+            with connection_lock:
+                connection_status["primary"][default_irc_server] = False
+            irc_client = None
+            logging.info("Reconnecting to primary IRC in 30 seconds...")
+            time.sleep(30)
+
+def manage_secondary_network(network_name, net_info):
+    global irc_secondary
+    srv = net_info.get("server")
+    prt = net_info.get("port")
+    sslf = net_info.get("ssl", False)
+    channels_list = net_info.get("Channels", [])
+    if not channels_list:
+        logging.error(f"[{network_name}] No channels defined.")
+        return
+    logging.info(f"[{network_name}] Starting secondary IRC thread for {srv}")
+    while True:
+        try:
+            logging.info(f"[{network_name}] Attempting connection to {srv}:{prt}...")
+            client = connect_to_network(srv, prt, sslf, channels_list[0])
+            if client:
+                logging.info(f"[{network_name}] Connection established, channels joined: {channels_list}")
+                with connection_lock:
+                    connection_status["secondary"][srv] = True
+                for ch in channels_list:
+                    client.send(f"JOIN {ch}\r\n".encode("utf-8"))
+                    send_message(client, ch, "FuzzyFeeds has joined the channel!")
+                    composite = f"{srv}|{ch}"
+                    irc_secondary[composite] = client
+                    logging.info(f"[{network_name}] Registered {composite} in irc_secondary")
+                parser_thread = threading.Thread(target=irc_command_parser, args=(client,), daemon=True)
+                parser_thread.start()
+                while not message_queue.empty():
+                    target, msg = message_queue.get()
+                    if target.startswith("#"):
+                        send_multiline_message(client, target, msg)
+                    message_queue.task_done()
+                parser_thread.join()  # Wait for disconnect
+                logging.info(f"[{network_name}] Connection to {srv}:{prt} lost, retrying...")
+                with connection_lock:
+                    connection_status["secondary"][srv] = False
+            else:
+                logging.error(f"[{network_name}] Connection failed")
+                with connection_lock:
+                    connection_status["secondary"][srv] = False
+                logging.info(f"[{network_name}] Retrying in 30 seconds...")
+                time.sleep(30)
+        except Exception as e:
+            logging.error(f"[{network_name}] Exception: {e}")
+            with connection_lock:
+                connection_status["secondary"][srv] = False
+            logging.info(f"[{network_name}] Retrying in 30 seconds...")
+            time.sleep(30)
+
+def start_secondary_irc_networks():
+    logging.info("Starting secondary IRC networks thread")
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    networks_file = os.path.join(BASE_DIR, "networks.json")
+    networks = load_json(networks_file, default={})
+    if not networks:
+        logging.info("No secondary networks defined in networks.json")
+    for network_name, net_info in networks.items():
+        threading.Thread(target=manage_secondary_network, args=(network_name, net_info), daemon=True).start()
+
+def start_matrix():
+    if enable_matrix:
+        logging.info("Starting Matrix integration...")
+        start_matrix_bot()
+    else:
+        logging.info("Matrix integration disabled in config")
+
+def start_discord():
+    if enable_discord:
+        logging.info("Starting Discord integration...")
+        run_discord_bot()
+    else:
+        logging.info("Discord integration disabled in config")
+
+def irc_send_callback(channel, message):
+    logging.info(f"IRC send callback for {channel}: {message}")
+    if "|" in channel:
+        composite = channel
+        actual_channel = composite.split("|", 1)[1]
+        conn = irc_secondary.get(composite)
+        if conn:
+            for line in message.split('\n'):
+                send_message(conn, actual_channel, line)
+        else:
+            logging.error(f"No IRC connection for composite key: {composite}, queuing message")
+            message_queue.put((actual_channel, message))
+    else:
+        global irc_client
+        if irc_client:
+            for line in message.split('\n'):
+                send_message(irc_client, channel, line)
+        else:
+            logging.error("Primary IRC client not connected, queuing message")
+            message_queue.put((channel, message))
 
 if __name__ == "__main__":
-    def test_irc_send(channel, message):
-        if "|" in channel:
-            parts = channel.split("|", 1)
-            actual_channel = parts[1]
-            print(f"[Secondary IRC] Channel {actual_channel}:")
-        else:
-            print(f"[Primary IRC] Channel {channel}:")
-        for line in message.split('\n'):
-            print(line)
-    def test_matrix_send(room, message):
-        print(f"[Matrix] Room {room}: {message}")
-    def test_discord_send(channel, message):
-        print(f"[Discord] Channel {channel}: {message}")
-        
-    start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=300)
+    logging.info("Main script starting")
+    try:
+        disable_matrix_feed_loop()
+        logging.info("Disabled Matrix feed loop")
+        disable_discord_feed_loop()
+        logging.info("Disabled Discord feed loop")
+
+        threading.Thread(target=start_primary_irc, daemon=True).start()
+        threading.Thread(target=start_secondary_irc_networks, daemon=True).start()
+        time.sleep(5)
+        threading.Thread(target=start_dashboard, daemon=True).start()
+
+        matrix_callback = None
+        if enable_matrix:
+            from matrix_integration import send_message as matrix_send_message
+            matrix_callback = lambda room, msg: matrix_send_message(room, msg)
+
+        discord_callback = send_discord_message if enable_discord else None
+
+        threading.Thread(target=centralized_polling.start_polling, args=(
+            irc_send_callback,
+            matrix_callback,
+            discord_callback,
+            300
+        ), daemon=True).start()
+
+        if enable_matrix:
+            threading.Thread(target=start_matrix, daemon=True).start()
+        if enable_discord:
+            threading.Thread(target=start_discord, daemon=True).start()
+
+        logging.info("All threads launched, entering main loop")
+        while True:
+            time.sleep(1)
+    except Exception as e:
+        logging.error(f"Main script failed: {e}")
+        raise
