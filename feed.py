@@ -25,6 +25,7 @@ def load_feeds():
     channels = channels_data.get("irc_channels", []) + channels_data.get("discord_channels", []) + channels_data.get("matrix_rooms", [])
     
     networks = load_json(NETWORKS_FILE, default={})
+    # For each network, add composite keys to channels list.
     for network_name, net_info in networks.items():
         net_channels = net_info.get("Channels", [])
         for chan in net_channels:
@@ -37,6 +38,30 @@ def load_feeds():
     total_feeds = sum(len(feeds) for feeds in channel_feeds.values())
     logging.info(f"[feed.py] Loaded {len(channel_feeds)} channels with {total_feeds} feeds.")
     
+    # --- Migration Step ---
+    # For IRC channels defined in secondary networks, if a plain channel key exists (e.g. "#buzzard")
+    # merge its feeds into the composite key (e.g. "irc.collectiveirc.net|#buzzard") and remove the plain key.
+    networks = load_json(NETWORKS_FILE, default={})
+    migrated_keys = []
+    for net_name, net_info in networks.items():
+        server_name = net_info.get("server")
+        for chan in net_info.get("Channels", []):
+            if chan in channel_feeds:
+                composite_key = f"{server_name}|{chan}"
+                if composite_key not in channel_feeds:
+                    channel_feeds[composite_key] = channel_feeds[chan]
+                else:
+                    # Merge the feeds from the plain key into the composite key.
+                    channel_feeds[composite_key].update(channel_feeds[chan])
+                migrated_keys.append(chan)
+    for key in migrated_keys:
+        if key in channel_feeds:
+            del channel_feeds[key]
+    if migrated_keys:
+        save_feeds()
+        logging.info(f"[feed.py] Migrated plain channel keys to composite keys: {migrated_keys}")
+    # --- End Migration ---
+
     loaded_intervals = load_json("intervals.json", default={})
     for chan in channels:
         if chan not in loaded_intervals:
