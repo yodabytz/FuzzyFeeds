@@ -49,8 +49,7 @@ try:
         ops,
         admins,
         dashboard_port,
-        server as default_irc_server,
-        channels as config_channels
+        server as default_irc_server
     )
     logging.info("Imported config successfully")
 except Exception as e:
@@ -75,6 +74,9 @@ import os
 from dashboard import app
 from connection_state import connection_status, connection_lock
 
+# We'll now use the channels loaded from channels.json instead of config.channels
+import channels as chan_module
+
 irc_client = None
 irc_secondary = {}
 
@@ -94,10 +96,13 @@ def start_primary_irc():
                 set_irc_client(irc_client)
                 with connection_lock:
                     connection_status["primary"][default_irc_server] = True
-                for ch in config_channels:
+                # Load IRC channels from channels.json
+                channels_data = chan_module.load_channels()
+                irc_channels = channels_data.get("irc_channels", [])
+                for ch in irc_channels:
                     composite = f"{default_irc_server}|{ch}"
                     irc_secondary[composite] = irc_client
-                logging.info(f"Primary IRC connected; channels: {config_channels}")
+                logging.info(f"Primary IRC connected; channels: {irc_channels}")
                 parser_thread = threading.Thread(target=irc_command_parser, args=(irc_client,), daemon=True)
                 parser_thread.start()
                 parser_thread.join()  # Wait for disconnect
@@ -139,7 +144,7 @@ def manage_secondary_network(network_name, net_info):
                     connection_status["secondary"][srv] = True
                 for ch in channels_list:
                     client.send(f"JOIN {ch}\r\n".encode("utf-8"))
-                    send_message(client, ch, "FuzzyFeeds has joined the channel!")
+                    # Removed announcement message here as well.
                     composite = f"{srv}|{ch}"
                     irc_secondary[composite] = client
                     logging.info(f"[{network_name}] Registered {composite} in irc_secondary")
