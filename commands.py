@@ -341,6 +341,8 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), "Error: Channel must start with '#'")
             return
         try:
+            # Added local import to ensure os is correctly bound in this scope.
+            import os
             channels_data = channels.load_channels()
             if join_channel not in channels_data["irc_channels"]:
                 channels_data["irc_channels"].append(join_channel)
