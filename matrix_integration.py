@@ -161,7 +161,7 @@ class MatrixBot:
                         display_name = room
                     matrix_room_names[room] = display_name
                     logging.info(f"Joined Matrix room: {room} (Display name: {display_name})")
-                    await self.send_message(room, f"🤖 FuzzyFeeds Bot is online! Type `!help` for commands. (Room: {display_name})")
+                    # Announcement removed: The bot will no longer send an announcement upon joining.
                 else:
                     logging.error(f"Error joining room {room}: {response}")
             except Exception as e:
