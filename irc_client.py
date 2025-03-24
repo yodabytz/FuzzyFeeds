@@ -5,8 +5,9 @@ import time
 import logging
 import ssl
 import queue
-from config import ops, botnick
+from config import ops
 
+botnick = "FuzzyFeeds"
 irc_client = None
 message_queue = queue.Queue()
 
@@ -17,19 +18,20 @@ def set_irc_client(client):
 def send_message(irc, channel, message):
     try:
         irc.send(f"PRIVMSG {channel} :{message}\r\n".encode("utf-8"))
-        logging.info(f"Sent message to {channel}")
+        logging.debug(f"Sent message to {channel}: {message}")
     except Exception as e:
-        logging.error(f"Error sending message to {channel}: {e}")
+        logging.error(f"Error sending message: {e}")
 
 def send_private_message(irc, user, message):
     try:
         irc.send(f"PRIVMSG {user} :{message}\r\n".encode("utf-8"))
-        logging.info(f"Sent private message to {user}")
+        logging.debug(f"Sent private message to {user}: {message}")
     except Exception as e:
-        logging.error(f"Error sending private message to {user}: {e}")
+        logging.error(f"Error sending private message: {e}")
 
 def send_multiline_message(irc, target, message):
-    for line in message.split("\n"):
+    lines = message.split("\n")
+    for line in lines:
         if line.strip():
             send_message(irc, target, line)
         else:
@@ -49,7 +51,7 @@ def connect_and_register():
     attempt = 0
     while attempt < 3:
         try:
-            logging.info(f"Attempt {attempt+1} to connect to primary IRC server {server}:{port}")
+            logging.info(f"Attempt {attempt+1} to connect to {server}:{port}")
             irc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             irc.connect((server, port))
             irc.send(f"NICK {botnick}\r\n".encode("utf-8"))
@@ -60,11 +62,11 @@ def connect_and_register():
             irc.settimeout(15)
             while not connected and (time.time() - start_time_timeout) < TIMEOUT_SECONDS:
                 response = irc.recv(2048).decode("utf-8", errors="ignore")
-                logging.info(f"Received: {response}")
+                logging.debug(f"Received: {response}")
                 for line in response.split("\r\n"):
                     if line.startswith("PING"):
                         irc.send(f"PONG {line.split()[1]}\r\n".encode("utf-8"))
-                        logging.info("Sent PONG")
+                        logging.debug("Sent PONG response")
                     if " 001 " in line or "Welcome" in line:
                         connected = True
                         logging.info(f"Successfully connected to {server}:{port}")
@@ -77,6 +79,7 @@ def connect_and_register():
             irc.settimeout(None)
             for channel in channels:
                 irc.send(f"JOIN {channel}\r\n".encode("utf-8"))
+                send_message(irc, channel, "FuzzyFeeds has joined the channel!")
             threading.Thread(target=process_message_queue, args=(irc,), daemon=True).start()
             return irc
         except Exception as e:
@@ -93,18 +96,16 @@ def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel):
             logging.info(f"Attempt {attempt+1} to connect to {server_name}:{port_number} (SSL: {use_ssl_flag})")
             irc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             if use_ssl_flag:
-                # For secondary networks, revert to our previously working method:
-                # Disable certificate verification so that connection succeeds.
                 context = ssl.create_default_context()
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
+                context.check_hostname = True
+                context.verify_mode = ssl.CERT_REQUIRED
                 irc = context.wrap_socket(irc, server_hostname=server_name)
-                logging.info(f"SSL context initialized for {server_name} with CERT_NONE")
+                logging.info(f"SSL context initialized for {server_name}")
             irc.connect((server_name, port_number))
             irc.send(f"NICK {botnick}\r\n".encode("utf-8"))
-            logging.info(f"Sent NICK {botnick} to {server_name}:{port_number}")
+            logging.debug(f"Sent NICK {botnick}")
             irc.send(f"USER {botnick} 0 * :Python IRC Bot\r\n".encode("utf-8"))
-            logging.info("Sent USER command")
+            logging.debug(f"Sent USER {botnick}")
             
             connected = False
             start_time_timeout = time.time()
@@ -113,13 +114,13 @@ def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel):
             while not connected and (time.time() - start_time_timeout) < TIMEOUT_SECONDS:
                 response = irc.recv(2048).decode("utf-8", errors="ignore")
                 if not response:
-                    logging.warning(f"No response from {server_name}:{port_number}")
+                    logging.warning(f"No response from {server_name}:{port_number}, may have disconnected")
                     break
-                logging.info(f"Received from {server_name}:{port_number}: {response}")
+                logging.debug(f"Received from {server_name}:{port_number}: {response}")
                 for line in response.split("\r\n"):
                     if line.startswith("PING"):
                         irc.send(f"PONG {line.split()[1]}\r\n".encode("utf-8"))
-                        logging.info(f"Sent PONG to {server_name}:{port_number}")
+                        logging.debug(f"Sent PONG to {server_name}:{port_number}")
                     if " 001 " in line or "Welcome" in line:
                         connected = True
                         logging.info(f"Successfully connected to {server_name}:{port_number}")
@@ -133,7 +134,8 @@ def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel):
                 attempt += 1
                 continue
             irc.settimeout(None)
-            irc.send(f"JOIN {initial_channel}\r\n".encode("utf-8"))
+            irc.send(f"JOIN {initial_channel}\r\n".encode("utf-8"))  # Join initial channel only
+            # Removed redundant join message here
             threading.Thread(target=process_message_queue, args=(irc,), daemon=True).start()
             return irc
         except ssl.SSLError as ssl_err:
@@ -159,39 +161,34 @@ def irc_command_parser(irc_conn):
             lines = buffer.split("\r\n")
             buffer = lines[-1]
             for line in lines[:-1]:
-                logging.info(f"[IRC Parser] Received: {line}")
+                logging.debug(f"[irc_parser] Received: {line}")
                 if line.startswith("PING"):
                     irc_conn.send(f"PONG {line.split()[1]}\r\n".encode("utf-8"))
-                    logging.info("Sent PONG")
+                    logging.debug("Sent PONG response")
                 elif "PRIVMSG" in line:
                     parts = line.split()
                     if len(parts) < 4:
                         logging.warning(f"Malformed PRIVMSG: {line}")
                         continue
                     sender = parts[0][1:].split("!")[0]
-                    # Ignore messages from ourselves.
-                    if sender.lower() == botnick.lower():
-                        continue
                     target = parts[2]
                     message = " ".join(parts[3:])[1:]
-                    logging.info(f"[IRC Parser] Command from {sender} in {target}")
-                    is_op = sender.lower() in [op.lower() for op in ops]
-                    handle_centralized_command(
-                        "irc",
-                        lambda tgt, msg: send_message(irc_conn, tgt, msg),
-                        lambda usr, msg: send_private_message(irc_conn, usr, msg),
-                        lambda tgt, msg: send_multiline_message(irc_conn, tgt, msg),
-                        sender,
-                        target,
-                        message,
-                        is_op,
-                        irc_conn
-                    )
+                    logging.debug(f"[irc_parser] Parsed: sender={sender}, target={target}, message={message}")
+                    if message.startswith("!"):
+                        logging.info(f"[irc_parser] Command detected from {sender} in {target}: {message}")
+                        is_op = sender.lower() in [op.lower() for op in ops]
+                        handle_centralized_command(
+                            "irc",
+                            lambda tgt, msg: send_message(irc_conn, tgt, msg),
+                            lambda usr, msg: send_private_message(irc_conn, usr, msg),
+                            lambda tgt, msg: send_multiline_message(irc_conn, tgt, msg),
+                            sender,
+                            target,
+                            message,
+                            is_op,
+                            irc_conn
+                        )
         except Exception as e:
             logging.error(f"Error in irc_command_parser: {e}")
             break
 
-if __name__ == "__main__":
-    client = connect_and_register()
-    if client:
-        threading.Thread(target=irc_command_parser, args=(client,), daemon=True).start()
