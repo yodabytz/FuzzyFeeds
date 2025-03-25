@@ -142,8 +142,8 @@ def check_feeds(send_message_func, channels_to_check=None):
                         title = entry.title.strip() if entry.title else "No Title"
                         link = entry.link.strip() if entry.link else ""
                         if link and not is_link_posted(chan, link):
-                            send_message_func(chan, f"New Feed from {feed_name}: {title}")
-                            send_message_func(chan, f"Link: {link}")
+                            combined_message = f"New Feed from {feed_name}: {title}\n{link}"
+                            send_message_func(chan, combined_message)
                             mark_link_posted(chan, link)
                 last_check_times[chan] = current_time
     except Exception as e:
