@@ -1,5 +1,3 @@
-# feed.py (updated with careful migration of plain keys to composite keys in feeds and posted_links)
-
 import feedparser
 import time
 import logging
@@ -32,30 +30,23 @@ def load_feeds():
             composite_key = f"{net_info['server']}|{chan}"
             if composite_key not in channels:
                 channels.append(composite_key)
-        logging.info(f"[feed.py] Loaded {len(net_channels)} channels from network {network_name}")
 
     global channel_feeds
     channel_feeds = load_json(FEEDS_FILE, default={})
-    total_feeds = sum(len(feeds) for feeds in channel_feeds.values())
-    logging.info(f"[feed.py] Loaded {len(channel_feeds)} channels with {total_feeds} feeds.")
-
     migrate_plain_keys_to_composite()
 
     loaded_intervals = load_json("intervals.json", default={})
     for chan in channels:
-        if chan not in loaded_intervals:
-            channel_intervals[chan] = default_interval
-        else:
-            channel_intervals[chan] = loaded_intervals[chan]
+        channel_intervals[chan] = loaded_intervals.get(chan, default_interval)
         last_check_times[chan] = 0
+
     load_posted_links()
 
 def migrate_plain_keys_to_composite():
-    """Migrate plain keys to composite keys for both feeds and posted_links."""
     networks = load_json(NETWORKS_FILE, default={})
 
     # Migrate feeds
-    migrated_feeds = []
+    feeds_changed = False
     for net_info in networks.values():
         server_name = net_info.get("server")
         for chan in net_info.get("Channels", []):
@@ -66,16 +57,15 @@ def migrate_plain_keys_to_composite():
                 else:
                     channel_feeds[composite_key].update(channel_feeds[chan])
                 del channel_feeds[chan]
-                migrated_feeds.append(chan)
+                feeds_changed = True
 
-    if migrated_feeds:
+    if feeds_changed:
         save_json(FEEDS_FILE, channel_feeds)
-        logging.info(f"Migrated plain keys in feeds.json: {migrated_feeds}")
 
-    # Migrate posted_links
+    # Migrate posted links
     global posted_links
     posted_links = load_json(POSTED_LINKS_FILE, default={})
-    migrated_links = []
+    links_changed = False
     for net_info in networks.values():
         server_name = net_info.get("server")
         for chan in net_info.get("Channels", []):
@@ -84,18 +74,16 @@ def migrate_plain_keys_to_composite():
                 if composite_key not in posted_links:
                     posted_links[composite_key] = posted_links[chan]
                 else:
-                    posted_links[composite_key].extend(posted_links[chan])
+                    posted_links[composite_key] = list(set(posted_links[composite_key] + posted_links[chan]))
                 del posted_links[chan]
-                migrated_links.append(chan)
+                links_changed = True
 
-    if migrated_links:
+    if links_changed:
         save_json(POSTED_LINKS_FILE, posted_links)
-        logging.info(f"Migrated plain keys in posted_links.json: {migrated_links}")
 
 def load_subscriptions():
     global subscriptions
     subscriptions = load_json(SUBSCRIPTIONS_FILE, default={})
-    logging.info(f"[feed.py] Loaded user subscriptions: {sum(len(subs) for subs in subscriptions.values())} subscriptions.")
 
 def save_feeds():
     save_json(FEEDS_FILE, channel_feeds)
