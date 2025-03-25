@@ -733,4 +733,3 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
     
     else:
         send_message_fn(response_target(actual_channel, integration), "Unknown command. Use !help for a list.")
-
