@@ -532,6 +532,10 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # !addsub
     elif lower_message.startswith("!addsub"):
+        if integration != "irc":
+            send_private_message_fn(user, "This command is only available on IRC.")
+            return
+
         parts = message.split(" ", 2)
         if len(parts) < 3:
             send_private_message_fn(user, "Usage: !addsub <feed_name> <URL>")
@@ -547,6 +551,10 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # !unsub
     elif lower_message.startswith("!unsub"):
+        if integration != "irc":
+            send_private_message_fn(user, "This command is only available on IRC.")
+            return
+
         parts = message.split(" ", 1)
         if len(parts) < 2:
             send_private_message_fn(user, "Usage: !unsub <feed_name>")
@@ -562,6 +570,10 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # !mysubs
     elif lower_message.startswith("!mysubs"):
+        if integration != "irc":
+            send_private_message_fn(user, "This command is only available on IRC.")
+            return
+
         uname = user
         if uname in feed.subscriptions and feed.subscriptions[uname]:
             lines = [f"{name}: {url}" for name, url in feed.subscriptions[uname].items()]
@@ -571,6 +583,10 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # !latestsub
     elif lower_message.startswith("!latestsub"):
+        if integration != "irc":
+            send_private_message_fn(user, "This command is only available on IRC.")
+            return
+
         parts = message.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
             send_private_message_fn(user, "Usage: !latestsub <feed_name>")
@@ -717,3 +733,4 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
     
     else:
         send_message_fn(response_target(actual_channel, integration), "Unknown command. Use !help for a list.")
+
