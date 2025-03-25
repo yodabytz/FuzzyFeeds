@@ -74,7 +74,6 @@ import os
 from dashboard import app
 from connection_state import connection_status, connection_lock
 
-# We'll now use the channels loaded from channels.json instead of config.channels
 import channels as chan_module
 
 irc_client = None
@@ -96,7 +95,6 @@ def start_primary_irc():
                 set_irc_client(irc_client)
                 with connection_lock:
                     connection_status["primary"][default_irc_server] = True
-                # Load IRC channels from channels.json
                 channels_data = chan_module.load_channels()
                 irc_channels = channels_data.get("irc_channels", [])
                 for ch in irc_channels:
@@ -105,7 +103,7 @@ def start_primary_irc():
                 logging.info(f"Primary IRC connected; channels: {irc_channels}")
                 parser_thread = threading.Thread(target=irc_command_parser, args=(irc_client,), daemon=True)
                 parser_thread.start()
-                parser_thread.join()  # Wait for disconnect
+                parser_thread.join()
                 logging.info(f"Primary IRC connection to {default_irc_server} lost, retrying...")
                 with connection_lock:
                     connection_status["primary"][default_irc_server] = False
@@ -144,7 +142,6 @@ def manage_secondary_network(network_name, net_info):
                     connection_status["secondary"][srv] = True
                 for ch in channels_list:
                     client.send(f"JOIN {ch}\r\n".encode("utf-8"))
-                    # Removed announcement message here as well.
                     composite = f"{srv}|{ch}"
                     irc_secondary[composite] = client
                     logging.info(f"[{network_name}] Registered {composite} in irc_secondary")
@@ -155,7 +152,7 @@ def manage_secondary_network(network_name, net_info):
                     if target.startswith("#"):
                         send_multiline_message(client, target, msg)
                     message_queue.task_done()
-                parser_thread.join()  # Wait for disconnect
+                parser_thread.join()
                 logging.info(f"[{network_name}] Connection to {srv}:{prt} lost, retrying...")
                 with connection_lock:
                     connection_status["secondary"][srv] = False
@@ -198,24 +195,33 @@ def start_discord():
 
 def irc_send_callback(channel, message):
     logging.info(f"IRC send callback for {channel}: {message}")
+    global irc_secondary
+
     if "|" in channel:
+        # Already a composite key
         composite = channel
-        actual_channel = composite.split("|", 1)[1]
-        conn = irc_secondary.get(composite)
-        if conn:
-            for line in message.split('\n'):
-                send_message(conn, actual_channel, line)
-        else:
-            logging.error(f"No IRC connection for composite key: {composite}, queuing message")
-            message_queue.put((actual_channel, message))
+        actual_channel = channel.split("|", 1)[1]
     else:
-        global irc_client
-        if irc_client:
-            for line in message.split('\n'):
-                send_message(irc_client, channel, line)
+        # Find the correct composite key by searching irc_secondary keys ending with |channel
+        found_key = None
+        for key in irc_secondary.keys():
+            if key.endswith(f"|{channel}"):
+                found_key = key
+                break
+        if found_key:
+            composite = found_key
+            actual_channel = channel
         else:
-            logging.error("Primary IRC client not connected, queuing message")
-            message_queue.put((channel, message))
+            composite = f"{default_irc_server}|{channel}"
+            actual_channel = channel
+
+    conn = irc_secondary.get(composite)
+    if conn:
+        for line in message.split('\n'):
+            send_message(conn, actual_channel, line)
+    else:
+        logging.error(f"No IRC connection for composite key: {composite}, queuing message")
+        message_queue.put((actual_channel, message))
 
 if __name__ == "__main__":
     logging.info("Main script starting")
