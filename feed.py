@@ -1,4 +1,7 @@
 import feedparser
+# --- Added line: set a custom user agent so Reddit RSS won't get blocked ---
+feedparser.USER_AGENT = "FuzzyFeedsBot/1.0 (+https://github.com/YourUser/YourRepo)"
+
 import time
 import logging
 import json
@@ -149,5 +152,6 @@ def check_feeds(send_message_func, channels_to_check=None):
     except Exception as e:
         logging.error(f"Error in check_feeds: {e}")
 
+# Automatically load feeds & subscriptions on import
 load_feeds()
 load_subscriptions()
