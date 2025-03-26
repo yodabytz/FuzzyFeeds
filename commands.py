@@ -151,13 +151,29 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
     is_admin_flag = (user.lower() == admin.lower())
     effective_op = is_op_flag or (user.lower() in [op.lower() for op in ops]) or is_admin_flag
 
+    # -----------------------------------------------------------------
+    # NEW BLOCK: read admin.json & check if user is channel admin for 'target'
+    # -----------------------------------------------------------------
+    try:
+        with open(admin_file, "r") as f:
+            admin_mapping = json.load(f)
+    except Exception as e:
+        admin_mapping = {}
+        logging.error(f"Error reading admin_file {admin_file}: {e}")
+
+    channel_admin = admin_mapping.get(target)
+    if channel_admin and user.lower() == channel_admin.lower():
+        logging.info(f"User {user} recognized as channel admin for {target}; granting effective_op.")
+        effective_op = True
+    # -----------------------------------------------------------------
+
+    lower_message = message.lower()
     if integration == "irc":
         key = migrate_plain_key_if_needed(target, integration)
     else:
         key = target
 
     actual_channel = get_actual_channel(target, integration)
-    lower_message = message.lower()
 
     # !addfeed
     if lower_message.startswith("!addfeed"):
@@ -341,7 +357,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), "Error: Channel must start with '#'")
             return
         try:
-            # Added local import to ensure os is correctly bound in this scope.
             import os
             channels_data = channels.load_channels()
             if join_channel not in channels_data["irc_channels"]:
@@ -532,10 +547,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # !addsub
     elif lower_message.startswith("!addsub"):
-        if integration != "irc":
-            send_private_message_fn(user, "This command is only available on IRC.")
-            return
-
         parts = message.split(" ", 2)
         if len(parts) < 3:
             send_private_message_fn(user, "Usage: !addsub <feed_name> <URL>")
@@ -551,10 +562,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # !unsub
     elif lower_message.startswith("!unsub"):
-        if integration != "irc":
-            send_private_message_fn(user, "This command is only available on IRC.")
-            return
-
         parts = message.split(" ", 1)
         if len(parts) < 2:
             send_private_message_fn(user, "Usage: !unsub <feed_name>")
@@ -570,10 +577,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # !mysubs
     elif lower_message.startswith("!mysubs"):
-        if integration != "irc":
-            send_private_message_fn(user, "This command is only available on IRC.")
-            return
-
         uname = user
         if uname in feed.subscriptions and feed.subscriptions[uname]:
             lines = [f"{name}: {url}" for name, url in feed.subscriptions[uname].items()]
@@ -583,10 +586,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # !latestsub
     elif lower_message.startswith("!latestsub"):
-        if integration != "irc":
-            send_private_message_fn(user, "This command is only available on IRC.")
-            return
-
         parts = message.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
             send_private_message_fn(user, "Usage: !latestsub <feed_name>")
@@ -620,7 +619,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         user_data["settings"][key_setting] = value
         users.save_users()
         send_private_message_fn(user, f"Setting '{key_setting}' set to '{value}'.")
-        
+
     # !getsetting
     elif lower_message.startswith("!getsetting"):
         parts = message.split(" ", 1)
@@ -635,7 +634,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_private_message_fn(user, f"{key_setting}: {user_data['settings'][key_setting]}")
         else:
             send_private_message_fn(user, f"No setting found for '{key_setting}'.")
-            
+
     # !settings
     elif lower_message.startswith("!settings"):
         import users
@@ -702,7 +701,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             return
         send_message_fn(response_target(actual_channel, integration), "Shutting down...")
         os._exit(0)
-    
+
     # !reload
     elif lower_message.startswith("!reload"):
         if user.lower() != admin.lower():
@@ -713,7 +712,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), "Configuration reloaded.")
         except Exception as e:
             send_message_fn(response_target(actual_channel, integration), f"Error reloading config: {e}")
-    
+
     # !restart
     elif lower_message.startswith("!restart"):
         if user.lower() != admin.lower():
@@ -721,7 +720,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             return
         send_message_fn(response_target(actual_channel, integration), "Restarting bot...")
         os.execv(sys.executable, [sys.executable] + sys.argv)
-    
+
     # !help
     elif lower_message.startswith("!help"):
         parts = message.split(" ", 1)
@@ -730,6 +729,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             help_text = get_help()
         multiline_send(send_multiline_message_fn, user, help_text)
-    
+
     else:
         send_message_fn(response_target(actual_channel, integration), "Unknown command. Use !help for a list.")
