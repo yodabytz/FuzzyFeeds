@@ -1,11 +1,13 @@
 import feedparser
-# --- Added line: set a custom user agent so Reddit RSS won't get blocked ---
-feedparser.USER_AGENT = "FuzzyFeedsBot/1.0 (+https://github.com/YourUser/YourRepo)"
-
+import requests
 import time
 import logging
 import json
 from persistence import load_json, save_json
+
+# Optional: keep this line. It won't hurt, although the main fix
+# is using requests before parsing the raw text.
+feedparser.USER_AGENT = "FuzzyFeedsBot/1.0 (+https://github.com/YourUser/YourRepo)"
 
 FEEDS_FILE = "feeds.json"
 SUBSCRIPTIONS_FILE = "subscriptions.json"
@@ -20,6 +22,28 @@ last_check_times = {}
 subscriptions = {}
 posted_links = {}
 default_interval = 300
+
+def parse_with_custom_user_agent(url):
+    """
+    Fetch the feed manually with requests, using a custom User-Agent.
+    Then parse the returned text with feedparser.
+    This helps with Reddit feeds which may block feedparser's built-in request logic.
+    """
+    headers = {
+        "User-Agent": "FuzzyFeedsBot/1.0 (+https://github.com/YourUser/YourRepo)"
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+    except Exception as e:
+        logging.error(f"[feed.py] Error making HTTP request to {url}: {e}")
+        return feedparser.FeedParserDict()
+
+    if resp.status_code != 200:
+        logging.error(f"[feed.py] Reddit feed returned {resp.status_code}: {resp.text[:200]}")
+        return feedparser.FeedParserDict()
+
+    # Now feedparser parses the raw text we fetched
+    return feedparser.parse(resp.text)
 
 def load_feeds():
     global channels, channel_feeds, channel_intervals, last_check_times
@@ -113,8 +137,12 @@ def mark_link_posted(channel, link):
     save_posted_links()
 
 def fetch_latest_article(url):
+    """
+    Replaces the direct feedparser.parse(url) with parse_with_custom_user_agent(url).
+    This ensures we do requests with a custom user agent so Reddit doesn't return an empty feed.
+    """
     try:
-        d = feedparser.parse(url)
+        d = parse_with_custom_user_agent(url)
         if d.entries:
             entry = d.entries[0]
             title = entry.title.strip() if entry.title else "No Title"
@@ -134,12 +162,15 @@ def check_feeds(send_message_func, channels_to_check=None):
             interval = channel_intervals.get(chan, default_interval)
             if current_time - last_check_times.get(chan, 0) >= interval:
                 for feed_name, feed_url in feeds_to_check.items():
-                    d = feedparser.parse(feed_url)
+                    d = parse_with_custom_user_agent(feed_url)  # use the new function
                     if d.entries:
                         entry = d.entries[0]
                         published_time = None
                         if hasattr(entry, 'published_parsed') and entry.published_parsed:
                             published_time = time.mktime(entry.published_parsed)
+                        elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+                            published_time = time.mktime(entry.updated_parsed)
+
                         if published_time is not None and published_time <= last_check_times.get(chan, 0):
                             continue
                         title = entry.title.strip() if entry.title else "No Title"
