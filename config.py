@@ -29,8 +29,8 @@ nickserv_password = ""
 # ------------------------------
 admin = "locoghost"              # Global bot owner
 admin_hostmask = "example.com"   # Placeholder for any hostmask checks
-admins = ["locoghost", "Yodabytz", "evul"]  # Additional global admins
-ops = ["fizzgig"]                # IRC "ops" authorized for certain commands
+admins = ["admin_name", "otheradmin", "otheradmin"]  # Additional global admins
+ops = ["other_op"]                # IRC "ops" authorized for certain commands
 
 # ------------------------------
 # General Configuration
