@@ -5,10 +5,16 @@ import time
 import logging
 import ssl
 import queue
-from config import ops, server, port, botnick, use_ssl, use_sasl, sasl_username, sasl_password, nickserv_password
-import base64  # needed for SASL
-from config import channels_file  # or wherever you have config.channels_file
+import base64
+
+from config import (
+    ops, server, port, botnick, use_ssl,
+    use_sasl, sasl_username, sasl_password, nickserv_password,
+    channels_file
+)
+
 import channels as chan_module
+import os
 
 logging.basicConfig(level=logging.INFO)
 
@@ -50,12 +56,48 @@ def process_message_queue(irc):
         except Exception as e:
             logging.error(f"Error processing message queue: {e}")
 
+def do_sasl_auth(irc, username, password):
+    """
+    Perform SASL PLAIN auth. 
+    Called before finishing registration (NICK/USER).
+    """
+    logging.info("Requesting SASL authentication...")
+    # Advertise interest in CAP LS + SASL
+    irc.send(b"CAP LS\r\n")
+    time.sleep(1)
+    irc.send(b"CAP REQ :sasl\r\n")
+    time.sleep(1)
+
+    # Indicate PLAIN auth
+    irc.send(b"AUTHENTICATE PLAIN\r\n")
+    time.sleep(1)
+
+    # Base64-encode: user\0user\0pass
+    sasl_data = f"{username}\0{username}\0{password}"
+    sasl_b64 = base64.b64encode(sasl_data.encode("utf-8")).decode("utf-8")
+    irc.send(f"AUTHENTICATE {sasl_b64}\r\n".encode("utf-8"))
+    time.sleep(1)
+
+    # End CAP negotiation
+    irc.send(b"CAP END\r\n")
+    time.sleep(1)
+
+def do_nickserv_auth(irc, nickname, password):
+    """
+    Identify with NickServ once we have 001 (RPL_WELCOME).
+    """
+    logging.info("Identifying via NickServ...")
+    irc.send(f"PRIVMSG NickServ :IDENTIFY {nickname} {password}\r\n".encode("utf-8"))
+    time.sleep(1)
+
 def connect_and_register():
     """
-    Connects to the primary IRC server (server, port) from config.py, optionally with SSL.
-    Tries up to 3 times. Joins channels from channels.json. 
-    Supports NickServ or SASL authentication if configured.
+    Primary IRC connection using config.py global settings:
+      - server, port, botnick, use_ssl
+      - use_sasl, sasl_username, sasl_password, nickserv_password
     """
+    global irc_client
+
     # Load IRC channels from channels.json
     channels_data = chan_module.load_channels()
     irc_channels = channels_data.get("irc_channels", [])
@@ -75,35 +117,12 @@ def connect_and_register():
             else:
                 irc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-            # Connect
             irc.connect((server, port))
             logging.info(f"Connected socket to {server}:{port}, now registering...")
 
-            # If SASL is enabled, do the SASL handshake before USER/NICK finishes
-            # Usually you must send CAP LS, CAP REQ :sasl, AUTHENTICATE, etc.
+            # If SASL is enabled in config, do the handshake
             if use_sasl and sasl_username and sasl_password:
-                logging.info("Requesting SASL authentication...")
-                irc.send(b"CAP LS\r\n")
-                time.sleep(1)
-                # We read to see if server supports SASL, but for brevity we skip parsing
-                irc.send(b"CAP REQ :sasl\r\n")
-                time.sleep(1)
-                
-                # We'll do a simplified approach for PLAIN SASL:
-                irc.send(b"AUTHENTICATE PLAIN\r\n")
-                time.sleep(1)
-                # Base64-encode: user\0user\0pass
-                sasl_data = f"{sasl_username}\0{sasl_username}\0{sasl_password}"
-                sasl_b64 = base64.b64encode(sasl_data.encode("utf-8")).decode("utf-8")
-                irc.send(f"AUTHENTICATE {sasl_b64}\r\n".encode("utf-8"))
-                time.sleep(1)
-                
-                # Wait briefly for server to confirm (904=fail, 900=success, etc.)
-                # For production, parse responses in a loop. For simplicity, just sleep:
-                time.sleep(1)
-
-                # End capability negotiation
-                irc.send(b"CAP END\r\n")
+                do_sasl_auth(irc, sasl_username, sasl_password)
 
             # Now send NICK & USER
             irc.send(f"NICK {botnick}\r\n".encode("utf-8"))
@@ -123,20 +142,18 @@ def connect_and_register():
                 logging.debug(f"[connect_and_register] Received: {response}")
                 buffer += response
                 lines = buffer.split("\r\n")
-                buffer = lines[-1]  # leftover partial line
+                buffer = lines[-1]
 
                 for line in lines[:-1]:
                     if line.startswith("PING"):
-                        # Reply to PING
                         parts = line.split()
                         if len(parts) > 1:
                             irc.send(f"PONG {parts[1]}\r\n".encode("utf-8"))
                             logging.debug("Sent PONG response")
-                    # 001 = RPL_WELCOME means we've successfully registered
                     if " 001 " in line or "Welcome" in line:
                         connected = True
                         logging.info(f"Successfully connected to {server}:{port}")
-            
+
             if not connected:
                 logging.error(f"Failed to register on {server}:{port} after attempt {attempt+1}")
                 irc.close()
@@ -145,18 +162,19 @@ def connect_and_register():
 
             irc.settimeout(None)
 
-            # NickServ identification (if not using SASL or if the network requires NickServ too)
-            if nickserv_password and not use_sasl:
-                logging.info("Identifying via NickServ (non-SASL) ...")
-                irc.send(f"PRIVMSG NickServ :IDENTIFY {botnick} {nickserv_password}\r\n".encode("utf-8"))
+            # If we are not using SASL, or we still want NickServ:
+            # Do NickServ if we have a password
+            if nickserv_password and not (use_sasl and sasl_username and sasl_password):
+                do_nickserv_auth(irc, botnick, nickserv_password)
 
             # Start the message queue thread
             threading.Thread(target=process_message_queue, args=(irc,), daemon=True).start()
 
-            # Join all channels
-            for channel in irc_channels:
-                irc.send(f"JOIN {channel}\r\n".encode("utf-8"))
+            # Join all channels from channels.json
+            for ch in irc_channels:
+                irc.send(f"JOIN {ch}\r\n".encode("utf-8"))
 
+            irc_client = irc
             return irc
 
         except Exception as e:
@@ -167,15 +185,32 @@ def connect_and_register():
     logging.error(f"All connection attempts to {server}:{port} failed")
     return None
 
-def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel):
+def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel, net_auth=None):
     """
-    Similar function for secondary networks. 
-    Add the same SASL/NickServ logic here if needed.
+    Secondary IRC networks. This code merges the same SASL/NickServ approach
+    used in connect_and_register, but allows custom fields from net_auth.
+
+    net_auth can include:
+      - "use_sasl": bool
+      - "sasl_user": str
+      - "sasl_pass": str
+      - "nickserv": str
+    If net_auth is missing these, we fall back to the config globals.
     """
+    global irc_client
+
+    # Fall back to global config if not specified in net_auth
+    use_sasl_flag = net_auth.get("use_sasl", use_sasl) if net_auth else use_sasl
+    sasl_user = net_auth.get("sasl_user", sasl_username) if net_auth else sasl_username
+    sasl_pass = net_auth.get("sasl_pass", sasl_password) if net_auth else sasl_password
+    nickserv_pass = net_auth.get("nickserv", nickserv_password) if net_auth else nickserv_password
+
     attempt = 0
     while attempt < 3:
         try:
             logging.info(f"Attempt {attempt+1} to connect to {server_name}:{port_number} (SSL: {use_ssl_flag})")
+
+            # Create the socket
             if use_ssl_flag:
                 context = ssl.create_default_context()
                 context.check_hostname = False
@@ -188,11 +223,11 @@ def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel):
             irc.connect((server_name, port_number))
             logging.debug(f"Connected socket to {server_name}:{port_number}")
 
-            # If you want SASL on secondary too, do something similar:
-            # if use_sasl and sasl_username and sasl_password:
-            #    ...
+            # If using SASL
+            if use_sasl_flag and sasl_user and sasl_pass:
+                do_sasl_auth(irc, sasl_user, sasl_pass)
 
-            # Then register
+            # Then normal registration
             irc.send(f"NICK {botnick}\r\n".encode("utf-8"))
             irc.send(f"USER {botnick} 0 * :Python IRC Bot\r\n".encode("utf-8"))
 
@@ -201,6 +236,7 @@ def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel):
             TIMEOUT_SECONDS = 30
             irc.settimeout(15)
             buffer = ""
+
             while not connected and (time.time() - start_time_timeout) < TIMEOUT_SECONDS:
                 response = irc.recv(2048).decode("utf-8", errors="ignore")
                 if not response:
@@ -218,25 +254,30 @@ def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel):
                     if " 001 " in line or "Welcome" in line:
                         connected = True
                         logging.info(f"Successfully connected to {server_name}:{port_number}")
-            
+
             if not connected:
                 logging.error(f"Failed to register on {server_name}:{port_number} after attempt {attempt+1}")
                 irc.close()
                 attempt += 1
+                time.sleep(5)
                 continue
 
             irc.settimeout(None)
 
-            # If you want NickServ here, do it:
-            # if nickserv_password and not use_sasl:
-            #    irc.send(f"PRIVMSG NickServ :IDENTIFY {botnick} {nickserv_password}\r\n".encode("utf-8"))
+            # If we have a NickServ password but not doing SASL (or if the network requires NickServ after SASL)
+            # Typically, if you're using SASL, you wouldn't also do NickServ, but some networks want both.
+            if nickserv_pass and not (use_sasl_flag and sasl_user and sasl_pass):
+                do_nickserv_auth(irc, botnick, nickserv_pass)
 
             # Start message queue thread
             threading.Thread(target=process_message_queue, args=(irc,), daemon=True).start()
 
-            # Join initial channel (the rest might happen elsewhere)
+            # Join initial channel (the rest can be done in main.py if you like)
             irc.send(f"JOIN {initial_channel}\r\n".encode("utf-8"))
+
+            # Return the IRC socket
             return irc
+
         except ssl.SSLError as ssl_err:
             logging.error(f"SSL error connecting to {server_name}:{port_number}: {ssl_err}")
             break
@@ -249,7 +290,12 @@ def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel):
     return None
 
 def irc_command_parser(irc_conn):
+    """
+    Parser loop: Reads lines from the IRC socket, identifies commands (!...),
+    then delegates to handle_centralized_command in commands.py.
+    """
     from commands import handle_centralized_command
+
     buffer = ""
     while True:
         try:
@@ -293,3 +339,4 @@ def irc_command_parser(irc_conn):
         except Exception as e:
             logging.error(f"Error in irc_command_parser: {e}")
             break
+
