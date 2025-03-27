@@ -18,10 +18,14 @@ from config import default_interval
 
 logging.basicConfig(level=logging.INFO)
 
-# Global variable for initial setup.
+# Global variable for initial setup time.
 script_start_time = time.time()
 
 def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
+    """
+    This function runs an infinite loop, checking all feeds every `poll_interval` seconds.
+    For each new link in a feed, it posts Title first, Link second.
+    """
     logging.info("Centralized polling started.")
     while True:
         feed.load_feeds()
@@ -29,10 +33,11 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
         channels_to_check = list(feed.channel_feeds.keys())
         logging.info(f"Checking {len(channels_to_check)} channels for new feeds: {channels_to_check}")
         
-        # Ensure we track last check times
+        # Make sure we have a last_check_times dictionary
         if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
             feed.last_check_times = {}
         for chan in channels_to_check:
+            # Default the last check time if not set
             feed.last_check_times.setdefault(chan, script_start_time)
             
             feeds_to_check = feed.channel_feeds.get(chan)
@@ -84,17 +89,21 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                         
                         title = entry.title.strip() if entry.get("title") else "No Title"
                         link = entry.link.strip() if entry.get("link") else ""
-                        
-                        # Check if we've already posted this link
+
+                        # If there's a link, check if we already posted it
                         if link and feed.is_link_posted(chan, link):
                             logging.info(f"Channel {chan} already has link: {link}")
                             continue
 
                         if link:
+                            # Title always posted first, Link second
                             title_msg = f"{feed_name}: {title}"
                             link_msg  = f"Link: {link}"
 
-                            # Title always sent first, link second
+                            # Send to correct integration
+                            # If Matrix room: chan.startswith("!")
+                            # If Discord channel: chan.isdigit()
+                            # Else treat as IRC (including secondary networks)
                             if chan.startswith("!"):
                                 matrix_send(chan, title_msg)
                                 matrix_send(chan, link_msg)
@@ -102,9 +111,11 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                                 discord_send(chan, title_msg)
                                 discord_send(chan, link_msg)
                             else:
+                                # covers both primary & secondary IRC
                                 irc_send(chan, title_msg)
                                 irc_send(chan, link_msg)
 
+                            # Mark link as posted so we don't repost next time
                             feed.mark_link_posted(chan, link)
                             new_feed_count += 1
                     except Exception as e:
@@ -118,15 +129,14 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
         time.sleep(poll_interval)
 
 if __name__ == "__main__":
+    # Simple test functions for local debugging
     def test_irc_send(channel, message):
-        # Simple test function
-        print(f"[Primary IRC] {channel}: {message}")
+        print(f"[IRC] {channel}: {message}")
 
     def test_matrix_send(room, message):
-        print(f"[Matrix] {room}: {message}")
+        print(f"[MATRIX] {room}: {message}")
 
     def test_discord_send(channel, message):
-        print(f"[Discord] {channel}: {message}")
+        print(f"[DISCORD] {channel}: {message}")
         
     start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=300)
-
