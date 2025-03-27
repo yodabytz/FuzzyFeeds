@@ -58,23 +58,79 @@ def get_actual_channel(key, integration):
         return key.split("|", 1)[1]
     return key
 
+# ---------------------------------------------------------------------
+# NEW ROLE-BASED HELP SYSTEM
+# ---------------------------------------------------------------------
 def load_help_data():
+    """
+    Now we load help.json expecting something like:
+    {
+      "USER": {
+        "listfeeds": "...",
+        "latest": "...",
+        ...
+      },
+      "OP": {
+        "addfeed": "...",
+        "delfeed": "...",
+        ...
+      },
+      "OWNER": {
+        "network": "...",
+        "quit": "...",
+        ...
+      }
+    }
+    """
     try:
         with open("help.json", "r") as f:
-            data = json.load(f)
-        return data
+            return json.load(f)
     except Exception as e:
         logging.error("Error loading help.json: %s", e)
-        return {}
+        return {
+            "USER": {},
+            "OP": {},
+            "OWNER": {}
+        }
 
 help_data = load_help_data()
 
-def get_help(command=None):
-    if command:
-        return help_data.get(command.lower(), f"No detailed help available for '{command}'.")
-    else:
-        lines = [f"{cmd}: {desc}" for cmd, desc in help_data.items()]
+def get_help(topic=None):
+    """
+    If no topic => show top-level categories (USER, OP, OWNER)
+    If topic is "USER", "OP", or "OWNER" => show commands in that category
+    Otherwise => try to match topic as a command name in any category
+    """
+    if not topic:
+        return (
+            "Available Help Categories:\n"
+            "  USER  - Basic usage commands any user can run\n"
+            "  OP    - Channel OP/Admin commands\n"
+            "  OWNER - Bot owner commands\n"
+            "Type: !help USER  or  !help OP  or  !help <command>"
+        )
+
+    topic_upper = topic.strip().upper()
+
+    # If user typed "USER", "OP", or "OWNER"
+    if topic_upper in help_data:
+        role_dict = help_data[topic_upper]
+        if not role_dict:
+            return f"No commands found for {topic_upper}."
+        lines = [f"Commands for {topic_upper}:\n"]
+        for cmd_name, desc in role_dict.items():
+            lines.append(f"  {cmd_name} => {desc}")
         return "\n".join(lines)
+
+    # Otherwise, assume it's a command name
+    topic_lower = topic.strip().lower()
+    for role, commands_dict in help_data.items():
+        if topic_lower in commands_dict:
+            return commands_dict[topic_lower]
+
+    # No match
+    return f"No help info found for '{topic}'."
+# ---------------------------------------------------------------------
 
 def search_feeds(query):
     url = "https://cloud.feedly.com/v3/search/feeds?query=" + query
@@ -152,7 +208,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
     effective_op = is_op_flag or (user.lower() in [op.lower() for op in ops]) or is_admin_flag
 
     # -----------------------------------------------------------------
-    # NEW BLOCK: read admin.json & check if user is channel admin for 'target'
+    # Check if user is channel admin for this channel
     # -----------------------------------------------------------------
     try:
         with open(admin_file, "r") as f:
@@ -177,6 +233,9 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # !addfeed
     if lower_message.startswith("!addfeed"):
+        if not effective_op:
+            send_private_message_fn(user, "Not authorized to use !addfeed.")
+            return
         parts = message.split(" ", 2)
         if len(parts) < 3:
             send_message_fn(response_target(actual_channel, integration), "Usage: !addfeed <feed_name> <URL>")
@@ -267,6 +326,9 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # !getadd
     elif lower_message.startswith("!getadd"):
+        if not effective_op:
+            send_private_message_fn(user, "Not authorized to use !getadd.")
+            return
         parts = message.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
             send_message_fn(response_target(actual_channel, integration), "Usage: !getadd <title_or_domain>")
@@ -277,9 +339,9 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), "No matching feed found.")
             return
         selected = None
-        for title, url in results:
-            if query.lower() in title.lower():
-                selected = (title, url)
+        for t, url in results:
+            if query.lower() in t.lower():
+                selected = (t, url)
                 break
         if not selected:
             selected = results[0]
@@ -315,6 +377,9 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # !setinterval
     elif lower_message.startswith("!setinterval"):
+        if not effective_op:
+            send_private_message_fn(user, "Not authorized to use !setinterval.")
+            return
         parts = message.split(" ", 1)
         if len(parts) < 2:
             send_message_fn(response_target(actual_channel, integration), "Usage: !setinterval <minutes>")
@@ -357,7 +422,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), "Error: Channel must start with '#'")
             return
         try:
-            import os
             channels_data = channels.load_channels()
             if join_channel not in channels_data["irc_channels"]:
                 channels_data["irc_channels"].append(join_channel)
@@ -419,7 +483,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         except Exception as e:
             send_message_fn(response_target(actual_channel, integration), f"Error parting channel: {e}")
 
-    # !addnetwork
+    # !addnetwork (legacy)
     elif lower_message.startswith("!addnetwork"):
         if integration != "irc":
             send_message_fn(response_target(actual_channel, integration), "This command is for IRC only.")
@@ -463,7 +527,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             f"Connecting to network {network_name} ({server_name}:{port_number}, SSL: {use_ssl_flag}) on channels {channels_list} with admin {network_admin}...")
         
         import threading
-        import os
         from irc_client import connect_to_network, irc_command_parser, send_message
         global irc_secondary
         def connect_new():
@@ -493,16 +556,14 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                     f"Error connecting to {server_name}:{port_number}: {e}")
                 return False
         
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-        networks_file = os.path.join(BASE_DIR, "networks.json")
+        networks_file = os.path.join(os.path.dirname(__file__), "networks.json")
         
         connection_thread = threading.Thread(target=connect_new, daemon=True)
         connection_thread.start()
         logging.info(f"[!addnetwork] Connection thread launched for {network_name}")
         connection_thread.join()
         
-        from persistence import load_json, save_json
-        networks = load_json(networks_file, default={})
+        networks = persistence.load_json(networks_file, default={})
         if connection_thread.is_alive() or not hasattr(connection_thread, 'result') or connection_thread.result:
             logging.info(f"[!addnetwork] Preparing to save {network_name} to {networks_file}")
             networks[network_name] = {
@@ -513,7 +574,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                 "admin": network_admin
             }
             try:
-                save_json(networks_file, networks)
+                persistence.save_json(networks_file, networks)
                 logging.info(f"[!addnetwork] Successfully saved {network_name} to {networks_file}")
                 send_message_fn(response_target(actual_channel, integration),
                     f"Network {network_name} saved to configuration.")
@@ -535,12 +596,11 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), "Usage: !delnetwork <networkname>")
             return
         network_name = parts[1].strip()
-        from persistence import load_json, save_json
         networks_file = "networks.json"
-        networks = load_json(networks_file, default={})
+        networks = persistence.load_json(networks_file, default={})
         if network_name in networks:
             del networks[network_name]
-            save_json(networks_file, networks)
+            persistence.save_json(networks_file, networks)
             send_message_fn(response_target(actual_channel, integration), f"Network '{network_name}' has been deleted.")
         else:
             send_message_fn(response_target(actual_channel, integration), f"Network '{network_name}' not found.")
@@ -611,7 +671,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             return
         key_setting = parts[1].strip()
         value = parts[2].strip()
-        import users
         users.add_user(user)
         user_data = users.get_user(user)
         if "settings" not in user_data:
@@ -627,7 +686,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_private_message_fn(user, "Usage: !getsetting <key>")
             return
         key_setting = parts[1].strip()
-        import users
         users.add_user(user)
         user_data = users.get_user(user)
         if "settings" in user_data and key_setting in user_data["settings"]:
@@ -637,7 +695,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # !settings
     elif lower_message.startswith("!settings"):
-        import users
         users.add_user(user)
         user_data = users.get_user(user)
         if "settings" in user_data and user_data["settings"]:
@@ -696,6 +753,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # !quit
     elif lower_message.startswith("!quit"):
+        # Only the bot owner can do this
         if user.lower() != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !quit.")
             return
@@ -727,8 +785,164 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         if len(parts) == 2:
             help_text = get_help(parts[1].strip())
         else:
-            help_text = get_help()
+            help_text = get_help()  # No argument => top-level
         multiline_send(send_multiline_message_fn, user, help_text)
 
+    # !network add, !set, !connect
+    elif lower_message.startswith("!network"):
+        # This is the new approach for adding networks
+        if user.lower() != admin.lower():
+            send_private_message_fn(user, "Only the bot owner can use !network.")
+            return
+
+        parts = message.split()
+        if len(parts) < 3:
+            send_message_fn(response_target(actual_channel, integration),
+                            "Usage: !network add <networkName> <server/port> [-ssl] <#channel> <opName>")
+            return
+
+        subcmd = parts[1].lower()
+        if subcmd == "add":
+            net_name = parts[2].strip()
+            networks_file = os.path.join(os.path.dirname(__file__), "networks.json")
+            networks_data = persistence.load_json(networks_file, default={})
+
+            if len(parts) < 6:
+                send_message_fn(response_target(actual_channel, integration),
+                                "Usage: !network add <name> <server/port> [-ssl] <#channel> <opName>")
+                return
+
+            server_port_part = parts[3]
+            ssl_flag = False
+            idx = 4
+            if "/" not in server_port_part:
+                send_message_fn(response_target(actual_channel, integration),
+                                "Invalid server/port format. Example: irc.network.com/6697")
+                return
+            sname, sport = server_port_part.split("/", 1)
+            try:
+                prt = int(sport)
+            except ValueError:
+                send_message_fn(response_target(actual_channel, integration),
+                                "Invalid port number.")
+                return
+
+            maybe_ssl = parts[idx]
+            if maybe_ssl.lower() == "-ssl":
+                ssl_flag = True
+                idx += 1
+
+            if idx >= len(parts):
+                send_message_fn(response_target(actual_channel, integration),
+                                "Missing channel argument.")
+                return
+            chan_value = parts[idx]
+            idx += 1
+            if not chan_value.startswith("#"):
+                chan_value = "#" + chan_value
+
+            if idx >= len(parts):
+                send_message_fn(response_target(actual_channel, integration),
+                                "Missing admin/opName argument.")
+                return
+            op_name_value = parts[idx]
+
+            networks_data[net_name] = {
+                "server": sname,
+                "port": prt,
+                "Channels": [chan_value],
+                "ssl": ssl_flag,
+                "admin": op_name_value
+            }
+            try:
+                persistence.save_json(networks_file, networks_data)
+                send_message_fn(response_target(actual_channel, integration),
+                                f"Network '{net_name}' added to networks.json.")
+            except Exception as e:
+                send_message_fn(response_target(actual_channel, integration),
+                                f"Error saving to networks.json: {e}")
+        else:
+            send_message_fn(response_target(actual_channel, integration),
+                            f"Unknown subcommand for !network: {subcmd}")
+
+    elif lower_message.startswith("!set irc."):
+        if user.lower() != admin.lower():
+            send_private_message_fn(user, "Only the bot owner can use !set irc.<network>.<field> <value>.")
+            return
+        parts = message.split(" ", 2)
+        if len(parts) < 3:
+            send_message_fn(response_target(actual_channel, integration),
+                            "Usage: !set irc.<network>.<field> <value>")
+            return
+        keypath = parts[1].strip()
+        value = parts[2].strip().strip('"')
+        if not keypath.startswith("irc."):
+            send_message_fn(response_target(actual_channel, integration),
+                            "Invalid format. Must be !set irc.<network>.<field> <value>")
+            return
+        try:
+            _, netplusfield = keypath.split("irc.", 1)
+        except:
+            send_message_fn(response_target(actual_channel, integration),
+                            "Invalid format for !set irc.")
+            return
+
+        if "." not in netplusfield:
+            send_message_fn(response_target(actual_channel, integration),
+                            "Invalid key format. Example: irc.mynetwork.sasl_user")
+            return
+        net_name, field_name = netplusfield.split(".", 1)
+
+        networks_file = os.path.join(os.path.dirname(__file__), "networks.json")
+        networks_data = persistence.load_json(networks_file, default={})
+        if net_name not in networks_data:
+            send_message_fn(response_target(actual_channel, integration),
+                            f"Network '{net_name}' not found in networks.json.")
+            return
+
+        networks_data[net_name][field_name] = value
+        try:
+            persistence.save_json(networks_file, networks_data)
+            send_message_fn(response_target(actual_channel, integration),
+                            f"Set {field_name} for network '{net_name}' to '{value}'.")
+        except Exception as e:
+            send_message_fn(response_target(actual_channel, integration),
+                            f"Error saving to networks.json: {e}")
+
+    elif lower_message.startswith("!connect "):
+        if user.lower() != admin.lower():
+            send_private_message_fn(user, "Only the bot owner can use !connect.")
+            return
+        parts = message.split(" ", 1)
+        if len(parts) < 2:
+            send_message_fn(response_target(actual_channel, integration),
+                            "Usage: !connect <networkName>")
+            return
+        net_name = parts[1].strip()
+        networks_file = os.path.join(os.path.dirname(__file__), "networks.json")
+        networks_data = persistence.load_json(networks_file, default={})
+        if net_name not in networks_data:
+            send_message_fn(response_target(actual_channel, integration),
+                            f"Network '{net_name}' does not exist in networks.json.")
+            return
+        net_info = networks_data[net_name]
+        srv = net_info.get("server")
+        prt = net_info.get("port")
+        sslf = net_info.get("ssl", False)
+        chans = net_info.get("Channels", [])
+
+        send_message_fn(response_target(actual_channel, integration),
+                        f"Spawning connection thread for network '{net_name}' -> {srv}:{prt} (SSL={sslf}), channels={chans}...")
+
+        import main
+        def one_off_net():
+            main.manage_secondary_network(net_name, net_info)
+        t = threading.Thread(target=one_off_net, daemon=True)
+        t.start()
+        send_message_fn(response_target(actual_channel, integration),
+                        f"Connection attempt for '{net_name}' started in background.")
+
     else:
+        # Unknown command
         send_message_fn(response_target(actual_channel, integration), "Unknown command. Use !help for a list.")
+
