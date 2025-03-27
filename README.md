@@ -43,68 +43,92 @@ python main.py
 
 ## Commands
 ```
+## Commands
+
 - `!addfeed <feed_name> <URL>`  
-  *Admin only.* Add an RSS/Atom feed to the channel/room.
+  *Channel Admin only.* Add an RSS/Atom feed to the current channel/room.
 
 - `!delfeed <feed_name>`  
-  *Admin only.* Remove a feed from the channel/room.
+  *Channel Admin only.* Remove a feed from the current channel/room.
 
 - `!listfeeds`  
   List all feeds in the current channel/room.
 
 - `!latest <feed_name>`  
-  Show the latest entry (title and link) for the specified feed.
+  Show the latest entry (title and link) for the specified feed in this channel/room.
 
 - `!setinterval <minutes>`  
-  *Admin only.* Set the feed check interval for the channel/room.
+  *Channel Admin only.* Set the feed check interval for this channel/room.
 
 - `!addsub <feed_name> <URL>`  
-  Subscribe privately to a feed.
+  Privately subscribe yourself to a feed (visible only to you).
 
 - `!unsub <feed_name>`  
-  Unsubscribe from a feed.
+  Unsubscribe from one of your private feeds.
 
 - `!mysubs`  
-  List your private subscriptions.
+  List all of your private subscriptions.
 
 - `!getfeed <title_or_domain>`  
-  Search the internet for a feed matching the title or domain and show the latest entry.
+  Search for a feed (by title or domain) and show its latest entry.
 
 - `!getadd <title_or_domain>`  
-  Search for a feed and automatically add it to the channel/room.
+  *Channel Admin only.* Search for a feed and automatically add it to the current channel/room.
 
 - `!genfeed <website_url>`  
-  Generate an RSS feed for a given website.
+  Generate an RSS feed for a given website using an external API.
 
 - `!search <query>`  
-  Search for feeds matching a query.
+  Search the web for feeds matching a given query.
 
 - `!join <#channel or #room_alias>`  
-  *Admin only.* Join a new IRC channel or Matrix room.
+  *Bot Admin only.* Make the bot join a new IRC channel or Matrix room (and set an admin for it).
 
 - `!part <#channel or #room_alias>`  
-  Leave a channel/room and clear its configuration.
+  *Bot Admin only.* Make the bot leave the specified channel/room and clear its feed configuration.
 
 - `!stats`  
-  Show bot statistics, including uptime, feed counts, and user subscriptions.
+  Show bot statistics (e.g., uptime, feed counts, user subscriptions). Admins see more detailed info.
 
 - `!admin`  
-  Show all channel/room admin assignments.
+  Display the admin(s) assigned to each channel/room.
 
 - `!setsetting <key> <value>`  
-  Set a personal setting.
+  Set a personal user setting.
 
 - `!getsetting <key>`  
-  Get a personal setting.
+  Retrieve one of your personal user settings.
 
 - `!settings`  
-  List all your personal settings.
+  List all your personal user settings.
 
 - `!help [command]`  
-  Show help for a specific command.
+  Show help for a specific command. (Also supports `!help USER`, `!help OP`, `!help OWNER` if you want role-based summaries.)
 
 - `!restart` / `!quit`  
-  Restart or gracefully shut down the bot (*Admin only*).
+  *Owner only.* Restart or gracefully shut down the entire bot.
+
+---
+
+### Network Management (Owner Only)
+
+- `!network add <networkName> <server/port> [-ssl] <#channel> <opName>`  
+  Creates a new IRC network entry in `networks.json` (with optional SSL, default channel, and channel admin).
+       Other commands
+       !set irc.freenode.sasl_user "mySASLUser"
+       !set irc.freenode.sasl_pass "SuperSecret"
+       !set irc.freenode.nickserv "NickServPassword"
+
+
+- `!set irc.<networkName>.<field> <value>`  
+  Updates a single field in the specified network config (e.g. `sasl_user`, `sasl_pass`, `nickserv`).
+
+- `!connect <networkName>`  
+  Immediately connect to a previously defined IRC network from `networks.json`.
+
+- `!delnetwork <networkName>`  
+  Removes a configured IRC network from `networks.json`.
+
 ```
 
 ## GitHub Feed:
