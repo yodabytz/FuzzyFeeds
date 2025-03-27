@@ -29,6 +29,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
         channels_to_check = list(feed.channel_feeds.keys())
         logging.info(f"Checking {len(channels_to_check)} channels for new feeds: {channels_to_check}")
         
+        # Ensure we track last check times
         if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
             feed.last_check_times = {}
         for chan in channels_to_check:
@@ -83,27 +84,26 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                         
                         title = entry.title.strip() if entry.get("title") else "No Title"
                         link = entry.link.strip() if entry.get("link") else ""
+                        
+                        # Check if we've already posted this link
                         if link and feed.is_link_posted(chan, link):
                             logging.info(f"Channel {chan} already has link: {link}")
                             continue
 
                         if link:
-                            # Relevant lines below. Title gets sent first, link second:
                             title_msg = f"{feed_name}: {title}"
                             link_msg  = f"Link: {link}"
 
+                            # Title always sent first, link second
                             if chan.startswith("!"):
-                                # Matrix
                                 matrix_send(chan, title_msg)
                                 matrix_send(chan, link_msg)
                             elif str(chan).isdigit():
-                                # Discord
                                 discord_send(chan, title_msg)
                                 discord_send(chan, link_msg)
                             else:
-                                # IRC (composite key e.g. cloaknet.local|#main)
-                                irc_send(chan, title_msg)  # Title first
-                                irc_send(chan, link_msg)   # Then link
+                                irc_send(chan, title_msg)
+                                irc_send(chan, link_msg)
 
                             feed.mark_link_posted(chan, link)
                             new_feed_count += 1
@@ -119,19 +119,14 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
 
 if __name__ == "__main__":
     def test_irc_send(channel, message):
-        if "|" in channel:
-            parts = channel.split("|", 1)
-            actual_channel = parts[1]
-            print(f"[Secondary IRC] Channel {actual_channel}:")
-        else:
-            print(f"[Primary IRC] Channel {channel}:")
-        for line in message.split('\n'):
-            print(line)
+        # Simple test function
+        print(f"[Primary IRC] {channel}: {message}")
 
     def test_matrix_send(room, message):
-        print(f"[Matrix] Room {room}: {message}")
+        print(f"[Matrix] {room}: {message}")
 
     def test_discord_send(channel, message):
-        print(f"[Discord] Channel {channel}: {message}")
+        print(f"[Discord] {channel}: {message}")
         
     start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=300)
+
