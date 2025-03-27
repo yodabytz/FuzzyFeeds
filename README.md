@@ -16,6 +16,8 @@ FuzzyFeeds is an IRC bot that aggregates RSS and Atom feeds in real-time. It all
 - **Matrix Integration:** Automatically posts new feed updates to Matrix rooms and responds to commands.
 - **Discord Integration:** Posts new feeds to Discord channels and allows users to interact with feed commands.
 - **Web Dashboard:** Operates on port 1039 (or your chosen port) and showcases a sleek stats page.
+- **Add IRC Network Support** Use !network add <networkName> <server/port> [-ssl] <#channel> <adminName> to dynamically add new IRC networks on the fly.
+- **SASL Support** Log in via SASL or NickServ for more secure IRC authentication.
 
 <img src="https://raw.githubusercontent.com/yodabytz/FuzzyFeeds/refs/heads/main/dashboard-screenshot.jpg" alt="FuzzyFeeds" width="800">
 
