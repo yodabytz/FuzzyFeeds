@@ -132,7 +132,7 @@ def manage_secondary_network(network_name, net_info):
     while True:
         try:
             logging.info(f"[{network_name}] Attempting connection to {srv}:{prt}...")
-            client = connect_to_network(srv, prt, sslf, channels_list[0])
+            client = connect_to_network(srv, prt, sslf, channels_list[0], net_auth=net_info)
             if client:
                 logging.info(f"[{network_name}] Connection established, channels joined: {channels_list}")
                 with connection_lock:
@@ -195,7 +195,6 @@ def irc_send_callback(channel, message):
     if "|" in channel:
         composite = channel
     else:
-        # Look for the correct composite key in irc_secondary keys
         found = next((key for key in irc_secondary.keys() if key.endswith(f"|{channel}")), None)
         composite = found if found else f"{default_irc_server}|{channel}"
 
@@ -216,11 +215,16 @@ if __name__ == "__main__":
         disable_discord_feed_loop()
         logging.info("Disabled Discord feed loop")
 
+        # Start the primary IRC in a background thread
         threading.Thread(target=start_primary_irc, daemon=True).start()
+        # Start all secondary IRC networks in background threads
         threading.Thread(target=start_secondary_irc_networks, daemon=True).start()
-        time.sleep(5)
-        threading.Thread(target=start_dashboard, daemon=True).start()
 
+        # Give the IRC connections some time to establish before feed polling
+        time.sleep(5)
+        logging.info("Delaying feed polling for 5 seconds to ensure secondary networks connect.")
+
+        # Now start the feed polling
         matrix_callback = None
         if enable_matrix:
             from matrix_integration import send_message as matrix_send_message
@@ -235,10 +239,16 @@ if __name__ == "__main__":
             300
         ), daemon=True).start()
 
+        # Start Matrix if enabled
         if enable_matrix:
             threading.Thread(target=start_matrix, daemon=True).start()
+
+        # Start Discord if enabled
         if enable_discord:
             threading.Thread(target=start_discord, daemon=True).start()
+
+        # Finally, start the dashboard in the main thread or another daemon
+        threading.Thread(target=start_dashboard, daemon=True).start()
 
         logging.info("All threads launched, entering main loop")
         while True:
