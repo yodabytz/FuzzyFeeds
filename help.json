@@ -1,26 +1,39 @@
 {
-  "addfeed": "!addfeed <feed_name> <URL> - Add an RSS/Atom feed to this channel (Admin only).",
-  "delfeed": "!delfeed <feed_name> - Delete an RSS/Atom feed from this channel (Admin only).",
-  "listfeeds": "!listfeeds - List all feeds for this channel.",
-  "latest": "!latest <feed_name> - Show the latest entry from a feed.",
-  "getfeed": "!getfeed <title_or_domain> - Search for a feed matching the title or domain and display the latest entry.",
-  "getadd": "!getadd <title_or_domain> - Search for a feed and automatically add it to the channel's feed list.",
-  "genfeed": "!genfeed <website_url> - Generate an RSS feed for the given website using the rss.app API.",
-  "setinterval": "!setinterval <minutes> - Set the feed check interval for this channel (Admin only).",
-  "search": "!search <query> - Search for feeds matching a query.",
-  "join": "!join <#channel> <adminname> - Join a channel (Admin only).",
-  "part": "!part <#channel> - Make the bot leave a channel and remove its settings (Admin only).",
-  "addnetwork": "!addnetwork <networkname> <server_info> <channels> <admin> - Connect to another IRC network using a network name, server info (e.g., irc.server.com/6667), and a comma-separated list of channels.",
-  "delnetwork": "!delnetwork <networkname> - Remove the IRC network configuration identified by the network name.",
-  "addsub": "!addsub <feed_name> <URL> - Subscribe privately to a feed.",
-  "unsub": "!unsub <feed_name> - Unsubscribe from a feed.",
-  "mysubs": "!mysubs - List your private subscriptions.",
-  "latestsub": "!latestsub <feed_name> - Show the latest entry from one of your subscriptions.",
-  "setsetting": "!setsetting <key> <value> - Set a personal setting.",
-  "getsetting": "!getsetting <key> - Retrieve a personal setting.",
-  "settings": "!settings - List all your personal settings.",
-  "admin": "!admin - Display admin information.",
-  "stats": "!stats - Display uptime, channel feed counts, and user subscription counts.",
-  "help": "!help [command] - Show help for commands."
+  "USER": {
+    "listfeeds": "!listfeeds - List all feeds for this channel.",
+    "latest": "!latest <feed_name> - Show the latest entry from a feed.",
+    "getfeed": "!getfeed <title_or_domain> - Search for a feed and display the latest entry.",
+    "genfeed": "!genfeed <website_url> - Generate an RSS feed for a given site via rss.app.",
+    "search": "!search <query> - Search for feeds matching a query.",
+    "stats": "!stats - Display uptime, feed counts, and subscription counts.",
+    "addsub": "!addsub <feed_name> <URL> - Subscribe privately to a feed.",
+    "unsub": "!unsub <feed_name> - Unsubscribe from one of your private feeds.",
+    "mysubs": "!mysubs - List your private subscriptions.",
+    "latestsub": "!latestsub <feed_name> - Show the latest entry from one of your private subscriptions.",
+    "setsetting": "!setsetting <key> <value> - Set a personal user setting.",
+    "getsetting": "!getsetting <key> - Retrieve a personal user setting.",
+    "settings": "!settings - List all your personal settings.",
+    "admin": "!admin - Show admin info. (Non-admins get partial info.)"
+  },
+
+  "OP": {
+    "addfeed": "!addfeed <feed_name> <URL> - Add an RSS feed to this channel (OP only).",
+    "delfeed": "!delfeed <feed_name> - Remove an RSS feed (OP only).",
+    "getadd": "!getadd <title_or_domain> - Search & auto-add feed to this channel (OP only).",
+    "setinterval": "!setinterval <minutes> - Set the feed check interval (OP only).",
+    "join": "!join <#channel> <adminname> - Bot joins a channel (bot admin only).",
+    "part": "!part <#channel> - Make the bot leave a channel (bot admin only)."
+  },
+
+  "OWNER": {
+    "network": "!network add <name> <server/port> [-ssl] <#channel> <opName> - Create a new IRC network entry (owner only).",
+    "set": "!set irc.<name>.<field> <value> - Update a network field (e.g. sasl_user) (owner only).",
+    "connect": "!connect <networkName> - Connect to a network from networks.json (owner only).",
+    "addnetwork": "!addnetwork <networkName> <server_info> <channels> <admin> [-ssl] - Old method to add a network (owner only).",
+    "delnetwork": "!delnetwork <networkName> - Remove a network config (owner only).",
+    "quit": "!quit - Shut down the bot (owner only).",
+    "reload": "!reload - Reload the bot’s config (owner only).",
+    "restart": "!restart - Restart the bot (owner only)."
+  }
 }
 
