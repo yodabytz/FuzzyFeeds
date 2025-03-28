@@ -207,4 +207,3 @@ def check_feeds(send_message_func, channels_to_check=None):
 # Automatically load feeds & subscriptions on import
 load_feeds()
 load_subscriptions()
-
