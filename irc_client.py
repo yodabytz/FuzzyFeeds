@@ -264,18 +264,13 @@ def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel, 
 
             irc.settimeout(None)
 
-            # If we have a NickServ password but not doing SASL (or if the network requires NickServ after SASL)
-            # Typically, if you're using SASL, you wouldn't also do NickServ, but some networks want both.
             if nickserv_pass and not (use_sasl_flag and sasl_user and sasl_pass):
                 do_nickserv_auth(irc, botnick, nickserv_pass)
 
-            # Start message queue thread
             threading.Thread(target=process_message_queue, args=(irc,), daemon=True).start()
 
-            # Join initial channel (the rest can be done in main.py if you like)
             irc.send(f"JOIN {initial_channel}\r\n".encode("utf-8"))
 
-            # Return the IRC socket
             return irc
 
         except ssl.SSLError as ssl_err:
@@ -293,10 +288,15 @@ def irc_command_parser(irc_conn):
     """
     Parser loop: Reads lines from the IRC socket, identifies commands (!...),
     then delegates to handle_centralized_command in commands.py.
+    
+    FIX: Accumulate consecutive lines from the same sender/target when a command is split.
     """
     from commands import handle_centralized_command
 
     buffer = ""
+    # Use a dict to accumulate commands: key = "sender:target"
+    pending_commands = {}
+
     while True:
         try:
             data = irc_conn.recv(2048).decode("utf-8", errors="ignore")
@@ -313,7 +313,8 @@ def irc_command_parser(irc_conn):
                     if len(parts) > 1:
                         irc_conn.send(f"PONG {parts[1]}\r\n".encode("utf-8"))
                         logging.debug("Sent PONG response")
-                elif "PRIVMSG" in line:
+                    continue
+                if "PRIVMSG" in line:
                     parts = line.split()
                     if len(parts) < 4:
                         logging.warning(f"Malformed PRIVMSG: {line}")
@@ -322,7 +323,18 @@ def irc_command_parser(irc_conn):
                     target = parts[2]
                     message = " ".join(parts[3:])[1:]
                     logging.debug(f"[irc_parser] Parsed: sender={sender}, target={target}, message={message}")
-                    if message.startswith("!"):
+                    key = f"{sender}:{target}"
+                    # If the message doesn't start with '!', assume it's a continuation.
+                    if not message.startswith("!"):
+                        if key in pending_commands:
+                            pending_commands[key] += " " + message
+                        else:
+                            pending_commands[key] = message
+                        continue
+                    else:
+                        # If there is a pending command, prepend it.
+                        if key in pending_commands:
+                            message = pending_commands.pop(key) + " " + message
                         logging.info(f"[irc_parser] Command detected from {sender} in {target}: {message}")
                         is_op = sender.lower() in [op.lower() for op in ops]
                         handle_centralized_command(
