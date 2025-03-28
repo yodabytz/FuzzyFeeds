@@ -79,7 +79,7 @@ def build_feed_tree(networks):
         elif key.startswith("!"):
             server = "Matrix"
             channel = key
-        elif key.isdigit():
+        elif str(key).isdigit():
             server = "Discord"
             channel = key
         else:
@@ -487,6 +487,7 @@ def index():
     except Exception:
         pass
 
+    # Load Matrix aliases if available
     if os.path.isfile(MATRIX_ALIASES_FILE):
         matrix_aliases = load_json(MATRIX_ALIASES_FILE, default={})
     else:
@@ -496,10 +497,21 @@ def index():
     networks_file = os.path.join(BASE_DIR, "networks.json")
     networks = load_json(networks_file, default={}) if os.path.exists(networks_file) else {}
 
-    for channel in networks.keys():
+    # Fix: Ensure that for each network in networks.json, we add composite keys to feed.channel_feeds
+    for net_name, net_info in networks.items():
+        server_name = net_info.get("server", "")
+        channels_list = net_info.get("Channels", [])
+        for ch in channels_list:
+            composite = f"{server_name}|{ch}"
+            if composite not in feed.channel_feeds:
+                feed.channel_feeds[composite] = {}
+
+    # Also include channels from primary config if missing
+    for channel in config.channels:
         if channel not in feed.channel_feeds:
             feed.channel_feeds[channel] = {}
 
+    # Prepare IRC status info
     irc_servers = []
     irc_status = {}
     default_irc = config.server
@@ -507,17 +519,12 @@ def index():
         irc_servers.append(default_irc)
         with connection_lock:
             irc_status[default_irc] = "green" if connection_status["primary"].get(default_irc, False) else "red"
-        if irc_status[default_irc] == "red":
-            logging.info(f"Primary IRC {default_irc} reported as disconnected")
-
     for network_name, details in networks.items():
         server_name = details.get("server", "")
         if server_name and server_name not in irc_servers:
             irc_servers.append(server_name)
             with connection_lock:
                 irc_status[server_name] = "green" if connection_status["secondary"].get(server_name, False) else "red"
-            if irc_status[server_name] == "red":
-                logging.info(f"Secondary IRC {server_name} reported as disconnected")
 
     try:
         from matrix_integration import matrix_bot_instance
@@ -546,6 +553,7 @@ def index():
     errors_str = "\n".join(errors_deque) if errors_deque else "No errors reported."
     current_year = datetime.datetime.now().year
 
+    # Build IRC channels table data
     irc_channels = {}
     for key, feeds_dict in feed.channel_feeds.items():
         if key == "FuzzyFeeds":
@@ -572,7 +580,7 @@ def index():
         total_subscriptions=total_subscriptions,
         irc_channels=irc_channels,
         matrix_rooms={k: v for k, v in feed.channel_feeds.items() if k.startswith('!')},
-        discord_channels={k: v for k, v in feed.channel_feeds.items() if k.isdigit()},
+        discord_channels={k: v for k, v in feed.channel_feeds.items() if str(k).isdigit()},
         feed_tree_html=feed_tree_html,
         errors=errors_str,
         current_year=current_year,
@@ -606,6 +614,15 @@ def stats_data():
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     networks_file = os.path.join(BASE_DIR, "networks.json")
     networks = load_json(networks_file, default={}) if os.path.exists(networks_file) else {}
+
+    # Same fix applied in stats_data: ensure composite keys for networks
+    for net_name, net_info in networks.items():
+        server_name = net_info.get("server", "")
+        channels_list = net_info.get("Channels", [])
+        for ch in channels_list:
+            composite = f"{server_name}|{ch}"
+            if composite not in feed.channel_feeds:
+                feed.channel_feeds[composite] = {}
 
     uptime_seconds = int(time.time() - start_time)
     uptime_str = str(datetime.timedelta(seconds=uptime_seconds))
@@ -645,7 +662,7 @@ def stats_data():
         "total_subscriptions": total_subscriptions,
         "irc_channels": irc_channels,
         "matrix_rooms": {k: v for k, v in feed.channel_feeds.items() if k.startswith('!')},
-        "discord_channels": {k: v for k, v in feed.channel_feeds.items() if k.isdigit()},
+        "discord_channels": {k: v for k, v in feed.channel_feeds.items() if str(k).isdigit()},
         "feed_tree_html": feed_tree_html,
         "errors": errors_str,
         "current_year": current_year,
@@ -661,3 +678,4 @@ def handle_bad_request(error):
 if __name__ == '__main__':
     logging.info(f"Dashboard starting on port {dashboard_port}.")
     app.run(host='0.0.0.0', port=dashboard_port, debug=True)
+
