@@ -59,28 +59,12 @@ def get_actual_channel(key, integration):
     return key
 
 # ---------------------------------------------------------------------
-# NEW ROLE-BASED HELP SYSTEM
+# ROLE-BASED HELP SYSTEM
 # ---------------------------------------------------------------------
 def load_help_data():
     """
-    Now we load help.json expecting something like:
-    {
-      "USER": {
-        "listfeeds": "...",
-        "latest": "...",
-        ...
-      },
-      "OP": {
-        "addfeed": "...",
-        "delfeed": "...",
-        ...
-      },
-      "OWNER": {
-        "network": "...",
-        "quit": "...",
-        ...
-      }
-    }
+    We expect a dict with "USER", "OP", "OWNER" keys, each containing
+    sub-dicts of {commandName: description}.
     """
     try:
         with open("help.json", "r") as f:
@@ -532,7 +516,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         def connect_new():
             try:
                 logging.info(f"[!addnetwork] Thread started for {server_name}:{port_number}")
-                new_client = connect_to_network(server_name, port_number, use_ssl_flag, channels_list[0])
+                new_client = connect_to_network(server_name, port_number, use_ssl_flag, channels_list[0], net_auth=None)
                 if new_client:
                     logging.info(f"[!addnetwork] Connected to {server_name}:{port_number}")
                     for ch in channels_list:
@@ -753,7 +737,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # !quit
     elif lower_message.startswith("!quit"):
-        # Only the bot owner can do this
         if user.lower() != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !quit.")
             return
@@ -785,12 +768,12 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         if len(parts) == 2:
             help_text = get_help(parts[1].strip())
         else:
-            help_text = get_help()  # No argument => top-level
+            help_text = get_help()  # no arg => top-level categories
         multiline_send(send_multiline_message_fn, user, help_text)
 
     # !network add, !set, !connect
     elif lower_message.startswith("!network"):
-        # This is the new approach for adding networks
+        # Only the bot owner can do these
         if user.lower() != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !network.")
             return
@@ -861,6 +844,26 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             except Exception as e:
                 send_message_fn(response_target(actual_channel, integration),
                                 f"Error saving to networks.json: {e}")
+                return
+
+            # -- NEW BLOCK to store channel admin in admin.json
+            try:
+                if os.path.exists(admin_file):
+                    with open(admin_file, "r") as f:
+                        admin_mapping = json.load(f)
+                else:
+                    admin_mapping = {}
+
+                admin_mapping[chan_value] = op_name_value
+                with open(admin_file, "w") as f:
+                    json.dump(admin_mapping, f, indent=4)
+
+                send_message_fn(response_target(actual_channel, integration),
+                                f"Assigned {op_name_value} as admin for {chan_value} in admin.json.")
+            except Exception as e:
+                send_message_fn(response_target(actual_channel, integration),
+                                f"Error storing admin to admin.json: {e}")
+
         else:
             send_message_fn(response_target(actual_channel, integration),
                             f"Unknown subcommand for !network: {subcmd}")
@@ -943,6 +946,4 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                         f"Connection attempt for '{net_name}' started in background.")
 
     else:
-        # Unknown command
         send_message_fn(response_target(actual_channel, integration), "Unknown command. Use !help for a list.")
-
