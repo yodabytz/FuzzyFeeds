@@ -45,6 +45,23 @@ def parse_with_custom_user_agent(url):
     # Now feedparser parses the raw text we fetched
     return feedparser.parse(resp.text)
 
+def normalize_composite_keys():
+    """Ensure all composite keys in channel_feeds use lower-case for the channel part."""
+    updated = False
+    new_keys = {}
+    for key in list(channel_feeds.keys()):
+        if "|" in key:
+            server_part, chan_part = key.split("|", 1)
+            normalized_key = f"{server_part}|{chan_part.lower()}"
+            if normalized_key != key:
+                new_keys[normalized_key] = channel_feeds.pop(key)
+                updated = True
+    # Add the normalized keys back
+    for key, value in new_keys.items():
+        channel_feeds[key] = value
+    if updated:
+        save_json(FEEDS_FILE, channel_feeds)
+
 def load_feeds():
     global channels, channel_feeds, channel_intervals, last_check_times
     channels_data = load_json(CHANNELS_FILE, default={"irc_channels": [], "discord_channels": [], "matrix_rooms": []})
@@ -54,13 +71,15 @@ def load_feeds():
     for network_name, net_info in networks.items():
         net_channels = net_info.get("Channels", [])
         for chan in net_channels:
-            composite_key = f"{net_info['server']}|{chan}"
+            # Normalize channel name to lower-case for composite key
+            composite_key = f"{net_info['server']}|{chan.lower()}"
             if composite_key not in channels:
                 channels.append(composite_key)
 
     global channel_feeds
     channel_feeds = load_json(FEEDS_FILE, default={})
     migrate_plain_keys_to_composite()
+    normalize_composite_keys()
 
     loaded_intervals = load_json("intervals.json", default={})
     for chan in channels:
@@ -72,13 +91,14 @@ def load_feeds():
 def migrate_plain_keys_to_composite():
     networks = load_json(NETWORKS_FILE, default={})
 
-    # Migrate feeds
+    # Migrate feeds: convert plain keys to composite keys using lower-case channel names.
     feeds_changed = False
     for net_info in networks.values():
         server_name = net_info.get("server")
         for chan in net_info.get("Channels", []):
+            normalized_chan = chan.lower()
             if chan in channel_feeds:
-                composite_key = f"{server_name}|{chan}"
+                composite_key = f"{server_name}|{normalized_chan}"
                 if composite_key not in channel_feeds:
                     channel_feeds[composite_key] = channel_feeds[chan]
                 else:
@@ -89,15 +109,16 @@ def migrate_plain_keys_to_composite():
     if feeds_changed:
         save_json(FEEDS_FILE, channel_feeds)
 
-    # Migrate posted links
+    # Migrate posted links similarly.
     global posted_links
     posted_links = load_json(POSTED_LINKS_FILE, default={})
     links_changed = False
     for net_info in networks.values():
         server_name = net_info.get("server")
         for chan in net_info.get("Channels", []):
+            normalized_chan = chan.lower()
             if chan in posted_links:
-                composite_key = f"{server_name}|{chan}"
+                composite_key = f"{server_name}|{normalized_chan}"
                 if composite_key not in posted_links:
                     posted_links[composite_key] = posted_links[chan]
                 else:
@@ -186,3 +207,4 @@ def check_feeds(send_message_func, channels_to_check=None):
 # Automatically load feeds & subscriptions on import
 load_feeds()
 load_subscriptions()
+
