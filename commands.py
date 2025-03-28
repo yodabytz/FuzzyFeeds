@@ -27,19 +27,23 @@ last_command_timestamp = {}
 user_abuse = {}
 
 def get_network_for_channel(channel):
-    if channel in config_channels:
+    # Normalize the channel name to lower-case for matching.
+    ch = channel.lower()
+    if ch in [x.lower() for x in config_channels]:
         return server
     networks = persistence.load_json("networks.json", default={})
     for net_name, net_info in networks.items():
         channels_list = net_info.get("Channels", [])
-        if channel in channels_list:
-            return net_info.get("server", server)
+        for net_chan in channels_list:
+            if ch == net_chan.lower():
+                return net_info.get("server", server)
     return server
 
 def composite_key(channel, integration):
     if integration == "irc":
         net = get_network_for_channel(channel)
-        return f"{net}|{channel}"
+        # Always use the lower-case version of the channel for the composite key.
+        return f"{net}|{channel.lower()}"
     else:
         return channel
 
@@ -114,6 +118,7 @@ def get_help(topic=None):
 
     # No match
     return f"No help info found for '{topic}'."
+
 # ---------------------------------------------------------------------
 
 def search_feeds(query):
@@ -167,6 +172,9 @@ def response_target(actual_channel, integration):
 
 def handle_centralized_command(integration, send_message_fn, send_private_message_fn, send_multiline_message_fn,
                                user, target, message, is_op_flag, irc_conn=None):
+    # Normalize newlines so commands split over multiple lines are reassembled.
+    message = " ".join(message.splitlines())
+
     now = time.time()
     if user in user_abuse and now < user_abuse[user].get('block_until', 0):
         send_private_message_fn(user, "You are temporarily blocked from sending commands due to abuse. Please wait 5 minutes.")
@@ -191,9 +199,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
     is_admin_flag = (user.lower() == admin.lower())
     effective_op = is_op_flag or (user.lower() in [op.lower() for op in ops]) or is_admin_flag
 
-    # -----------------------------------------------------------------
-    # Check if user is channel admin for this channel
-    # -----------------------------------------------------------------
+    # Check if user is channel admin (case-insensitive, and support comma-separated values)
     try:
         with open(admin_file, "r") as f:
             admin_mapping = json.load(f)
@@ -201,11 +207,13 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         admin_mapping = {}
         logging.error(f"Error reading admin_file {admin_file}: {e}")
 
-    channel_admin = admin_mapping.get(target)
-    if channel_admin and user.lower() == channel_admin.lower():
-        logging.info(f"User {user} recognized as channel admin for {target}; granting effective_op.")
-        effective_op = True
-    # -----------------------------------------------------------------
+    for ch_key, admin_value in admin_mapping.items():
+        if ch_key.lower() == target.lower():
+            admin_list = [a.strip().lower() for a in admin_value.split(",")]
+            if user.lower() in admin_list:
+                logging.info(f"User {user} recognized as channel admin for {target}; granting effective_op.")
+                effective_op = True
+            break
 
     lower_message = message.lower()
     if integration == "irc":
@@ -218,7 +226,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
     # !addfeed
     if lower_message.startswith("!addfeed"):
         if not effective_op:
-            send_private_message_fn(user, "Not authorized to use !addfeed.")
+            send_message_fn(response_target(actual_channel, integration), "Not authorized to use !addfeed.")
             return
         parts = message.split(" ", 2)
         if len(parts) < 3:
@@ -258,6 +266,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # !listfeeds
     elif lower_message.startswith("!listfeeds"):
+        logging.info(f"Checking feeds for composite key: '{key}'")
         if key in feed.channel_feeds and feed.channel_feeds[key]:
             lines = [f"{name}: {url}" for name, url in feed.channel_feeds[key].items()]
             multiline_send(send_multiline_message_fn, response_target(actual_channel, integration), "\n".join(lines))
@@ -846,7 +855,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                                 f"Error saving to networks.json: {e}")
                 return
 
-            # -- NEW BLOCK to store channel admin in admin.json
+            # NEW BLOCK to store channel admin in admin.json
             try:
                 if os.path.exists(admin_file):
                     with open(admin_file, "r") as f:
@@ -947,3 +956,4 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     else:
         send_message_fn(response_target(actual_channel, integration), "Unknown command. Use !help for a list.")
+
