@@ -6,8 +6,7 @@ This module implements centralized polling for RSS/Atom feeds for all integratio
 IRC, Matrix, and Discord. It uses the feed data from feed.py and, at configurable
 intervals, checks each feed for new entries. When a new entry is found, it uses the
 provided callback functions to send messages to the appropriate integration channel/room.
-Now, it also checks subscription feeds (stored in feed.subscriptions) and sends any new entries privately
-(using the private_send callback).
+It also checks subscription feeds (stored in feed.subscriptions) and sends any new entries privately.
 """
 
 import time
@@ -42,11 +41,10 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
         channels_to_check = list(feed.channel_feeds.keys())
         logging.info(f"Checking {len(channels_to_check)} channels for new feeds: {channels_to_check}")
         
-        # Make sure we have a last_check_times dictionary
+        # Process channel feeds
         if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
             feed.last_check_times = {}
         for chan in channels_to_check:
-            # Default the last check time if not set
             feed.last_check_times.setdefault(chan, script_start_time)
             feeds_to_check = feed.channel_feeds.get(chan)
             if not feeds_to_check:
@@ -86,20 +84,13 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
                         
                         title = entry.title.strip() if entry.get("title") else "No Title"
                         link = entry.link.strip() if entry.get("link") else ""
-                        # If there's a link, check if we already posted it
                         if link and feed.is_link_posted(chan, link):
                             logging.info(f"Channel {chan} already has link: {link}")
                             continue
 
                         if link:
-                            # Title always posted first, Link second
                             title_msg = f"{feed_name}: {title}"
                             link_msg  = f"Link: {link}"
-
-                            # Send to correct integration:
-                            # If Matrix room: chan.startswith("!")
-                            # If Discord channel: chan.isdigit()
-                            # Else treat as IRC (covers both primary & secondary)
                             if chan.startswith("!"):
                                 matrix_send(chan, title_msg)
                                 matrix_send(chan, link_msg)
@@ -109,8 +100,6 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
                             else:
                                 irc_send(chan, title_msg)
                                 irc_send(chan, link_msg)
-
-                            # Mark link as posted so we don't repost next time
                             feed.mark_link_posted(chan, link)
                             new_feed_count += 1
                     except Exception as e:
@@ -121,10 +110,10 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
                     logging.info(f"No new feeds found in {chan}.")
                 feed.last_check_times[chan] = current_time
 
-        # --- Process Subscription Feeds ---
-        # Subscriptions are stored in feed.subscriptions, keyed by username.
+        # Process subscription feeds
         for user, subs in feed.subscriptions.items():
-            if user not in feed.last_check_subs:
+            # Ensure each user's last check record is a dictionary.
+            if not isinstance(feed.last_check_subs.get(user), dict):
                 feed.last_check_subs[user] = {}
             for sub_name, sub_url in subs.items():
                 # Default last check for this subscription
@@ -149,7 +138,6 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
                     title = entry.title.strip() if entry.get("title") else "No Title"
                     link = entry.link.strip() if entry.get("link") else ""
                     if link and not feed.is_link_posted(user, link):
-                        # Send the subscription feed privately
                         message_text = f"New Subscription Feed from {sub_name}: {title}\nLink: {link}"
                         private_send(user, message_text)
                         feed.mark_link_posted(user, link)
