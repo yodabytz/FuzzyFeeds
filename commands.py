@@ -595,7 +595,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         if len(parts) < 3:
             send_private_message_fn(user, "Usage: !addsub <feed_name> <URL>")
             return
-        # Normalize username to lowercase for subscriptions
         uname = user.lower()
         feed_name = parts[1].strip()
         feed_url = parts[2].strip()
@@ -641,10 +640,11 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             url = feed.subscriptions[uname][feed_name]
             title, link = feed.fetch_latest_article(url)
             if title and link:
-                send_message_fn(response_target(actual_channel, integration), f"Latest from your subscription '{feed_name}': {title}")
-                send_message_fn(response_target(actual_channel, integration), f"Link: {link}")
+                # Send the latest subscription feed privately
+                send_private_message_fn(user, f"Latest from your subscription '{feed_name}': {title}")
+                send_private_message_fn(user, f"Link: {link}")
             else:
-                send_message_fn(response_target(actual_channel, integration), f"No entry available for {feed_name}.")
+                send_private_message_fn(user, f"No entry available for {feed_name}.")
         else:
             send_private_message_fn(user, f"You are not subscribed to feed '{feed_name}'.")
 
@@ -948,4 +948,3 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     else:
         send_message_fn(response_target(actual_channel, integration), "Unknown command. Use !help for a list.")
-
