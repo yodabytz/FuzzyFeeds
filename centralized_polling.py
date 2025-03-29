@@ -6,6 +6,8 @@ This module implements centralized polling for RSS/Atom feeds for all integratio
 IRC, Matrix, and Discord. It uses the feed data from feed.py and, at configurable
 intervals, checks each feed for new entries. When a new entry is found, it uses the
 provided callback functions to send messages to the appropriate integration channel/room.
+Now, it also checks subscription feeds (stored in feed.subscriptions) and sends any new entries privately
+(using the private_send callback).
 """
 
 import time
@@ -21,11 +23,18 @@ logging.basicConfig(level=logging.INFO)
 # Global variable for initial setup time.
 script_start_time = time.time()
 
-def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
+def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interval=300):
     """
-    This function runs an infinite loop, checking all feeds every `poll_interval` seconds.
-    For each new link in a feed, it posts Title first, Link second.
+    This function runs an infinite loop checking:
+      1. Channel feeds (in feed.channel_feeds) – posting Title then Link to the appropriate integration.
+      2. Subscription feeds (in feed.subscriptions) – for each user, if a new entry is found, it is sent privately.
+    
+    The private_send callback should take two arguments: (user, message).
     """
+    # Ensure the subscriptions last-check dictionary exists
+    if not hasattr(feed, 'last_check_subs'):
+        feed.last_check_subs = {}
+        
     logging.info("Centralized polling started.")
     while True:
         feed.load_feeds()
@@ -39,7 +48,6 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
         for chan in channels_to_check:
             # Default the last check time if not set
             feed.last_check_times.setdefault(chan, script_start_time)
-            
             feeds_to_check = feed.channel_feeds.get(chan)
             if not feeds_to_check:
                 logging.warning(f"No feed dictionary found for channel {chan}; skipping.")
@@ -48,10 +56,8 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
             interval = feed.channel_intervals.get(chan, default_interval)
             last_check = feed.last_check_times.get(chan, script_start_time)
             logging.info(
-                f"Channel {chan}: Last check at "
-                f"{datetime.datetime.fromtimestamp(last_check)}, "
-                f"current time {datetime.datetime.fromtimestamp(current_time)}, "
-                f"interval {interval}s"
+                f"Channel {chan}: Last check at {datetime.datetime.fromtimestamp(last_check)}, "
+                f"current time {datetime.datetime.fromtimestamp(current_time)}, interval {interval}s"
             )
             
             if current_time - last_check >= interval:
@@ -60,10 +66,7 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                     try:
                         parsed_feed = feedparser.parse(feed_url)
                         if parsed_feed.bozo:
-                            logging.warning(
-                                f"Error parsing feed '{feed_name}' ({feed_url}): "
-                                f"{parsed_feed.bozo_exception}"
-                            )
+                            logging.warning(f"Error parsing feed '{feed_name}' ({feed_url}): {parsed_feed.bozo_exception}")
                             continue
                         entries = parsed_feed.get("entries")
                         if not entries:
@@ -76,20 +79,13 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                         elif entry.get("updated_parsed"):
                             published_time = time.mktime(entry.updated_parsed)
                         if published_time is not None and published_time <= last_check:
-                            logging.info(
-                                f"Skipping entry from feed '{feed_name}' published at "
-                                f"{datetime.datetime.fromtimestamp(published_time)} "
-                                f"(last check was {datetime.datetime.fromtimestamp(last_check)})."
-                            )
+                            logging.info(f"Skipping entry from feed '{feed_name}' published at {datetime.datetime.fromtimestamp(published_time)} (last check was {datetime.datetime.fromtimestamp(last_check)}).")
                             continue
                         
-                        logging.info(
-                            f"Feed '{feed_name}' data - Title: {entry.get('title')}, Link: {entry.get('link')}"
-                        )
+                        logging.info(f"Feed '{feed_name}' data - Title: {entry.get('title')}, Link: {entry.get('link')}")
                         
                         title = entry.title.strip() if entry.get("title") else "No Title"
                         link = entry.link.strip() if entry.get("link") else ""
-
                         # If there's a link, check if we already posted it
                         if link and feed.is_link_posted(chan, link):
                             logging.info(f"Channel {chan} already has link: {link}")
@@ -100,10 +96,10 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                             title_msg = f"{feed_name}: {title}"
                             link_msg  = f"Link: {link}"
 
-                            # Send to correct integration
+                            # Send to correct integration:
                             # If Matrix room: chan.startswith("!")
                             # If Discord channel: chan.isdigit()
-                            # Else treat as IRC (including secondary networks)
+                            # Else treat as IRC (covers both primary & secondary)
                             if chan.startswith("!"):
                                 matrix_send(chan, title_msg)
                                 matrix_send(chan, link_msg)
@@ -111,7 +107,6 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                                 discord_send(chan, title_msg)
                                 discord_send(chan, link_msg)
                             else:
-                                # covers both primary & secondary IRC
                                 irc_send(chan, title_msg)
                                 irc_send(chan, link_msg)
 
@@ -125,6 +120,43 @@ def start_polling(irc_send, matrix_send, discord_send, poll_interval=300):
                 else:
                     logging.info(f"No new feeds found in {chan}.")
                 feed.last_check_times[chan] = current_time
+
+        # --- Process Subscription Feeds ---
+        # Subscriptions are stored in feed.subscriptions, keyed by username.
+        for user, subs in feed.subscriptions.items():
+            if user not in feed.last_check_subs:
+                feed.last_check_subs[user] = {}
+            for sub_name, sub_url in subs.items():
+                # Default last check for this subscription
+                last_check_sub = feed.last_check_subs[user].get(sub_name, script_start_time)
+                try:
+                    parsed_sub = feedparser.parse(sub_url)
+                    if parsed_sub.bozo:
+                        logging.warning(f"Error parsing subscription feed '{sub_name}' for {user}: {parsed_sub.bozo_exception}")
+                        continue
+                    entries = parsed_sub.get("entries")
+                    if not entries:
+                        logging.info(f"No entries in subscription feed '{sub_name}' for {user}.")
+                        continue
+                    entry = entries[0]
+                    published_time = None
+                    if entry.get("published_parsed"):
+                        published_time = time.mktime(entry.published_parsed)
+                    elif entry.get("updated_parsed"):
+                        published_time = time.mktime(entry.updated_parsed)
+                    if published_time is not None and published_time <= last_check_sub:
+                        continue
+                    title = entry.title.strip() if entry.get("title") else "No Title"
+                    link = entry.link.strip() if entry.get("link") else ""
+                    if link and not feed.is_link_posted(user, link):
+                        # Send the subscription feed privately
+                        message_text = f"New Subscription Feed from {sub_name}: {title}\nLink: {link}"
+                        private_send(user, message_text)
+                        feed.mark_link_posted(user, link)
+                    feed.last_check_subs[user][sub_name] = published_time
+                except Exception as e:
+                    logging.error(f"Error checking subscription feed '{sub_name}' for {user}: {e}")
+
         logging.info(f"Finished checking feeds. Next check in {poll_interval} seconds.")
         time.sleep(poll_interval)
 
@@ -138,5 +170,8 @@ if __name__ == "__main__":
 
     def test_discord_send(channel, message):
         print(f"[DISCORD] {channel}: {message}")
-        
-    start_polling(test_irc_send, test_matrix_send, test_discord_send, poll_interval=300)
+
+    def test_private_send(user, message):
+        print(f"[PRIVATE] {user}: {message}")
+
+    start_polling(test_irc_send, test_matrix_send, test_discord_send, test_private_send, poll_interval=300)
