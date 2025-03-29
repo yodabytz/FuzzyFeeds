@@ -128,6 +128,10 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
                         logging.info(f"No entries in subscription feed '{sub_name}' for {user}.")
                         continue
                     entry = entries[0]
+                    # FIX: Check if entry is a dict
+                    if not isinstance(entry, dict):
+                        logging.warning(f"Unexpected entry type for subscription '{sub_name}' for {user}: {type(entry)}")
+                        continue
                     published_time = None
                     if entry.get("published_parsed"):
                         published_time = time.mktime(entry.published_parsed)
