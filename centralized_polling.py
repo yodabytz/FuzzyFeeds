@@ -110,7 +110,7 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
                     logging.info(f"No new feeds found in {chan}.")
                 feed.last_check_times[chan] = current_time
 
-        # Process subscription feeds
+        # Process subscription feeds (similar to channel feeds, but sends private messages)
         for user, subs in feed.subscriptions.items():
             # Ensure each user's last check record is a dictionary.
             if not isinstance(feed.last_check_subs.get(user), dict):
@@ -128,7 +128,7 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
                         logging.info(f"No entries in subscription feed '{sub_name}' for {user}.")
                         continue
                     entry = entries[0]
-                    # FIX: Check if entry is a dict
+                    # Added check: ensure entry is a dict before calling .get
                     if not isinstance(entry, dict):
                         logging.warning(f"Unexpected entry type for subscription '{sub_name}' for {user}: {type(entry)}")
                         continue
