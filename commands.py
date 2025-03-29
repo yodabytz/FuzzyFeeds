@@ -199,7 +199,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
     is_admin_flag = (user.lower() == admin.lower())
     effective_op = is_op_flag or (user.lower() in [op.lower() for op in ops]) or is_admin_flag
 
-    # Check if user is channel admin (case-insensitive, and support comma-separated values)
+    # Check if user is channel admin (case-insensitive, supports comma-separated values)
     try:
         with open(admin_file, "r") as f:
             admin_mapping = json.load(f)
@@ -222,6 +222,80 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         key = target
 
     actual_channel = get_actual_channel(target, integration)
+
+    # --- Subscription Commands (IRC only) ---
+    if lower_message.startswith("!addsub"):
+        if integration != "irc":
+            send_message_fn(response_target(actual_channel, integration), "Subscriptions work only on IRC.")
+            return
+        parts = message.split(" ", 2)
+        if len(parts) < 3:
+            send_private_message_fn(user, "Usage: !addsub <feed_name> <URL>")
+            return
+        feed_name = parts[1].strip()
+        feed_url = parts[2].strip()
+        uname = user
+        if uname not in feed.subscriptions:
+            feed.subscriptions[uname] = {}
+        feed.subscriptions[uname][feed_name] = feed_url
+        feed.save_subscriptions()
+        send_private_message_fn(user, f"Subscribed to feed: {feed_name} ({feed_url})")
+        return
+
+    elif lower_message.startswith("!unsub"):
+        if integration != "irc":
+            send_message_fn(response_target(actual_channel, integration), "Subscriptions work only on IRC.")
+            return
+        parts = message.split(" ", 1)
+        if len(parts) < 2:
+            send_private_message_fn(user, "Usage: !unsub <feed_name>")
+            return
+        feed_name = parts[1].strip()
+        uname = user
+        if uname in feed.subscriptions and feed_name in feed.subscriptions[uname]:
+            del feed.subscriptions[uname][feed_name]
+            feed.save_subscriptions()
+            send_private_message_fn(user, f"Unsubscribed from feed: {feed_name}")
+        else:
+            send_private_message_fn(user, f"Not subscribed to feed '{feed_name}'.")
+        return
+
+    elif lower_message.startswith("!mysubs"):
+        if integration != "irc":
+            send_message_fn(response_target(actual_channel, integration), "Subscriptions work only on IRC.")
+            return
+        uname = user
+        if uname in feed.subscriptions and feed.subscriptions[uname]:
+            lines = [f"{name}: {url}" for name, url in feed.subscriptions[uname].items()]
+            send_private_message_fn(user, "\n".join(lines))
+        else:
+            send_private_message_fn(user, "No subscriptions found.")
+        return
+
+    elif lower_message.startswith("!latestsub"):
+        if integration != "irc":
+            send_message_fn(response_target(actual_channel, integration), "Subscriptions work only on IRC.")
+            return
+        parts = message.split(" ", 1)
+        if len(parts) < 2 or not parts[1].strip():
+            send_private_message_fn(user, "Usage: !latestsub <feed_name>")
+            return
+        feed_name = parts[1].strip()
+        uname = user
+        if uname in feed.subscriptions and feed_name in feed.subscriptions[uname]:
+            url = feed.subscriptions[uname][feed_name]
+            title, link = feed.fetch_latest_article(url)
+            if title and link:
+                # Send the result privately to the user.
+                send_private_message_fn(user, f"Latest from your subscription '{feed_name}': {title}")
+                send_private_message_fn(user, f"Link: {link}")
+            else:
+                send_private_message_fn(user, f"No entry available for {feed_name}.")
+        else:
+            send_private_message_fn(user, f"You are not subscribed to feed '{feed_name}'.")
+        return
+
+    # --- End Subscription Commands ---
 
     # !addfeed
     if lower_message.startswith("!addfeed"):
@@ -266,7 +340,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # !listfeeds
     elif lower_message.startswith("!listfeeds"):
-        logging.info(f"Checking feeds for composite key: '{key}'")
         if key in feed.channel_feeds and feed.channel_feeds[key]:
             lines = [f"{name}: {url}" for name, url in feed.channel_feeds[key].items()]
             multiline_send(send_multiline_message_fn, response_target(actual_channel, integration), "\n".join(lines))
@@ -598,64 +671,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             send_message_fn(response_target(actual_channel, integration), f"Network '{network_name}' not found.")
 
-    # !addsub
-    elif lower_message.startswith("!addsub"):
-        parts = message.split(" ", 2)
-        if len(parts) < 3:
-            send_private_message_fn(user, "Usage: !addsub <feed_name> <URL>")
-            return
-        feed_name = parts[1].strip()
-        feed_url = parts[2].strip()
-        uname = user
-        if uname not in feed.subscriptions:
-            feed.subscriptions[uname] = {}
-        feed.subscriptions[uname][feed_name] = feed_url
-        feed.save_subscriptions()
-        send_private_message_fn(user, f"Subscribed to feed: {feed_name} ({feed_url})")
-
-    # !unsub
-    elif lower_message.startswith("!unsub"):
-        parts = message.split(" ", 1)
-        if len(parts) < 2:
-            send_private_message_fn(user, "Usage: !unsub <feed_name>")
-            return
-        feed_name = parts[1].strip()
-        uname = user
-        if uname in feed.subscriptions and feed_name in feed.subscriptions[uname]:
-            del feed.subscriptions[uname][feed_name]
-            feed.save_subscriptions()
-            send_private_message_fn(user, f"Unsubscribed from feed: {feed_name}")
-        else:
-            send_private_message_fn(user, f"Not subscribed to feed '{feed_name}'.")
-
-    # !mysubs
-    elif lower_message.startswith("!mysubs"):
-        uname = user
-        if uname in feed.subscriptions and feed.subscriptions[uname]:
-            lines = [f"{name}: {url}" for name, url in feed.subscriptions[uname].items()]
-            multiline_send(send_multiline_message_fn, user, "\n".join(lines))
-        else:
-            send_private_message_fn(user, "No subscriptions found.")
-
-    # !latestsub
-    elif lower_message.startswith("!latestsub"):
-        parts = message.split(" ", 1)
-        if len(parts) < 2 or not parts[1].strip():
-            send_private_message_fn(user, "Usage: !latestsub <feed_name>")
-            return
-        feed_name = parts[1].strip()
-        uname = user
-        if uname in feed.subscriptions and feed_name in feed.subscriptions[uname]:
-            url = feed.subscriptions[uname][feed_name]
-            title, link = feed.fetch_latest_article(url)
-            if title and link:
-                send_message_fn(response_target(actual_channel, integration), f"Latest from your subscription '{feed_name}': {title}")
-                send_message_fn(response_target(actual_channel, integration), f"Link: {link}")
-            else:
-                send_message_fn(response_target(actual_channel, integration), f"No entry available for {feed_name}.")
-        else:
-            send_private_message_fn(user, f"You are not subscribed to feed '{feed_name}'.")
-
     # !setsetting
     elif lower_message.startswith("!setsetting"):
         parts = message.split(" ", 2)
@@ -671,7 +686,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         user_data["settings"][key_setting] = value
         users.save_users()
         send_private_message_fn(user, f"Setting '{key_setting}' set to '{value}'.")
-
+    
     # !getsetting
     elif lower_message.startswith("!getsetting"):
         parts = message.split(" ", 1)
@@ -685,7 +700,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_private_message_fn(user, f"{key_setting}: {user_data['settings'][key_setting]}")
         else:
             send_private_message_fn(user, f"No setting found for '{key_setting}'.")
-
+    
     # !settings
     elif lower_message.startswith("!settings"):
         users.add_user(user)
@@ -695,7 +710,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             multiline_send(send_multiline_message_fn, user, "\n".join(lines))
         else:
             send_private_message_fn(user, "No settings found.")
-
+    
     # !admin
     elif lower_message.startswith("!admin"):
         try:
@@ -716,7 +731,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             multiline_send(send_multiline_message_fn, response_target(actual_channel, integration), output)
         except Exception as e:
             send_private_message_fn(user, f"Error reading admin info: {e}")
-
+    
     # !stats
     elif lower_message.startswith("!stats"):
         response_target_value = response_target(actual_channel, integration)
@@ -743,7 +758,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                 f"Channel '{target}' Feeds: {num_channel_feeds}"
             ]
         multiline_send(send_multiline_message_fn, response_target_value, "\n".join(response_lines))
-
+    
     # !quit
     elif lower_message.startswith("!quit"):
         if user.lower() != admin.lower():
@@ -751,7 +766,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             return
         send_message_fn(response_target(actual_channel, integration), "Shutting down...")
         os._exit(0)
-
+    
     # !reload
     elif lower_message.startswith("!reload"):
         if user.lower() != admin.lower():
@@ -762,7 +777,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), "Configuration reloaded.")
         except Exception as e:
             send_message_fn(response_target(actual_channel, integration), f"Error reloading config: {e}")
-
+    
     # !restart
     elif lower_message.startswith("!restart"):
         if user.lower() != admin.lower():
@@ -770,7 +785,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             return
         send_message_fn(response_target(actual_channel, integration), "Restarting bot...")
         os.execv(sys.executable, [sys.executable] + sys.argv)
-
+    
     # !help
     elif lower_message.startswith("!help"):
         parts = message.split(" ", 1)
@@ -779,7 +794,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             help_text = get_help()  # no arg => top-level categories
         multiline_send(send_multiline_message_fn, user, help_text)
-
+    
     # !network add, !set, !connect
     elif lower_message.startswith("!network"):
         # Only the bot owner can do these
@@ -855,7 +870,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                                 f"Error saving to networks.json: {e}")
                 return
 
-            # NEW BLOCK to store channel admin in admin.json
+            # -- NEW BLOCK to store channel admin in admin.json
             try:
                 if os.path.exists(admin_file):
                     with open(admin_file, "r") as f:
@@ -956,4 +971,3 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     else:
         send_message_fn(response_target(actual_channel, integration), "Unknown command. Use !help for a list.")
-
