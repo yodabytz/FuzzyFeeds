@@ -19,16 +19,13 @@ channels = []
 channel_feeds = {}
 channel_intervals = {}
 last_check_times = {}
+# Added initialization for subscription last-check records:
+last_check_subs = {}
 subscriptions = {}
 posted_links = {}
 default_interval = 300
 
 def parse_with_custom_user_agent(url):
-    """
-    Fetch the feed manually with requests, using a custom User-Agent.
-    Then parse the returned text with feedparser.
-    This helps with Reddit feeds which may block feedparser's built-in request logic.
-    """
     headers = {
         "User-Agent": "FuzzyFeedsBot/1.0 (+https://github.com/YourUser/YourRepo)"
     }
@@ -39,28 +36,10 @@ def parse_with_custom_user_agent(url):
         return feedparser.FeedParserDict()
 
     if resp.status_code != 200:
-        logging.error(f"[feed.py] Reddit feed returned {resp.status_code}: {resp.text[:200]}")
+        logging.error(f"[feed.py] Feed returned {resp.status_code}: {resp.text[:200]}")
         return feedparser.FeedParserDict()
 
-    # Now feedparser parses the raw text we fetched
     return feedparser.parse(resp.text)
-
-def normalize_composite_keys():
-    """Ensure all composite keys in channel_feeds use lower-case for the channel part."""
-    updated = False
-    new_keys = {}
-    for key in list(channel_feeds.keys()):
-        if "|" in key:
-            server_part, chan_part = key.split("|", 1)
-            normalized_key = f"{server_part}|{chan_part.lower()}"
-            if normalized_key != key:
-                new_keys[normalized_key] = channel_feeds.pop(key)
-                updated = True
-    # Add the normalized keys back
-    for key, value in new_keys.items():
-        channel_feeds[key] = value
-    if updated:
-        save_json(FEEDS_FILE, channel_feeds)
 
 def load_feeds():
     global channels, channel_feeds, channel_intervals, last_check_times
@@ -71,15 +50,13 @@ def load_feeds():
     for network_name, net_info in networks.items():
         net_channels = net_info.get("Channels", [])
         for chan in net_channels:
-            # Normalize channel name to lower-case for composite key
-            composite_key = f"{net_info['server']}|{chan.lower()}"
+            composite_key = f"{net_info['server']}|{chan}"
             if composite_key not in channels:
                 channels.append(composite_key)
 
     global channel_feeds
     channel_feeds = load_json(FEEDS_FILE, default={})
     migrate_plain_keys_to_composite()
-    normalize_composite_keys()
 
     loaded_intervals = load_json("intervals.json", default={})
     for chan in channels:
@@ -90,48 +67,48 @@ def load_feeds():
 
 def migrate_plain_keys_to_composite():
     networks = load_json(NETWORKS_FILE, default={})
-
-    # Migrate feeds: convert plain keys to composite keys using lower-case channel names.
     feeds_changed = False
     for net_info in networks.values():
         server_name = net_info.get("server")
         for chan in net_info.get("Channels", []):
-            normalized_chan = chan.lower()
             if chan in channel_feeds:
-                composite_key = f"{server_name}|{normalized_chan}"
+                composite_key = f"{server_name}|{chan}"
                 if composite_key not in channel_feeds:
                     channel_feeds[composite_key] = channel_feeds[chan]
                 else:
                     channel_feeds[composite_key].update(channel_feeds[chan])
                 del channel_feeds[chan]
                 feeds_changed = True
-
     if feeds_changed:
         save_json(FEEDS_FILE, channel_feeds)
 
-    # Migrate posted links similarly.
     global posted_links
     posted_links = load_json(POSTED_LINKS_FILE, default={})
     links_changed = False
     for net_info in networks.values():
         server_name = net_info.get("server")
         for chan in net_info.get("Channels", []):
-            normalized_chan = chan.lower()
             if chan in posted_links:
-                composite_key = f"{server_name}|{normalized_chan}"
+                composite_key = f"{server_name}|{chan}"
                 if composite_key not in posted_links:
                     posted_links[composite_key] = posted_links[chan]
                 else:
                     posted_links[composite_key] = list(set(posted_links[composite_key] + posted_links[chan]))
                 del posted_links[chan]
                 links_changed = True
-
     if links_changed:
         save_json(POSTED_LINKS_FILE, posted_links)
 
+def normalize_sub_key(key):
+    return key.strip().lower()
+
 def load_subscriptions():
     global subscriptions
-    subscriptions = load_json(SUBSCRIPTIONS_FILE, default={})
+    raw_subs = load_json(SUBSCRIPTIONS_FILE, default={})
+    normalized = {}
+    for user, subdict in raw_subs.items():
+        normalized[user.lower()] = {normalize_sub_key(k): v for k, v in subdict.items()}
+    subscriptions = normalized
 
 def save_feeds():
     save_json(FEEDS_FILE, channel_feeds)
@@ -158,16 +135,12 @@ def mark_link_posted(channel, link):
     save_posted_links()
 
 def fetch_latest_article(url):
-    """
-    Replaces the direct feedparser.parse(url) with parse_with_custom_user_agent(url).
-    This ensures we do requests with a custom user agent so Reddit doesn't return an empty feed.
-    """
     try:
         d = parse_with_custom_user_agent(url)
         if d.entries:
             entry = d.entries[0]
-            title = entry.title.strip() if entry.title else "No Title"
-            link = entry.link.strip() if entry.link else ""
+            title = entry.title.strip() if entry.get("title") else "No Title"
+            link = entry.link.strip() if entry.get("link") else ""
             return title, link
         return None, None
     except Exception as e:
@@ -183,21 +156,20 @@ def check_feeds(send_message_func, channels_to_check=None):
             interval = channel_intervals.get(chan, default_interval)
             if current_time - last_check_times.get(chan, 0) >= interval:
                 for feed_name, feed_url in feeds_to_check.items():
-                    d = parse_with_custom_user_agent(feed_url)  # use the new function
+                    d = parse_with_custom_user_agent(feed_url)
                     if d.entries:
                         entry = d.entries[0]
                         published_time = None
-                        if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                        if entry.get("published_parsed"):
                             published_time = time.mktime(entry.published_parsed)
-                        elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+                        elif entry.get("updated_parsed"):
                             published_time = time.mktime(entry.updated_parsed)
-
                         if published_time is not None and published_time <= last_check_times.get(chan, 0):
                             continue
-                        title = entry.title.strip() if entry.title else "No Title"
-                        link = entry.link.strip() if entry.link else ""
+                        title = entry.title.strip() if entry.get("title") else "No Title"
+                        link = entry.link.strip() if entry.get("link") else ""
                         if link and not is_link_posted(chan, link):
-                            combined_message = f"New Feed from {feed_name}: {title}\n{link}"
+                            combined_message = f"New Feed from {feed_name}: {title}\nLink: {link}"
                             send_message_func(chan, combined_message)
                             mark_link_posted(chan, link)
                 last_check_times[chan] = current_time
@@ -207,3 +179,4 @@ def check_feeds(send_message_func, channels_to_check=None):
 # Automatically load feeds & subscriptions on import
 load_feeds()
 load_subscriptions()
+
