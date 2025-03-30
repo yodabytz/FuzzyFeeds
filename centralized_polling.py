@@ -141,6 +141,7 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
                         message_text = f"New Subscription Feed from {sub_name}: {title}\nLink: {link}"
                         private_send(user, message_text)
                         feed.mark_link_posted(user, link)
+                    # Update the last check time for this subscription.
                     feed.last_check_subs[user][sub_name] = published_time
                 except Exception as e:
                     logging.error(f"Error checking subscription feed '{sub_name}' for {user}: {e}")
@@ -163,4 +164,3 @@ if __name__ == "__main__":
         print(f"[PRIVATE] {user}: {message}")
 
     start_polling(test_irc_send, test_matrix_send, test_discord_send, test_private_send, poll_interval=300)
-
