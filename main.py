@@ -197,6 +197,7 @@ def irc_send_callback(channel, message):
     else:
         found = next((key for key in irc_secondary.keys() if key.endswith(f"|{channel}")), None)
         composite = found if found else f"{default_irc_server}|{channel}"
+
     actual_channel = composite.split("|", 1)[1]
     conn = irc_secondary.get(composite)
     if conn:
@@ -205,10 +206,6 @@ def irc_send_callback(channel, message):
     else:
         logging.error(f"No IRC connection for composite key: {composite}, queuing message")
         message_queue.put((actual_channel, message))
-
-# Test private_send function for subscription messages
-def test_private_send(user, message):
-    print(f"[PRIVATE] {user}: {message}")
 
 if __name__ == "__main__":
     logging.info("Main script starting")
@@ -235,13 +232,11 @@ if __name__ == "__main__":
 
         discord_callback = send_discord_message if enable_discord else None
 
-        # IMPORTANT: Pass the correct private_send function and poll interval!
         threading.Thread(target=centralized_polling.start_polling, args=(
             irc_send_callback,
             matrix_callback,
             discord_callback,
-            test_private_send,   # Correct private_send function
-            300                  # Poll interval (seconds)
+            300
         ), daemon=True).start()
 
         # Start Matrix if enabled
@@ -261,3 +256,4 @@ if __name__ == "__main__":
     except Exception as e:
         logging.error(f"Main script failed: {e}")
         raise
+
