@@ -15,7 +15,6 @@
     "settings": "!settings - List all your personal settings.",
     "admin": "!admin - Show admin info. (Non-admins get partial info.)"
   },
-
   "OP": {
     "addfeed": "!addfeed <feed_name> <URL> - Add an RSS feed to this channel (OP only).",
     "delfeed": "!delfeed <feed_name> - Remove an RSS feed (OP only).",
@@ -24,13 +23,11 @@
     "join": "!join <#channel> <adminname> - Bot joins a channel (bot admin only).",
     "part": "!part <#channel> - Make the bot leave a channel (bot admin only)."
   },
-
   "OWNER": {
-    "network": "!network add <name> <server/port> [-ssl] <#channel> <opName> - Create a new IRC network entry (owner only).",
-    "set": "!set irc.<name>.<field> <value> - Update a network field (e.g. sasl_user) (owner only).",
-    "connect": "!connect <networkName> - Connect to a network from networks.json (owner only).",
-    "addnetwork": "!addnetwork <networkName> <server_info> <channels> <admin> [-ssl] - Old method to add a network (owner only).",
-    "delnetwork": "!delnetwork <networkName> - Remove a network config (owner only).",
+    "network add": "!network add <networkName> <server/port> [-ssl] <#channel> <opName> - Create a new IRC network entry (owner only).",
+    "network set": "!network set irc.<networkName>.<field> <value> - Update a network field (owner only).",
+    "network connect": "!network connect <networkName> - Connect to a network from networks.json (owner only).",
+    "network del": "!network del <networkName> - Remove a network configuration and make the bot leave that server (owner only).",
     "quit": "!quit - Shut down the bot (owner only).",
     "reload": "!reload - Reload the bot’s config (owner only).",
     "restart": "!restart - Restart the bot (owner only)."
