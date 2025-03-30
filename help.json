@@ -20,10 +20,10 @@
     "delfeed": "!delfeed <feed_name> - Remove an RSS feed (OP only).",
     "getadd": "!getadd <title_or_domain> - Search & auto-add feed to this channel (OP only).",
     "setinterval": "!setinterval <minutes> - Set the feed check interval (OP only).",
-    "join": "!join <#channel> <adminname> - Bot joins a channel (bot admin only).",
-    "part": "!part <#channel> - Make the bot leave a channel (bot admin only)."
   },
   "OWNER": {
+    "join": "!join <#channel> <adminname> - Bot joins a channel (bot admin only).",
+    "part": "!part <#channel> - Make the bot leave a channel (bot admin only)."
     "network add": "!network add <networkName> <server/port> [-ssl] <#channel> <opName> - Create a new IRC network entry (owner only).",
     "network set": "!network set irc.<networkName>.<field> <value> - Update a network field (owner only).",
     "network connect": "!network connect <networkName> - Connect to a network from networks.json (owner only).",
