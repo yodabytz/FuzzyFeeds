@@ -116,8 +116,13 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
             if not isinstance(feed.last_check_subs.get(user), dict):
                 feed.last_check_subs[user] = {}
             for sub_name, sub_url in subs.items():
-                # Default last check for this subscription
-                last_check_sub = feed.last_check_subs[user].get(sub_name, script_start_time)
+                # Safely retrieve last_check_sub, reinitializing if necessary.
+                try:
+                    last_check_sub = feed.last_check_subs[user].get(sub_name, script_start_time)
+                except Exception as e:
+                    logging.error(f"Error retrieving last check for {user} subscription '{sub_name}': {e}")
+                    feed.last_check_subs[user] = {}
+                    last_check_sub = script_start_time
                 try:
                     parsed_sub = feedparser.parse(sub_url)
                     if parsed_sub.bozo:
