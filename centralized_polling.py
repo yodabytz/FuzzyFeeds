@@ -110,13 +110,13 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
                     logging.info(f"No new feeds found in {chan}.")
                 feed.last_check_times[chan] = current_time
 
+        # Before processing subscriptions, unconditionally reset each user's last-check record.
+        for user in feed.subscriptions:
+            feed.last_check_subs[user] = {}
+
         # Process subscription feeds
         for user, subs in feed.subscriptions.items():
-            # Force user's last-check record to be a dict
-            if not isinstance(feed.last_check_subs.get(user), dict):
-                feed.last_check_subs[user] = {}
             for sub_name, sub_url in subs.items():
-                # Safely retrieve last_check_sub, reinitializing if necessary.
                 try:
                     last_check_sub = feed.last_check_subs[user].get(sub_name, script_start_time)
                 except Exception as e:
@@ -146,7 +146,6 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
                         message_text = f"New Subscription Feed from {sub_name}: {title}\nLink: {link}"
                         private_send(user, message_text)
                         feed.mark_link_posted(user, link)
-                    # Update the last check time for this subscription.
                     feed.last_check_subs[user][sub_name] = published_time
                 except Exception as e:
                     logging.error(f"Error checking subscription feed '{sub_name}' for {user}: {e}")
