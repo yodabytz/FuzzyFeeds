@@ -30,8 +30,8 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
     
     The private_send callback should take two arguments: (user, message).
     """
-    # Ensure the subscriptions last-check dictionary exists
-    if not hasattr(feed, 'last_check_subs'):
+    # Force reinitialize last_check_subs to a dict if it's not already one.
+    if not isinstance(getattr(feed, 'last_check_subs', None), dict):
         feed.last_check_subs = {}
         
     logging.info("Centralized polling started.")
@@ -112,7 +112,7 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
 
         # Process subscription feeds
         for user, subs in feed.subscriptions.items():
-            # Ensure each user's last check record is a dictionary.
+            # Force user's last-check record to be a dict
             if not isinstance(feed.last_check_subs.get(user), dict):
                 feed.last_check_subs[user] = {}
             for sub_name, sub_url in subs.items():
