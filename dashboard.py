@@ -242,15 +242,24 @@ DASHBOARD_TEMPLATE = r"""
                   <div class="card-header bg-primary text-white" style="font-weight:600;">Stats</div>
                   <div class="card-body">
                       <h5 class="card-title" id="uptime">Uptime: {{ uptime }}</h5>
+                      <!-- Updated status section -->
                       <p>
-                        {% for server in irc_servers %}
-                          <span class="status-dot {% if server in irc_status and irc_status[server] == 'green' %}status-green{% else %}status-red{% endif %}"></span>
-                          <span style="font-weight:600;">IRC Server:</span> {{ server }}<br>
-                        {% endfor %}
-                        <span class="status-dot {% if matrix_status == 'green' %}status-green{% else %}status-red{% endif %}"></span>
-                        <span style="font-weight:600;">Matrix Server:</span> {{ matrix_server }}<br>
-                        <span class="status-dot {% if discord_status == 'green' %}status-green{% else %}status-red{% endif %}"></span>
-                        <span style="font-weight:600;">Discord Server:</span> {{ discord_server }}
+                        <div id="irc_status_container">
+                          {% for server in irc_servers %}
+                            <div>
+                              <span class="status-dot {% if server in irc_status and irc_status[server] == 'green' %}status-green{% else %}status-red{% endif %}"></span>
+                              <span style="font-weight:600;">IRC Server:</span> {{ server }}
+                            </div>
+                          {% endfor %}
+                        </div>
+                        <div id="matrix_status_container">
+                          <span class="status-dot {% if matrix_status == 'green' %}status-green{% else %}status-red{% endif %}"></span>
+                          <span style="font-weight:600;">Matrix Server:</span> {{ matrix_server }}
+                        </div>
+                        <div id="discord_status_container">
+                          <span class="status-dot {% if discord_status == 'green' %}status-green{% else %}status-red{% endif %}"></span>
+                          <span style="font-weight:600;">Discord Server:</span> {{ discord_server }}
+                        </div>
                       </p>
                   </div>
               </div>
@@ -454,6 +463,19 @@ DASHBOARD_TEMPLATE = r"""
           document.querySelector(".tree").innerHTML = data.feed_tree_html;
           
           document.getElementById("errors").innerText = data.errors;
+          
+          // New: Update the status dots for IRC, Matrix, and Discord servers.
+          if(data.irc_servers && data.irc_status) {
+            let ircHTML = "";
+            data.irc_servers.forEach(server => {
+              const dotClass = data.irc_status[server] === "green" ? "status-green" : "status-red";
+              ircHTML += `<div><span class="status-dot ${dotClass}"></span><span style="font-weight:600;">IRC Server:</span> ${server}</div>`;
+            });
+            document.getElementById("irc_status_container").innerHTML = ircHTML;
+          }
+          document.getElementById("matrix_status_container").innerHTML = `<span class="status-dot ${data.matrix_status === "green" ? "status-green" : "status-red"}"></span><span style="font-weight:600;">Matrix Server:</span> ${data.matrix_server}`;
+          document.getElementById("discord_status_container").innerHTML = `<span class="status-dot ${data.discord_status === "green" ? "status-green" : "status-red"}"></span><span style="font-weight:600;">Discord Server:</span> ${data.discord_server}`;
+          
         } catch (err) {
           console.error('Error fetching stats:', err);
         }
@@ -519,13 +541,12 @@ def index():
         irc_servers.append(default_irc)
         with connection_lock:
             irc_status[default_irc] = "green" if connection_status["primary"].get(default_irc, False) else "red"
-    for network_name, details in networks.items():
+    for net_name, details in networks.items():
         server_name = details.get("server", "")
         if server_name and server_name not in irc_servers:
             irc_servers.append(server_name)
             with connection_lock:
                 irc_status[server_name] = "green" if connection_status["secondary"].get(server_name, False) else "red"
-
     try:
         from matrix_integration import matrix_bot_instance
         matrix_status = "green" if matrix_bot_instance is not None else "red"
@@ -536,7 +557,6 @@ def index():
         discord_status = "green" if bot is not None else "red"
     except Exception:
         discord_status = "red"
-
     matrix_server = config.matrix_homeserver
     discord_server = "discord.com"
 
@@ -637,30 +657,39 @@ def stats_data():
     errors_str = "\n".join(errors_deque) if errors_deque else "No errors reported."
     current_year = datetime.datetime.now().year
 
-    irc_channels = {}
-    for key, feeds_dict in feed.channel_feeds.items():
-        if key == "FuzzyFeeds":
-            continue
-        if "|" in key:
-            server, channel = key.split("|", 1)
-        elif key.startswith('#'):
-            server = config.server
-            channel = key
-        else:
-            continue
-        composite = f"{server}{dash(' | ')}{channel}"
-        if composite in irc_channels:
-            if isinstance(feeds_dict, dict):
-                irc_channels[composite].update(feeds_dict)
-        else:
-            irc_channels[composite] = feeds_dict.copy() if isinstance(feeds_dict, dict) else feeds_dict
+    # Build server status information
+    from config import server as default_irc_server, matrix_homeserver
+    irc_servers = []
+    irc_status = {}
+    if default_irc_server:
+        irc_servers.append(default_irc_server)
+        with connection_lock:
+            irc_status[default_irc_server] = "green" if connection_status["primary"].get(default_irc_server, False) else "red"
+    for net_name, details in networks.items():
+        server_name = details.get("server", "")
+        if server_name and server_name not in irc_servers:
+            irc_servers.append(server_name)
+            with connection_lock:
+                irc_status[server_name] = "green" if connection_status["secondary"].get(server_name, False) else "red"
+    try:
+        from matrix_integration import matrix_bot_instance
+        matrix_status = "green" if matrix_bot_instance is not None else "red"
+    except Exception:
+        matrix_status = "red"
+    try:
+        from discord_integration import bot
+        discord_status = "green" if bot is not None else "red"
+    except Exception:
+        discord_status = "red"
+    matrix_server = matrix_homeserver
+    discord_server = "discord.com"
 
     return {
         "uptime": uptime_str,
         "total_feeds": total_feeds,
         "total_channels": total_channels,
         "total_subscriptions": total_subscriptions,
-        "irc_channels": irc_channels,
+        "irc_channels": {k: v for k, v in feed.channel_feeds.items() if ("|" in k or k.startswith("#"))},
         "matrix_rooms": {k: v for k, v in feed.channel_feeds.items() if k.startswith('!')},
         "discord_channels": {k: v for k, v in feed.channel_feeds.items() if str(k).isdigit()},
         "feed_tree_html": feed_tree_html,
@@ -668,7 +697,13 @@ def stats_data():
         "current_year": current_year,
         "matrix_room_names": matrix_room_names,
         "matrix_aliases": matrix_aliases,
-        "subscriptions": feed.subscriptions
+        "subscriptions": feed.subscriptions,
+        "irc_servers": irc_servers,
+        "irc_status": irc_status,
+        "matrix_status": matrix_status,
+        "discord_status": discord_status,
+        "matrix_server": matrix_server,
+        "discord_server": discord_server
     }
 
 @app.errorhandler(400)
@@ -678,4 +713,3 @@ def handle_bad_request(error):
 if __name__ == '__main__':
     logging.info(f"Dashboard starting on port {dashboard_port}.")
     app.run(host='0.0.0.0', port=dashboard_port, debug=True)
-
