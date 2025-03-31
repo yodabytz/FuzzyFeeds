@@ -23,7 +23,7 @@ except Exception as e:
     raise
 
 try:
-    from matrix_integration import start_matrix_bot, disable_feed_loop as disable_matrix_feed_loop
+    from matrix_integration import start_matrix_bot, disable_feed_loop as disable_matrix_feed_loop, send_matrix_dm
     logging.info("Imported matrix_integration successfully")
 except Exception as e:
     logging.error(f"Failed to import matrix_integration: {e}")
@@ -75,7 +75,7 @@ import os
 from dashboard import app
 from connection_state import connection_status, connection_lock
 
-import channels  # Ensure channels module is imported
+import channels  # Import the channels module
 
 irc_client = None
 irc_secondary = {}
@@ -88,7 +88,7 @@ def start_dashboard():
 def start_primary_irc():
     global irc_client
     logging.info("Starting primary IRC thread")
-    # Load IRC channels from channels.json via the channels module instead of config_channels
+    # Load IRC channels from channels.json via the channels module instead of using config_channels
     channels_data = channels.load_channels()
     irc_channels = channels_data.get("irc_channels", [])
     while True:
@@ -99,7 +99,7 @@ def start_primary_irc():
                 set_irc_client(irc_client)
                 with connection_lock:
                     connection_status["primary"][default_irc_server] = True
-                # Register each channel using the composite key (server|channel) and join each channel explicitly.
+                # Register each channel using the composite key (server|channel) and join explicitly.
                 for ch in irc_channels:
                     composite = f"{default_irc_server}|{ch}"
                     irc_secondary[composite] = irc_client
@@ -214,6 +214,24 @@ def irc_send_callback(channel, message):
         logging.error(f"No IRC connection for composite key: {composite}, queuing message")
         message_queue.put((actual_channel, message))
 
+# --- Start centralized polling for feeds ---
+def start_polling_callbacks():
+    # Define simple wrapper functions for each integration:
+    def irc_send(ch, msg):
+        irc_send_callback(ch, msg)
+    def matrix_send(ch, msg):
+        # For Matrix public messages, we assume using send_matrix_dm as a placeholder.
+        send_matrix_dm(ch, msg)
+    def discord_send(ch, msg):
+        send_discord_message(ch, msg)
+    def private_send(user, msg):
+        # For private messages, we route via IRC send callback if applicable.
+        irc_send_callback(user, msg)
+    
+    # Start centralized polling in a daemon thread with a 5-minute (300 sec) interval.
+    threading.Thread(target=lambda: centralized_polling.start_polling(irc_send, matrix_send, discord_send, private_send, 300),
+                     daemon=True).start()
+
 if __name__ == "__main__":
     logging.info("Main script starting")
     try:
@@ -231,7 +249,8 @@ if __name__ == "__main__":
             threading.Thread(target=start_matrix, daemon=True).start()
         if enable_discord:
             threading.Thread(target=start_discord, daemon=True).start()
-
+        # Start centralized polling for feeds (with a 5-minute interval)
+        start_polling_callbacks()
         # Start the dashboard
         start_dashboard()
     except Exception as e:
