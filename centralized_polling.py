@@ -114,8 +114,11 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
         for user in feed.subscriptions:
             feed.last_check_subs[user] = {}
 
-        # Process subscription feeds
+        # Process subscription feeds with proper private_send callback usage
         for user, subs in feed.subscriptions.items():
+            # Ensure each user's last-check record is a dictionary
+            if user not in feed.last_check_subs or not isinstance(feed.last_check_subs[user], dict):
+                feed.last_check_subs[user] = {}
             for sub_name, sub_url in subs.items():
                 try:
                     last_check_sub = feed.last_check_subs[user].get(sub_name, script_start_time)
@@ -152,19 +155,3 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
 
         logging.info(f"Finished checking feeds. Next check in {poll_interval} seconds.")
         time.sleep(poll_interval)
-
-if __name__ == "__main__":
-    # Simple test functions for local debugging
-    def test_irc_send(channel, message):
-        print(f"[IRC] {channel}: {message}")
-
-    def test_matrix_send(room, message):
-        print(f"[MATRIX] {room}: {message}")
-
-    def test_discord_send(channel, message):
-        print(f"[DISCORD] {channel}: {message}")
-
-    def test_private_send(user, message):
-        print(f"[PRIVATE] {user}: {message}")
-
-    start_polling(test_irc_send, test_matrix_send, test_discord_send, test_private_send, poll_interval=300)
