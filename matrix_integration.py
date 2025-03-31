@@ -56,7 +56,8 @@ matrix_dm_rooms = {}
 
 async def update_direct_messages(room_id, user):
     try:
-        current = await matrix_bot_instance.client.get_account_data("m.direct")
+        # Use get_account_data_event instead of get_account_data
+        current = await matrix_bot_instance.client.get_account_data_event("m.direct")
         dm_content = current.content if current and hasattr(current, "content") else {}
     except Exception as e:
         logging.error(f"Error fetching m.direct account data: {e}")
@@ -76,7 +77,8 @@ async def get_dm_room(user):
     if user in matrix_dm_rooms:
         return matrix_dm_rooms[user]
     try:
-        dm_data = await matrix_bot_instance.client.get_account_data("m.direct")
+        # Use get_account_data_event here as well.
+        dm_data = await matrix_bot_instance.client.get_account_data_event("m.direct")
         if dm_data and hasattr(dm_data, "content"):
             content = dm_data.content
             if user in content and content[user]:
@@ -88,7 +90,8 @@ async def get_dm_room(user):
         logging.error(f"Error retrieving m.direct for DM: {e}")
     
     try:
-        response = await matrix_bot_instance.client.create_room(
+        # Use room_create instead of create_room
+        response = await matrix_bot_instance.client.room_create(
             invite=[user],
             is_direct=True,
             preset="trusted_private_chat"
@@ -161,7 +164,6 @@ class MatrixBot:
                         display_name = room
                     matrix_room_names[room] = display_name
                     logging.info(f"Joined Matrix room: {room} (Display name: {display_name})")
-                    # Announcement removed: The bot will no longer send an announcement upon joining.
                 else:
                     logging.error(f"Error joining room {room}: {response}")
             except Exception as e:
@@ -216,56 +218,24 @@ class MatrixBot:
 
     async def sync_forever(self):
         while True:
-            await self.client.sync(timeout=30000)
+            try:
+                await self.client.sync(timeout=30000)
+            except Exception as e:
+                logging.error(f"Matrix sync error: {e}")
             await asyncio.sleep(1)
-
-    async def run(self):
-        feed.load_feeds()
-        users.load_users()
-        logging.info(f"Loaded feeds: {feed.channel_feeds}")
-        await self.login()
-        await self.join_rooms()
-        await self.initial_sync()
-        await self.sync_forever()
-
-def send_matrix_message(room, message):
-    global matrix_bot_instance, matrix_event_loop
-    if matrix_bot_instance is None:
-        logging.error("Matrix bot instance not initialized.")
-        return
-    if matrix_event_loop is None:
-        logging.error("Matrix event loop not available.")
-        return
-    matrix_event_loop.call_soon_threadsafe(
-        lambda: asyncio.ensure_future(matrix_bot_instance.send_message(room, message), loop=matrix_event_loop)
-    )
-
-# Export send_matrix_message for compatibility
-send_message = send_matrix_message
 
 def start_matrix_bot():
     global matrix_bot_instance, matrix_event_loop
-    loop = asyncio.new_event_loop()
-    matrix_event_loop = loop
-    asyncio.set_event_loop(loop)
-    logging.info("Starting Matrix integration...")
-    from channels import load_channels
-    channels_data = load_channels()
-    matrix_channels = channels_data.get("matrix_channels", [])
-    bot_instance = MatrixBot(matrix_homeserver, matrix_user, matrix_password)
-    matrix_bot_instance = bot_instance
-    for room in matrix_channels:
-        if room not in feed.channel_feeds:
-            feed.channel_feeds[room] = {}
+    matrix_event_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(matrix_event_loop)
+    matrix_bot_instance = MatrixBot(matrix_homeserver, matrix_user, matrix_password)
     try:
-        loop.create_task(bot_instance.run())
-        loop.run_forever()
+        matrix_event_loop.run_until_complete(matrix_bot_instance.login())
+        matrix_event_loop.run_until_complete(matrix_bot_instance.join_rooms())
+        matrix_event_loop.run_until_complete(matrix_bot_instance.initial_sync())
+        # Start the sync loop in the background.
+        matrix_event_loop.create_task(matrix_bot_instance.sync_forever())
+        matrix_event_loop.run_forever()
     except Exception as e:
-        logging.error(f"Matrix integration error: {e}")
-
-def disable_feed_loop():
-    pass
-
-if __name__ == "__main__":
-    start_matrix_bot()
-
+        logging.error(f"Matrix bot error: {e}")
+        matrix_event_loop.stop()
