@@ -220,13 +220,16 @@ def start_polling_callbacks():
     def irc_send(ch, msg):
         irc_send_callback(ch, msg)
     def matrix_send(ch, msg):
-        # For Matrix public messages, we assume using send_matrix_dm as a placeholder.
+        # Use Matrix send function for public messages (if applicable)
         send_matrix_dm(ch, msg)
     def discord_send(ch, msg):
         send_discord_message(ch, msg)
     def private_send(user, msg):
-        # For private messages, we route via IRC send callback if applicable.
-        irc_send_callback(user, msg)
+        # Check if the user is a Matrix user (IDs usually start with "@" or contain a colon)
+        if user.startswith("@") or ":" in user:
+            send_matrix_dm(user, msg)
+        else:
+            irc_send_callback(user, msg)
     
     # Start centralized polling in a daemon thread with a 5-minute (300 sec) interval.
     threading.Thread(target=lambda: centralized_polling.start_polling(irc_send, matrix_send, discord_send, private_send, 300),
