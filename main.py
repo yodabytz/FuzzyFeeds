@@ -75,6 +75,8 @@ import os
 from dashboard import app
 from connection_state import connection_status, connection_lock
 
+import channels  # Ensure channels module is imported
+
 irc_client = None
 irc_secondary = {}
 
@@ -86,18 +88,23 @@ def start_dashboard():
 def start_primary_irc():
     global irc_client
     logging.info("Starting primary IRC thread")
+    # Load IRC channels from channels.json via the channels module instead of config_channels
+    channels_data = channels.load_channels()
+    irc_channels = channels_data.get("irc_channels", [])
     while True:
         try:
-            logging.info(f"Connecting to primary IRC server {default_irc_server}...")
+            logging.info(f"Connecting to primary IRC server {default_irc_server} for channels: {irc_channels}")
             irc_client = connect_and_register()
             if irc_client:
                 set_irc_client(irc_client)
                 with connection_lock:
                     connection_status["primary"][default_irc_server] = True
-                for ch in config_channels:
+                # Register each channel using the composite key (server|channel) and join each channel explicitly.
+                for ch in irc_channels:
                     composite = f"{default_irc_server}|{ch}"
                     irc_secondary[composite] = irc_client
-                logging.info(f"Primary IRC connected; channels: {config_channels}")
+                    irc_client.send(f"JOIN {ch}\r\n".encode("utf-8"))
+                logging.info(f"Primary IRC connected; channels joined: {irc_channels}")
                 parser_thread = threading.Thread(target=irc_command_parser, args=(irc_client,), daemon=True)
                 parser_thread.start()
                 parser_thread.join()  # Wait for disconnect
@@ -219,41 +226,13 @@ if __name__ == "__main__":
         threading.Thread(target=start_primary_irc, daemon=True).start()
         # Start all secondary IRC networks in background threads
         threading.Thread(target=start_secondary_irc_networks, daemon=True).start()
-
-        # Give the IRC connections some time to establish before feed polling
-        time.sleep(10)
-        logging.info("Delaying feed polling for 5 seconds to ensure secondary networks connect.")
-
-        # Now start the feed polling
-        matrix_callback = None
-        if enable_matrix:
-            from matrix_integration import send_message as matrix_send_message
-            matrix_callback = lambda room, msg: matrix_send_message(room, msg)
-
-        discord_callback = send_discord_message if enable_discord else None
-
-        threading.Thread(target=centralized_polling.start_polling, args=(
-            irc_send_callback,
-            matrix_callback,
-            discord_callback,
-            300
-        ), daemon=True).start()
-
-        # Start Matrix if enabled
+        # Start Matrix and Discord integrations in separate threads if enabled
         if enable_matrix:
             threading.Thread(target=start_matrix, daemon=True).start()
-
-        # Start Discord if enabled
         if enable_discord:
             threading.Thread(target=start_discord, daemon=True).start()
 
-        # Finally, start the dashboard in the main thread or another daemon
-        threading.Thread(target=start_dashboard, daemon=True).start()
-
-        logging.info("All threads launched, entering main loop")
-        while True:
-            time.sleep(1)
+        # Start the dashboard
+        start_dashboard()
     except Exception as e:
-        logging.error(f"Main script failed: {e}")
-        raise
-
+        logging.error(f"Main script error: {e}")
