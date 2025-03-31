@@ -75,7 +75,7 @@ import os
 from dashboard import app
 from connection_state import connection_status, connection_lock
 
-import channels  # Import the channels module
+import channels  # Import channels module to load channels from channels.json
 
 irc_client = None
 irc_secondary = {}
@@ -160,6 +160,11 @@ def manage_secondary_network(network_name, net_info):
                 logging.info(f"[{network_name}] Connection to {srv}:{prt} lost, retrying...")
                 with connection_lock:
                     connection_status["secondary"][srv] = False
+                # Clean up composite keys for this network
+                for ch in channels_list:
+                    composite = f"{srv}|{ch}"
+                    if composite in irc_secondary:
+                        del irc_secondary[composite]
             else:
                 logging.error(f"[{network_name}] Connection failed")
                 with connection_lock:
@@ -224,15 +229,12 @@ def start_polling_callbacks():
     def discord_send(ch, msg):
         send_discord_message(ch, msg)
     def private_send(user, msg):
-        # Revert to the original behavior: send private messages via the IRC callback
+        # Revert to original behavior: route private messages via IRC callback only.
         irc_send_callback(user, msg)
     
     # Start centralized polling in a daemon thread with a 5-minute (300 sec) interval.
-    threading.Thread(
-        target=lambda: centralized_polling.start_polling(irc_send, matrix_send, discord_send, private_send, 300),
-        daemon=True
-    ).start()
-
+    threading.Thread(target=lambda: centralized_polling.start_polling(irc_send, matrix_send, discord_send, private_send, 300),
+                     daemon=True).start()
 
 if __name__ == "__main__":
     logging.info("Main script starting")
