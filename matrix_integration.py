@@ -9,9 +9,7 @@ import datetime
 import feedparser
 import os
 
-# Import the nio AsyncClient and RoomMessageText from nio
 from nio import AsyncClient, RoomMessageText
-
 from config import (
     matrix_homeserver, matrix_user, matrix_password,
     admins, admin as config_admin, admin_file, start_time
@@ -36,7 +34,7 @@ matrix_dm_rooms = {}
 # ------------------ DM Helper Functions ------------------
 
 async def send_matrix_dm_async(user, message):
-    """Asynchronously send a direct message to the given user."""
+    """Asynchronously send a DM message to the given user."""
     room_id = await get_dm_room(user)
     if room_id:
         try:
@@ -61,9 +59,9 @@ def send_matrix_dm(user, message):
 
 async def update_direct_messages(room_id, user):
     try:
-        # Use the correct API call: get_account_data (not get_account_data_event)
-        current = await matrix_bot_instance.client.get_account_data("m.direct")
-        dm_content = current.content if current and hasattr(current, "content") else {}
+        # Use get_account_data (not get_account_data_event)
+        dm_data = await matrix_bot_instance.client.get_account_data("m.direct")
+        dm_content = dm_data.content if dm_data and hasattr(dm_data, "content") else {}
     except Exception as e:
         logging.error(f"Error retrieving m.direct for DM: {e}")
         dm_content = {}
@@ -82,7 +80,7 @@ async def get_dm_room(user):
     if user in matrix_dm_rooms:
         return matrix_dm_rooms[user]
     try:
-        # Use get_account_data to retrieve DM room mappings
+        # Correctly call get_account_data
         dm_data = await matrix_bot_instance.client.get_account_data("m.direct")
         if dm_data and hasattr(dm_data, "content"):
             content = dm_data.content
@@ -95,13 +93,12 @@ async def get_dm_room(user):
         logging.error(f"Error retrieving m.direct for DM: {e}")
     
     try:
-        # Create a DM room using the proper API call and extract room_id correctly
+        # Create a DM room and extract room_id correctly
         response = await matrix_bot_instance.client.create_room(
             invite=[user],
             is_direct=True,
             preset="trusted_private_chat"
         )
-        # Handle response type: if dict, extract room_id; otherwise, assume it's the room_id string.
         if isinstance(response, dict):
             room_id = response.get("room_id", None)
         else:
@@ -152,7 +149,7 @@ class MatrixBot:
                 if hasattr(response, "room_id"):
                     try:
                         state = await self.client.room_get_state_event(room, "m.room.name", "")
-                        display_name = state.content.get("name", room) if hasattr(state, 'content') else room
+                        display_name = state.content.get("name", room) if hasattr(state, 'content') else room 
                     except Exception as e:
                         logging.warning(f"Could not fetch display name for {room}: {e}")
                         display_name = room
@@ -179,7 +176,6 @@ class MatrixBot:
             logging.info(f"Ignoring old message in {room_key}: {command}")
             return
         logging.info(f"Processing command `{cmd}` from `{sender}` in `{room_key}`.")
-        # Define helper functions for sending messages within Matrix context
         def matrix_send(target, msg):
             asyncio.create_task(self.send_message(target, msg))
         def matrix_send_private(user_, msg):
@@ -220,6 +216,11 @@ class MatrixBot:
                 logging.error(f"Matrix sync error: {e}")
             await asyncio.sleep(1)
 
+def get_localpart(matrix_id):
+    if matrix_id.startswith("@"):
+        return matrix_id.split(":", 1)[0].lstrip("@")
+    return matrix_id
+
 def start_matrix_bot():
     global matrix_bot_instance, matrix_event_loop
     matrix_event_loop = asyncio.new_event_loop()
@@ -236,7 +237,4 @@ def start_matrix_bot():
         logging.error(f"Matrix bot failed to start: {e}")
         matrix_event_loop.stop()
 
-def get_localpart(matrix_id):
-    if matrix_id.startswith("@"):
-        return matrix_id.split(":", 1)[0].lstrip("@")
-    return matrix_id
+# End of file
