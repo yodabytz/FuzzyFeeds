@@ -39,7 +39,9 @@ def parse_with_custom_user_agent(url):
         logging.error(f"[feed.py] Feed returned {resp.status_code}: {resp.text[:200]}")
         return feedparser.FeedParserDict()
 
-    return feedparser.parse(resp.text)
+    # Strip any leading whitespace or BOM from the response text
+    text = resp.text.lstrip()
+    return feedparser.parse(text)
 
 def load_feeds():
     global channels, channel_feeds, channel_intervals, last_check_times
