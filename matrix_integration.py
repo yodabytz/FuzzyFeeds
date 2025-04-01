@@ -9,7 +9,9 @@ import datetime
 import feedparser
 import os
 
+# Import AsyncClient and RoomMessageText from nio.
 from nio import AsyncClient, RoomMessageText
+
 from config import (
     matrix_homeserver, matrix_user, matrix_password,
     admins, admin as config_admin, admin_file, start_time
@@ -34,7 +36,7 @@ matrix_dm_rooms = {}
 # ------------------ DM Helper Functions ------------------
 
 async def send_matrix_dm_async(user, message):
-    """Asynchronously send a DM message to the given user."""
+    """Asynchronously send a direct message to the given user."""
     room_id = await get_dm_room(user)
     if room_id:
         try:
@@ -59,8 +61,8 @@ def send_matrix_dm(user, message):
 
 async def update_direct_messages(room_id, user):
     try:
-        # Use get_account_data (not get_account_data_event)
-        dm_data = await matrix_bot_instance.client.get_account_data("m.direct")
+        # Use account_data_get (instead of a non-existent get_account_data) to retrieve DM mappings.
+        dm_data = await matrix_bot_instance.client.account_data_get("m.direct")
         dm_content = dm_data.content if dm_data and hasattr(dm_data, "content") else {}
     except Exception as e:
         logging.error(f"Error retrieving m.direct for DM: {e}")
@@ -80,8 +82,8 @@ async def get_dm_room(user):
     if user in matrix_dm_rooms:
         return matrix_dm_rooms[user]
     try:
-        # Correctly call get_account_data
-        dm_data = await matrix_bot_instance.client.get_account_data("m.direct")
+        # Use account_data_get to retrieve DM room mappings.
+        dm_data = await matrix_bot_instance.client.account_data_get("m.direct")
         if dm_data and hasattr(dm_data, "content"):
             content = dm_data.content
             if user in content and content[user]:
@@ -93,12 +95,13 @@ async def get_dm_room(user):
         logging.error(f"Error retrieving m.direct for DM: {e}")
     
     try:
-        # Create a DM room and extract room_id correctly
-        response = await matrix_bot_instance.client.create_room(
+        # Create a DM room using room_create (the correct method in your version).
+        response = await matrix_bot_instance.client.room_create(
             invite=[user],
             is_direct=True,
             preset="trusted_private_chat"
         )
+        # The response may be a dict—extract the room_id accordingly.
         if isinstance(response, dict):
             room_id = response.get("room_id", None)
         else:
@@ -149,7 +152,7 @@ class MatrixBot:
                 if hasattr(response, "room_id"):
                     try:
                         state = await self.client.room_get_state_event(room, "m.room.name", "")
-                        display_name = state.content.get("name", room) if hasattr(state, 'content') else room 
+                        display_name = state.content.get("name", room) if hasattr(state, 'content') else room
                     except Exception as e:
                         logging.warning(f"Could not fetch display name for {room}: {e}")
                         display_name = room
@@ -237,4 +240,4 @@ def start_matrix_bot():
         logging.error(f"Matrix bot failed to start: {e}")
         matrix_event_loop.stop()
 
-# End of file
+# End of matrix_integration.py
