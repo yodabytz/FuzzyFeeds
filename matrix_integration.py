@@ -77,8 +77,8 @@ async def get_dm_room(user):
     if user in matrix_dm_rooms:
         return matrix_dm_rooms[user]
     try:
-        # Use get_account_data_event here as well.
-        dm_data = await matrix_bot_instance.client.get_account_data_event("m.direct")
+        # Correct the method name to get_account_data
+        dm_data = await matrix_bot_instance.client.get_account_data("m.direct")
         if dm_data and hasattr(dm_data, "content"):
             content = dm_data.content
             if user in content and content[user]:
@@ -88,6 +88,35 @@ async def get_dm_room(user):
                 return room_id
     except Exception as e:
         logging.error(f"Error retrieving m.direct for DM: {e}")
+    
+    try:
+        # Create a new DM room; extract the room_id correctly from the response
+        response = await matrix_bot_instance.client.create_room(
+            invite=[user],
+            is_direct=True,
+            preset="trusted_private_chat"
+        )
+        # The response might be a dict or a string; handle both cases:
+        if isinstance(response, dict):
+            room_id = response.get("room_id", None)
+        else:
+            room_id = response
+        if room_id and isinstance(room_id, str) and room_id.startswith("!"):
+            matrix_dm_rooms[user] = room_id
+            logging.info(f"Created DM room for {user}: {room_id}")
+            try:
+                await matrix_bot_instance.client.room_set_encryption(room_id, algorithm="m.megolm.v1.aes-sha2")
+                logging.info(f"Enabled encryption in DM room {room_id}")
+            except Exception as e:
+                logging.error(f"Failed to enable encryption in DM room {room_id}: {e}")
+            await update_direct_messages(room_id, user)
+            return room_id
+        else:
+            logging.error(f"Failed to create DM room for {user}: {response}")
+            return None
+    except Exception as e:
+        logging.error(f"Exception creating DM room for {user}: {e}")
+        return None
     
     try:
         # Use room_create instead of create_room
