@@ -45,6 +45,13 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
         if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
             feed.last_check_times = {}
         for chan in channels_to_check:
+            # If the channel key is composite (server|channel), get the channel part.
+            channel_part = chan.split("|")[-1]
+            # Only process channels that are public (start with '#' for IRC, '!' for Matrix, or are digits for Discord).
+            if not (channel_part.startswith("#") or channel_part.startswith("!") or channel_part.isdigit()):
+                logging.info(f"Channel {chan} is not public (likely a DM), skipping polling.")
+                continue
+
             feed.last_check_times.setdefault(chan, script_start_time)
             feeds_to_check = feed.channel_feeds.get(chan)
             if not feeds_to_check:
@@ -114,11 +121,8 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
         for user in feed.subscriptions:
             feed.last_check_subs[user] = {}
 
-        # Process subscription feeds with proper private_send callback usage
+        # Process subscription feeds
         for user, subs in feed.subscriptions.items():
-            # Ensure each user's last-check record is a dictionary
-            if user not in feed.last_check_subs or not isinstance(feed.last_check_subs[user], dict):
-                feed.last_check_subs[user] = {}
             for sub_name, sub_url in subs.items():
                 try:
                     last_check_sub = feed.last_check_subs[user].get(sub_name, script_start_time)
