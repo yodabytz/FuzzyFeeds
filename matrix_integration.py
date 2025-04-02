@@ -9,7 +9,6 @@ import datetime
 import feedparser
 import os
 
-# Import AsyncClient and RoomMessageText from nio.
 from nio import AsyncClient, RoomMessageText
 
 from config import (
@@ -61,8 +60,8 @@ def send_matrix_dm(user, message):
 
 async def update_direct_messages(room_id, user):
     try:
-        # Use account_data_get (instead of a non-existent get_account_data) to retrieve DM mappings.
-        dm_data = await matrix_bot_instance.client.account_data_get("m.direct")
+        # Use get_account_data (the proper API call) to retrieve DM mappings.
+        dm_data = await matrix_bot_instance.client.get_account_data("m.direct")
         dm_content = dm_data.content if dm_data and hasattr(dm_data, "content") else {}
     except Exception as e:
         logging.error(f"Error retrieving m.direct for DM: {e}")
@@ -82,8 +81,8 @@ async def get_dm_room(user):
     if user in matrix_dm_rooms:
         return matrix_dm_rooms[user]
     try:
-        # Use account_data_get to retrieve DM room mappings.
-        dm_data = await matrix_bot_instance.client.account_data_get("m.direct")
+        # Retrieve the DM mapping using the correct API call.
+        dm_data = await matrix_bot_instance.client.get_account_data("m.direct")
         if dm_data and hasattr(dm_data, "content"):
             content = dm_data.content
             if user in content and content[user]:
@@ -95,17 +94,14 @@ async def get_dm_room(user):
         logging.error(f"Error retrieving m.direct for DM: {e}")
     
     try:
-        # Create a DM room using room_create (the correct method in your version).
-        response = await matrix_bot_instance.client.room_create(
+        # Create a new DM room using create_room
+        response = await matrix_bot_instance.client.create_room(
             invite=[user],
             is_direct=True,
             preset="trusted_private_chat"
         )
-        # The response may be a dict—extract the room_id accordingly.
-        if isinstance(response, dict):
-            room_id = response.get("room_id", None)
-        else:
-            room_id = response
+        # Extract room_id from the response; Matrix‑nio returns a response object with a room_id attribute.
+        room_id = response.room_id if hasattr(response, "room_id") else None
         if room_id and isinstance(room_id, str) and room_id.startswith("!"):
             matrix_dm_rooms[user] = room_id
             logging.info(f"Created DM room for {user}: {room_id}")
