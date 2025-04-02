@@ -27,27 +27,25 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
     This function runs an infinite loop checking:
       1. Channel feeds (in feed.channel_feeds) – posting Title then Link to the appropriate integration.
       2. Subscription feeds (in feed.subscriptions) – for each user, if a new entry is found, it is sent privately.
-    
+
     The private_send callback should take two arguments: (user, message).
     """
     # Force reinitialize last_check_subs to a dict if it's not already one.
     if not isinstance(getattr(feed, 'last_check_subs', None), dict):
         feed.last_check_subs = {}
-        
+
     logging.info("Centralized polling started.")
     while True:
         feed.load_feeds()
         current_time = time.time()
         channels_to_check = list(feed.channel_feeds.keys())
         logging.info(f"Checking {len(channels_to_check)} channels for new feeds: {channels_to_check}")
-        
+
         # Process channel feeds
         if not hasattr(feed, 'last_check_times') or feed.last_check_times is None:
             feed.last_check_times = {}
         for chan in channels_to_check:
-            # If the channel key is composite (server|channel), get the channel part.
             channel_part = chan.split("|")[-1]
-            # Only process channels that are public (start with '#' for IRC, '!' for Matrix, or are digits for Discord).
             if not (channel_part.startswith("#") or channel_part.startswith("!") or channel_part.isdigit()):
                 logging.info(f"Channel {chan} is not public (likely a DM), skipping polling.")
                 continue
@@ -57,14 +55,14 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
             if not feeds_to_check:
                 logging.warning(f"No feed dictionary found for channel {chan}; skipping.")
                 continue
-                
+
             interval = feed.channel_intervals.get(chan, default_interval)
             last_check = feed.last_check_times.get(chan, script_start_time)
             logging.info(
                 f"Channel {chan}: Last check at {datetime.datetime.fromtimestamp(last_check)}, "
                 f"current time {datetime.datetime.fromtimestamp(current_time)}, interval {interval}s"
             )
-            
+
             if current_time - last_check >= interval:
                 new_feed_count = 0
                 for feed_name, feed_url in feeds_to_check.items():
@@ -86,9 +84,9 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
                         if published_time is not None and published_time <= last_check:
                             logging.info(f"Skipping entry from feed '{feed_name}' published at {datetime.datetime.fromtimestamp(published_time)} (last check was {datetime.datetime.fromtimestamp(last_check)}).")
                             continue
-                        
+
                         logging.info(f"Feed '{feed_name}' data - Title: {entry.get('title')}, Link: {entry.get('link')}")
-                        
+
                         title = entry.title.strip() if entry.get("title") else "No Title"
                         link = entry.link.strip() if entry.get("link") else ""
                         if link and feed.is_link_posted(chan, link):
@@ -117,12 +115,15 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, poll_interv
                     logging.info(f"No new feeds found in {chan}.")
                 feed.last_check_times[chan] = current_time
 
-        # Before processing subscriptions, unconditionally reset each user's last-check record.
         for user in feed.subscriptions:
             feed.last_check_subs[user] = {}
 
         # Process subscription feeds
         for user, subs in feed.subscriptions.items():
+            if user.startswith("@") and ":matrix." in user:
+                logging.info(f"Skipping subscription feed delivery for Matrix user {user}")
+                continue
+
             for sub_name, sub_url in subs.items():
                 try:
                     last_check_sub = feed.last_check_subs[user].get(sub_name, script_start_time)
