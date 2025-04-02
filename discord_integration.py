@@ -4,22 +4,24 @@ import logging
 import json
 import asyncio
 from discord.ext import commands
-from config import discord_token, discord_channel_id, admin, admins
-from commands import handle_centralized_command, search_feeds
+from config import discord_token, admin, admins
+from commands import handle_centralized_command
 import feed
-import time
-import datetime
-import config
 
 logging.basicConfig(level=logging.INFO)
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.guilds = True
+intents.messages = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
-# Global flag to disable internal feed loop since centralized polling is used
+# Disable internal feed loop
 feed_loop_enabled = False
+
+# Global queue for sending messages with enforced delay
+message_queue = asyncio.Queue()
 
 def disable_feed_loop():
     global feed_loop_enabled
@@ -38,10 +40,11 @@ help_data = load_help_data()
 @bot.event
 async def on_ready():
     logging.info(f"Discord bot is ready as {bot.user}")
+    bot.loop.create_task(message_sender_loop())
 
 @bot.event
 async def on_message(message):
-    if message.author == bot.user:
+    if message.author.bot:
         return
 
     if message.content.startswith("!"):
@@ -49,84 +52,67 @@ async def on_message(message):
         target = str(message.channel.id)
         message_text = message.content
 
-        def send_msg(tgt, msg):
-            asyncio.create_task(message.channel.send(msg))
+        async def send_msg(tgt, msg):
+            await message_queue.put((message.channel, msg))
 
-        def send_priv(user, msg):
-            asyncio.create_task(message.author.send(msg))
+        async def send_priv(user, msg):
+            try:
+                await message_queue.put((message.author, msg))
+            except:
+                await message_queue.put((message.channel, "(Unable to send DM.)"))
 
-        def send_multiline(tgt, msg):
-            for line in msg.split("\n"):
-                asyncio.create_task(message.channel.send(line))
+        async def send_multiline(tgt, msg):
+            MAX_CHARS = 1900
+            lines = [line for line in msg.split("\n") if line.strip()]
+            buffer = "```"
+            for line in lines:
+                if len(buffer) + len(line) + 1 > MAX_CHARS:
+                    buffer += "```"
+                    await message_queue.put((message.channel, buffer))
+                    buffer = "```" + "\n" + line
+                else:
+                    buffer += "\n" + line
+            buffer += "```"
+            if buffer.strip() != "```":
+                await message_queue.put((message.channel, buffer))
 
         is_op_flag = sender.lower() in [a.lower() for a in admins] or sender.lower() == admin.lower()
 
         handle_centralized_command(
             "discord",
-            send_msg,
-            send_priv,
-            send_multiline,
+            lambda tgt, msg: asyncio.create_task(send_msg(tgt, msg)),
+            lambda usr, msg: asyncio.create_task(send_priv(usr, msg)),
+            lambda tgt, msg: asyncio.create_task(send_multiline(tgt, msg)),
             sender,
             target,
             message_text,
             is_op_flag
         )
 
-    await bot.process_commands(message)
+async def message_sender_loop():
+    while True:
+        target, msg = await message_queue.get()
+        try:
+            await target.send(msg)
+            await asyncio.sleep(1.5)  # spacing between messages to avoid 429
+        except Exception as e:
+            logging.error(f"Error sending message: {e}")
+        message_queue.task_done()
 
 def register_commands():
-    for cmd, desc in help_data.items():
-        if cmd.lower() == "help":
+    for cmd, desc in help_data.get("USER", {}).items():
+        if cmd.lower() in ("help", "listfeeds", "stats", "search"):
             continue
 
         @bot.command(name=cmd)
         async def dynamic_command(ctx, *args, cmd=cmd):
             full_command = f"{cmd} {' '.join(args)}".strip()
-
-            if cmd == "search":
-                if not args:
-                    await ctx.send("Usage: `!search <query>` - Search for feeds matching a query.")
-                    return
-                query = " ".join(args)
-                results = search_feeds(query)
-                if not results:
-                    await ctx.send(f"No results found for `{query}`.")
-                else:
-                    response = "\n".join([f"`{title}` - {url}" for title, url in results])
-                    await ctx.send(f"**Search results for `{query}`:**\n{response}")
-                return
-
-            if cmd == "addfeed":
-                if len(args) < 2:
-                    await ctx.send("Usage: `!addfeed <feed_name> <URL>`")
-                    return
-                feed_name, feed_url = args[0], args[1]
-                channel_id = str(ctx.channel.id)
-                if channel_id not in feed.channel_feeds:
-                    feed.channel_feeds[channel_id] = {}
-                feed.channel_feeds[channel_id][feed_name] = feed_url
-                feed.save_feeds()
-                await ctx.send(f"Feed added: `{feed_name}` - {feed_url}")
-                return
-
-            if cmd == "delfeed":
-                if len(args) < 1:
-                    await ctx.send("Usage: `!delfeed <feed_name>`")
-                    return
-                feed_name = args[0]
-                channel_id = str(ctx.channel.id)
-                if channel_id not in feed.channel_feeds or feed_name not in feed.channel_feeds[channel_id]:
-                    await ctx.send(f"No feed found with name `{feed_name}`.")
-                    return
-                del feed.channel_feeds[channel_id][feed_name]
-                feed.save_feeds()
-                await ctx.send(f"Feed `{feed_name}` removed successfully.")
-                return
+            await message_queue.put((ctx.channel, f"Command `{full_command}` received (placeholder logic)."))
 
 def send_discord_message(channel_id, message):
     channel = bot.get_channel(int(channel_id))
     if channel:
-        asyncio.run_coroutine_threadsafe(channel.send(message), bot.loop)
+        asyncio.run_coroutine_threadsafe(message_queue.put((channel, message)), bot.loop)
     else:
         logging.warning(f"Discord channel {channel_id} not found for message: {message}")
 
