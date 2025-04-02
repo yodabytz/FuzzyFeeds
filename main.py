@@ -23,7 +23,7 @@ except Exception as e:
     raise
 
 try:
-    from matrix_integration import start_matrix_bot, disable_feed_loop as disable_matrix_feed_loop, send_matrix_dm
+    from matrix_integration import start_matrix_bot, disable_feed_loop as disable_matrix_feed_loop, send_message as send_matrix_message
     logging.info("Imported matrix_integration successfully")
 except Exception as e:
     logging.error(f"Failed to import matrix_integration: {e}")
@@ -75,7 +75,7 @@ import os
 from dashboard import app
 from connection_state import connection_status, connection_lock
 
-import channels  # Import channels module to load channels from channels.json
+import channels
 
 irc_client = None
 irc_secondary = {}
@@ -88,7 +88,6 @@ def start_dashboard():
 def start_primary_irc():
     global irc_client
     logging.info("Starting primary IRC thread")
-    # Load IRC channels from channels.json via the channels module instead of using config_channels
     channels_data = channels.load_channels()
     irc_channels = channels_data.get("irc_channels", [])
     while True:
@@ -99,7 +98,6 @@ def start_primary_irc():
                 set_irc_client(irc_client)
                 with connection_lock:
                     connection_status["primary"][default_irc_server] = True
-                # Register each channel using the composite key (server|channel) and join explicitly.
                 for ch in irc_channels:
                     composite = f"{default_irc_server}|{ch}"
                     irc_secondary[composite] = irc_client
@@ -107,7 +105,7 @@ def start_primary_irc():
                 logging.info(f"Primary IRC connected; channels joined: {irc_channels}")
                 parser_thread = threading.Thread(target=irc_command_parser, args=(irc_client,), daemon=True)
                 parser_thread.start()
-                parser_thread.join()  # Wait for disconnect
+                parser_thread.join()
                 logging.info(f"Primary IRC connection to {default_irc_server} lost, retrying...")
                 with connection_lock:
                     connection_status["primary"][default_irc_server] = False
@@ -156,11 +154,10 @@ def manage_secondary_network(network_name, net_info):
                     if target.startswith("#"):
                         send_multiline_message(client, target, msg)
                     message_queue.task_done()
-                parser_thread.join()  # Wait for disconnect
+                parser_thread.join()
                 logging.info(f"[{network_name}] Connection to {srv}:{prt} lost, retrying...")
                 with connection_lock:
                     connection_status["secondary"][srv] = False
-                # Clean up composite keys for this network
                 for ch in channels_list:
                     composite = f"{srv}|{ch}"
                     if composite in irc_secondary:
@@ -219,20 +216,16 @@ def irc_send_callback(channel, message):
         logging.error(f"No IRC connection for composite key: {composite}, queuing message")
         message_queue.put((actual_channel, message))
 
-# --- Start centralized polling for feeds ---
 def start_polling_callbacks():
-    # Define simple wrapper functions for each integration:
     def irc_send(ch, msg):
         irc_send_callback(ch, msg)
     def matrix_send(ch, msg):
-        send_matrix_dm(ch, msg)
+        send_matrix_message(ch, msg)
     def discord_send(ch, msg):
         send_discord_message(ch, msg)
     def private_send(user, msg):
-        # Revert to original behavior: route private messages via IRC callback only.
         irc_send_callback(user, msg)
-    
-    # Start centralized polling in a daemon thread with a 5-minute (300 sec) interval.
+
     threading.Thread(target=lambda: centralized_polling.start_polling(irc_send, matrix_send, discord_send, private_send, 300),
                      daemon=True).start()
 
@@ -244,18 +237,13 @@ if __name__ == "__main__":
         disable_discord_feed_loop()
         logging.info("Disabled Discord feed loop")
 
-        # Start the primary IRC in a background thread
         threading.Thread(target=start_primary_irc, daemon=True).start()
-        # Start all secondary IRC networks in background threads
         threading.Thread(target=start_secondary_irc_networks, daemon=True).start()
-        # Start Matrix and Discord integrations in separate threads if enabled
         if enable_matrix:
             threading.Thread(target=start_matrix, daemon=True).start()
         if enable_discord:
             threading.Thread(target=start_discord, daemon=True).start()
-        # Start centralized polling for feeds (with a 5-minute interval)
         start_polling_callbacks()
-        # Start the dashboard
         start_dashboard()
     except Exception as e:
         logging.error(f"Main script error: {e}")
