@@ -9,7 +9,8 @@ import datetime
 import feedparser
 import os
 
-from nio import AsyncClient, LoginResponse, RoomMessageText
+from nio import AsyncClient, RoomMessageText
+
 from config import (
     matrix_homeserver, matrix_user, matrix_password,
     admins, admin as config_admin, admin_file, start_time
@@ -29,37 +30,41 @@ matrix_bot_instance = None
 matrix_event_loop = None
 
 matrix_room_names = {}
-
-def match_feed(feed_dict, pattern):
-    if "*" in pattern or "?" in pattern:
-        matches = [name for name in feed_dict.keys() if fnmatch.fnmatch(name, pattern)]
-        return matches[0] if len(matches) == 1 else (matches if matches else None)
-    return pattern if pattern in feed_dict else None
-
-def get_feeds_for_room(room):
-    feeds = feed.channel_feeds.get(room)
-    if feeds is not None:
-        return feeds
-    norm = room.lstrip("#!").lower()
-    for key, val in feed.channel_feeds.items():
-        if key.lstrip("#!").lower() == norm:
-            return val
-    return {}
-
-def get_localpart(matrix_id):
-    if matrix_id.startswith("@"):
-        return matrix_id.split(":", 1)[0].lstrip("@")
-    return matrix_id
-
-# --- Matrix DM Helper Functions ---
 matrix_dm_rooms = {}
+
+# ------------------ DM Helper Functions ------------------
+
+async def send_matrix_dm_async(user, message):
+    """Asynchronously send a direct message to the given user."""
+    room_id = await get_dm_room(user)
+    if room_id:
+        try:
+            await matrix_bot_instance.client.room_send(
+                room_id,
+                message_type="m.room.message",
+                content={"msgtype": "m.text", "body": message}
+            )
+            logging.info(f"Sent DM to {user} in room {room_id}")
+        except Exception as e:
+            logging.error(f"Failed to send DM to {user} in room {room_id}: {e}")
+
+def send_matrix_dm(user, message):
+    """Schedule an asynchronous DM send."""
+    global matrix_bot_instance, matrix_event_loop
+    if matrix_bot_instance is None or matrix_event_loop is None:
+        logging.error("Matrix bot not properly initialized for DM sending.")
+        return
+    matrix_event_loop.call_soon_threadsafe(
+        lambda: asyncio.ensure_future(send_matrix_dm_async(user, message), loop=matrix_event_loop)
+    )
 
 async def update_direct_messages(room_id, user):
     try:
-        current = await matrix_bot_instance.client.get_account_data("m.direct")
-        dm_content = current.content if current and hasattr(current, "content") else {}
+        # Use account_data_get (the proper method in matrix-nio 0.25.2) to retrieve DM mappings.
+        dm_data = await matrix_bot_instance.client.account_data_get("m.direct")
+        dm_content = dm_data.content if dm_data and hasattr(dm_data, "content") else {}
     except Exception as e:
-        logging.error(f"Error fetching m.direct account data: {e}")
+        logging.error(f"Error retrieving m.direct for DM: {e}")
         dm_content = {}
     if user not in dm_content:
         dm_content[user] = []
@@ -76,7 +81,8 @@ async def get_dm_room(user):
     if user in matrix_dm_rooms:
         return matrix_dm_rooms[user]
     try:
-        dm_data = await matrix_bot_instance.client.get_account_data("m.direct")
+        # Retrieve DM mapping using account_data_get.
+        dm_data = await matrix_bot_instance.client.account_data_get("m.direct")
         if dm_data and hasattr(dm_data, "content"):
             content = dm_data.content
             if user in content and content[user]:
@@ -88,15 +94,15 @@ async def get_dm_room(user):
         logging.error(f"Error retrieving m.direct for DM: {e}")
     
     try:
-        response = await matrix_bot_instance.client.create_room(
+        # Create a new DM room using room_create.
+        response = await matrix_bot_instance.client.room_create(
             invite=[user],
             is_direct=True,
             preset="trusted_private_chat"
         )
-        room_id = getattr(response, "room_id", None)
-        if not room_id and isinstance(response, dict):
-            room_id = response.get("room_id", None)
-        if room_id and room_id.startswith("!"):
+        # Extract the room_id from the response.
+        room_id = response.room_id if hasattr(response, "room_id") else None
+        if room_id and isinstance(room_id, str) and room_id.startswith("!"):
             matrix_dm_rooms[user] = room_id
             logging.info(f"Created DM room for {user}: {room_id}")
             try:
@@ -113,20 +119,7 @@ async def get_dm_room(user):
         logging.error(f"Exception creating DM room for {user}: {e}")
         return None
 
-async def send_matrix_dm_async(user, message):
-    room_id = await get_dm_room(user)
-    if room_id:
-        await matrix_bot_instance.send_message(room_id, message)
-
-def send_matrix_dm(user, message):
-    global matrix_bot_instance, matrix_event_loop
-    if matrix_bot_instance is None or matrix_event_loop is None:
-        logging.error("Matrix bot not properly initialized for DM sending.")
-        return
-    matrix_event_loop.call_soon_threadsafe(
-        lambda: asyncio.ensure_future(send_matrix_dm_async(user, message), loop=matrix_event_loop)
-    )
-# --- End Matrix DM Helper Functions ---
+# ------------------ End DM Helper Functions ------------------
 
 class MatrixBot:
     def __init__(self, homeserver, user, password):
@@ -155,13 +148,12 @@ class MatrixBot:
                 if hasattr(response, "room_id"):
                     try:
                         state = await self.client.room_get_state_event(room, "m.room.name", "")
-                        display_name = state.content.get("name", room) if hasattr(state, 'content') else room 
+                        display_name = state.content.get("name", room) if hasattr(state, 'content') else room
                     except Exception as e:
                         logging.warning(f"Could not fetch display name for {room}: {e}")
                         display_name = room
                     matrix_room_names[room] = display_name
                     logging.info(f"Joined Matrix room: {room} (Display name: {display_name})")
-                    # Announcement removed: The bot will no longer send an announcement upon joining.
                 else:
                     logging.error(f"Error joining room {room}: {response}")
             except Exception as e:
@@ -215,57 +207,33 @@ class MatrixBot:
             logging.error(f"Failed to send message to {room_id}: {e}")
 
     async def sync_forever(self):
+        logging.info("Starting Matrix sync loop...")
         while True:
-            await self.client.sync(timeout=30000)
+            try:
+                await self.client.sync(timeout=30000)
+            except Exception as e:
+                logging.error(f"Matrix sync error: {e}")
             await asyncio.sleep(1)
 
-    async def run(self):
-        feed.load_feeds()
-        users.load_users()
-        logging.info(f"Loaded feeds: {feed.channel_feeds}")
-        await self.login()
-        await self.join_rooms()
-        await self.initial_sync()
-        await self.sync_forever()
-
-def send_matrix_message(room, message):
-    global matrix_bot_instance, matrix_event_loop
-    if matrix_bot_instance is None:
-        logging.error("Matrix bot instance not initialized.")
-        return
-    if matrix_event_loop is None:
-        logging.error("Matrix event loop not available.")
-        return
-    matrix_event_loop.call_soon_threadsafe(
-        lambda: asyncio.ensure_future(matrix_bot_instance.send_message(room, message), loop=matrix_event_loop)
-    )
-
-# Export send_matrix_message for compatibility
-send_message = send_matrix_message
+def get_localpart(matrix_id):
+    if matrix_id.startswith("@"):
+        return matrix_id.split(":", 1)[0].lstrip("@")
+    return matrix_id
 
 def start_matrix_bot():
     global matrix_bot_instance, matrix_event_loop
-    loop = asyncio.new_event_loop()
-    matrix_event_loop = loop
-    asyncio.set_event_loop(loop)
-    logging.info("Starting Matrix integration...")
-    from channels import load_channels
-    channels_data = load_channels()
-    matrix_channels = channels_data.get("matrix_channels", [])
-    bot_instance = MatrixBot(matrix_homeserver, matrix_user, matrix_password)
-    matrix_bot_instance = bot_instance
-    for room in matrix_channels:
-        if room not in feed.channel_feeds:
-            feed.channel_feeds[room] = {}
+    matrix_event_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(matrix_event_loop)
+    matrix_bot_instance = MatrixBot(matrix_homeserver, matrix_user, matrix_password)
     try:
-        loop.create_task(bot_instance.run())
-        loop.run_forever()
+        matrix_event_loop.run_until_complete(matrix_bot_instance.login())
+        matrix_event_loop.run_until_complete(matrix_bot_instance.join_rooms())
+        matrix_event_loop.run_until_complete(matrix_bot_instance.initial_sync())
+        logging.info("Matrix bot started successfully.")
+        matrix_event_loop.create_task(matrix_bot_instance.sync_forever())
+        matrix_event_loop.run_forever()
     except Exception as e:
-        logging.error(f"Matrix integration error: {e}")
+        logging.error(f"Matrix bot failed to start: {e}")
+        matrix_event_loop.stop()
 
-def disable_feed_loop():
-    pass
-
-if __name__ == "__main__":
-    start_matrix_bot()
-
+# End of matrix_integration.py
