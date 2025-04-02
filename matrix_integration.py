@@ -9,7 +9,7 @@ import datetime
 import feedparser
 import os
 
-from nio import AsyncClient, LoginResponse, RoomMessageText
+from nio import AsyncClient, RoomMessageText, LoginResponse
 from config import (
     matrix_homeserver, matrix_user, matrix_password,
     admins, admin as config_admin, admin_file, start_time
@@ -24,10 +24,6 @@ logging.basicConfig(level=logging.INFO)
 
 GRACE_PERIOD = 5
 POSTED_FILE = "matrix_posted.json"
-
-# Global instance and event loop for Matrix integration.
-matrix_bot_instance = None
-matrix_event_loop = None
 
 # --- Per-Room Posted Feeds Storage ---
 def load_posted_articles():
@@ -73,13 +69,14 @@ def get_localpart(matrix_id):
         return matrix_id.split(":", 1)[0].lstrip("@")
     return matrix_id
 
-# --- Matrix DM Helper Functions (no longer used for command responses) ---
+# --- Matrix DM Helper Functions ---
 matrix_dm_rooms = {}
 
 async def update_direct_messages(room_id, user):
     try:
-        current = await matrix_bot_instance.client.get_account_data("m.direct")
-        dm_content = current.content if current and hasattr(current, "content") else {}
+        # Use get_account_data (the correct method in 0.25.2)
+        dm_data = await matrix_bot_instance.client.get_account_data("m.direct")
+        dm_content = dm_data.content if dm_data and hasattr(dm_data, "content") else {}
     except Exception as e:
         logging.error(f"Error fetching m.direct account data: {e}")
         dm_content = {}
@@ -110,14 +107,14 @@ async def get_dm_room(user):
         logging.error(f"Error retrieving m.direct for DM: {e}")
     
     try:
-        response = await matrix_bot_instance.client.create_room(
+        # Create a new DM room using room_create
+        response = await matrix_bot_instance.client.room_create(
             invite=[user],
             is_direct=True,
             preset="trusted_private_chat"
         )
+        # In matrix‑nio 0.25.2, the response contains a room_id attribute.
         room_id = getattr(response, "room_id", None)
-        if not room_id and isinstance(response, dict):
-            room_id = response.get("room_id", None)
         if room_id and room_id.startswith("!"):
             matrix_dm_rooms[user] = room_id
             logging.info(f"Created DM room for {user}: {room_id}")
@@ -138,7 +135,15 @@ async def get_dm_room(user):
 async def send_matrix_dm_async(user, message):
     room_id = await get_dm_room(user)
     if room_id:
-        await matrix_bot_instance.send_message(room_id, message)
+        try:
+            await matrix_bot_instance.client.room_send(
+                room_id,
+                message_type="m.room.message",
+                content={"msgtype": "m.text", "body": message}
+            )
+            logging.info(f"Sent DM to {user} in room {room_id}")
+        except Exception as e:
+            logging.error(f"Failed to send DM to {user} in room {room_id}: {e}")
 
 def send_matrix_dm(user, message):
     global matrix_bot_instance, matrix_event_loop
@@ -227,6 +232,7 @@ class MatrixBot:
             await self.process_command(room, event.body, event.sender)
 
     async def send_message(self, room_id, message):
+        # Check if a "Link:" line is present to avoid reposting
         link = None
         for line in message.splitlines():
             if line.startswith("Link:"):
@@ -252,8 +258,12 @@ class MatrixBot:
             logging.error(f"Failed to send message to {room_id}: {e}")
 
     async def sync_forever(self):
+        logging.info("Starting Matrix sync loop...")
         while True:
-            await self.client.sync(timeout=30000)
+            try:
+                await self.client.sync(timeout=30000)
+            except Exception as e:
+                logging.error(f"Matrix sync error: {e}")
             await asyncio.sleep(1)
 
     async def run(self):
@@ -273,7 +283,6 @@ def send_matrix_message(room, message):
     if matrix_event_loop is None:
         logging.error("Matrix event loop not available.")
         return
-    # Schedule the sending coroutine on the global matrix_event_loop.
     matrix_event_loop.call_soon_threadsafe(
         lambda: asyncio.ensure_future(matrix_bot_instance.send_message(room, message), loop=matrix_event_loop)
     )
@@ -284,31 +293,31 @@ send_message = send_matrix_message
 def start_matrix_bot():
     """
     Initializes and runs the Matrix bot.
-    This function now schedules the bot's run() coroutine and then runs the event loop forever.
+    This function schedules the bot's run() coroutine and then runs the event loop forever.
     """
     global matrix_bot_instance, matrix_event_loop
     loop = asyncio.new_event_loop()
     matrix_event_loop = loop
     asyncio.set_event_loop(loop)
     logging.info("Starting Matrix integration...")
-    from channels import load_channels
     channels_data = load_channels()
     matrix_channels = channels_data.get("matrix_channels", [])
-    bot_instance = MatrixBot(matrix_homeserver, matrix_user, matrix_password)
-    matrix_bot_instance = bot_instance
+    # Ensure that each matrix channel has a feed dictionary (even if empty)
     for room in matrix_channels:
         if room not in feed.channel_feeds:
-            feed.channel_feeds[room] = {}  # Start with empty feeds
+            feed.channel_feeds[room] = {}
+    bot_instance = MatrixBot(matrix_homeserver, matrix_user, matrix_password)
+    matrix_bot_instance = bot_instance
     try:
-        # Schedule the bot's run() coroutine and then run the loop forever.
         loop.create_task(bot_instance.run())
         loop.run_forever()
     except Exception as e:
         logging.error(f"Matrix integration error: {e}")
+        loop.stop()
 
 def disable_feed_loop():
+    # No-op function for compatibility.
     pass
 
 if __name__ == "__main__":
     start_matrix_bot()
-
