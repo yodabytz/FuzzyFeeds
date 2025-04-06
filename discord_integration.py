@@ -120,3 +120,4 @@ def run_discord_bot():
     feed.load_feeds()
     register_commands()
     bot.run(discord_token)
+
