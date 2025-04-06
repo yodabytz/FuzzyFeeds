@@ -247,3 +247,4 @@ if __name__ == "__main__":
         start_dashboard()
     except Exception as e:
         logging.error(f"Main script error: {e}")
+
