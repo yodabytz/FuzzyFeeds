@@ -8,7 +8,8 @@ import json
 import datetime
 import threading
 import sys
-import osortlib
+import os
+import importlib
 
 from config import admin, ops, admins, admin_file, server, channels as config_channels
 import feed
@@ -64,7 +65,7 @@ def load_help_data():
         return data
     except Exception as e:
         logging.error("Error loading help.json: %s", e)
-        return {}
+        return {"USER": {}, "OP": {}, "OWNER": {}}
 
 help_data = load_help_data()
 
@@ -150,9 +151,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
     is_admin_flag = (user.lower() == admin.lower())
     effective_op = is_op_flag or (user.lower() in [op.lower() for op in ops]) or is_admin_flag
 
-    # -----------------------------------------------------------------
-    # NEW BLOCK: read admin.json & check if user is channel admin for 'target'
-    # -----------------------------------------------------------------
+    # Read admin.json and check if user is channel admin for target
     try:
         with open(admin_file, "r") as f:
             admin_mapping = json.load(f)
@@ -164,184 +163,71 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
     if channel_admin and user.lower() == channel_admin.lower():
         logging.info(f"User {user} recognized as channel admin for {target}; granting effective_op.")
         effective_op = True
-    # -----------------------------------------------------------------
 
     lower_message = message.lower()
     if integration == "irc":
         key = migrate_plain_key_if_needed(target, integration)
     else:
         key = target
-
     actual_channel = get_actual_channel(target, integration)
 
-    # !addfeed
-    if lower_message.startswith("!addfeed"):
+    # ------------------ SUBSCRIPTION COMMANDS ------------------
+    if lower_message.startswith("!addsub"):
         parts = message.split(" ", 2)
         if len(parts) < 3:
-            send_message_fn(response_target(actual_channel, integration), "Usage: !addfeed <feed_name> <URL>")
+            send_private_message_fn(user, "Usage: !addsub <feed_name> <URL>")
             return
-        feed_name = parts[1].strip()
+        sub_name = parts[1].strip().lower()
         feed_url = parts[2].strip()
-        if key not in feed.channel_feeds:
-            feed.channel_feeds[key] = {}
-        feed.channel_feeds[key][feed_name] = feed_url
-        feed.save_feeds()
-        send_message_fn(response_target(actual_channel, integration), f"Feed added: {feed_name} ({feed_url})")
+        uname = user.lower()
+        if uname not in feed.subscriptions:
+            feed.subscriptions[uname] = {}
+        feed.subscriptions[uname][sub_name] = feed_url
+        feed.save_subscriptions()
+        send_private_message_fn(user, f"Subscribed to feed: {sub_name} ({feed_url})")
 
-    # !delfeed
-    elif lower_message.startswith("!delfeed"):
-        if not effective_op:
-            send_private_message_fn(user, "Not authorized to use !delfeed.")
-            return
+    elif lower_message.startswith("!unsub"):
         parts = message.split(" ", 1)
         if len(parts) < 2:
-            send_message_fn(response_target(actual_channel, integration), "Usage: !delfeed <feed_name or pattern>")
+            send_private_message_fn(user, "Usage: !unsub <feed_name>")
             return
-        pattern = parts[1].strip()
-        if key not in feed.channel_feeds:
-            send_message_fn(response_target(actual_channel, integration), "No feeds found for this channel.")
-            return
-        matched = match_feed(feed.channel_feeds[key], pattern)
-        if matched is None:
-            send_message_fn(response_target(actual_channel, integration), f"No feeds match '{pattern}'.")
-            return
-        if isinstance(matched, list):
-            send_message_fn(response_target(actual_channel, integration), f"Multiple feeds match '{pattern}': {', '.join(matched)}. Please be more specific.")
-            return
-        del feed.channel_feeds[key][matched]
-        feed.save_feeds()
-        send_message_fn(response_target(actual_channel, integration), f"Feed removed: {matched}")
-
-    # !listfeeds
-    elif lower_message.startswith("!listfeeds"):
-        if key in feed.channel_feeds and feed.channel_feeds[key]:
-            lines = [f"{name}: {url}" for name, url in feed.channel_feeds[key].items()]
-            multiline_send(send_multiline_message_fn, response_target(actual_channel, integration), "\n".join(lines))
+        sub_name = parts[1].strip().lower()
+        uname = user.lower()
+        if uname in feed.subscriptions and sub_name in feed.subscriptions[uname]:
+            del feed.subscriptions[uname][sub_name]
+            feed.save_subscriptions()
+            send_private_message_fn(user, f"Unsubscribed from feed: {sub_name}")
         else:
-            send_message_fn(response_target(actual_channel, integration), "No feeds found for this channel.")
+            send_private_message_fn(user, f"Not subscribed to feed '{sub_name}'.")
 
-    # !latest
-    elif lower_message.startswith("!latest"):
-        parts = message.split(" ", 1)
-        if len(parts) < 2:
-            send_message_fn(response_target(actual_channel, integration), "Usage: !latest <feed_name or pattern>")
-            return
-        pattern = parts[1].strip()
-        if key not in feed.channel_feeds:
-            send_message_fn(response_target(actual_channel, integration), "No feeds found for this channel.")
-            return
-        matched = match_feed(feed.channel_feeds[key], pattern)
-        if matched is None:
-            send_message_fn(response_target(actual_channel, integration), f"No feed matches '{pattern}'.")
-            return
-        if isinstance(matched, list):
-            send_message_fn(response_target(actual_channel, integration), f"Multiple feeds match '{pattern}': {', '.join(matched)}. Please be more specific.")
-            return
-        feed_name = matched
-        title, link = feed.fetch_latest_article(feed.channel_feeds[key][feed_name])
-        if title and link:
-            send_message_fn(response_target(actual_channel, integration), f"Latest from {feed_name}: {title}")
-            send_message_fn(response_target(actual_channel, integration), f"Link: {link}")
+    elif lower_message.startswith("!mysubs"):
+        uname = user.lower()
+        if uname in feed.subscriptions and feed.subscriptions[uname]:
+            lines = [f"{k}: {v}" for k, v in feed.subscriptions[uname].items()]
+            multiline_send(send_multiline_message_fn, user, "\n".join(lines))
         else:
-            send_message_fn(response_target(actual_channel, integration), f"No entry available for {feed_name}.")
+            send_private_message_fn(user, "No subscriptions found.")
 
-    # !getfeed
-    elif lower_message.startswith("!getfeed"):
+    # IMPORTANT: !latestsub must be checked before !latest
+    elif lower_message.startswith("!latestsub"):
         parts = message.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
-            send_message_fn(response_target(actual_channel, integration), "Usage: !getfeed <title_or_domain>")
+            send_private_message_fn(user, "Usage: !latestsub <feed_name>")
             return
-        query = parts[1].strip()
-        results = search_feeds(query)
-        if not results:
-            send_message_fn(response_target(actual_channel, integration), "No matching feed found.")
-            return
-        feed_title, feed_url = results[0]
-        title, link = feed.fetch_latest_article(feed_url)
-        if title and link:
-            send_message_fn(response_target(actual_channel, integration), f"Latest from {feed_title}: {title}")
-            send_message_fn(response_target(actual_channel, integration), f"Link: {link}")
-        else:
-            send_message_fn(response_target(actual_channel, integration), f"No entry available for feed {feed_title}.")
-
-    # !getadd
-    elif lower_message.startswith("!getadd"):
-        parts = message.split(" ", 1)
-        if len(parts) < 2 or not parts[1].strip():
-            send_message_fn(response_target(actual_channel, integration), "Usage: !getadd <title_or_domain>")
-            return
-        query = parts[1].strip()
-        results = search_feeds(query)
-        if not results:
-            send_message_fn(response_target(actual_channel, integration), "No matching feed found.")
-            return
-        selected = None
-        for title, url in results:
-            if query.lower() in title.lower():
-                selected = (title, url)
-                break
-        if not selected:
-            selected = results[0]
-        feed_title, feed_url = selected
-        if key not in feed.channel_feeds:
-            feed.channel_feeds[key] = {}
-        feed.channel_feeds[key][feed_title] = feed_url
-        feed.save_feeds()
-        send_message_fn(response_target(actual_channel, integration), f"Feed '{feed_title}' added: {feed_url}")
-
-    # !genfeed
-    elif lower_message.startswith("!genfeed"):
-        parts = message.split(" ", 1)
-        if len(parts) < 2 or not parts[1].strip():
-            send_message_fn(response_target(actual_channel, integration), "Usage: !genfeed <website_url>")
-            return
-        website_url = parts[1].strip()
-        API_ENDPOINT = "https://api.rss.app/v1/generate"
-        params = {"url": website_url}
-        try:
-            api_response = requests.get(API_ENDPOINT, params=params, timeout=10)
-            if api_response.status_code == 200:
-                result = api_response.json()
-                feed_url = result.get("feed_url")
-                if feed_url:
-                    send_message_fn(response_target(actual_channel, integration), f"Generated feed for {website_url}: {feed_url}")
-                else:
-                    send_message_fn(response_target(actual_channel, integration), "Feed generation failed: no feed_url in response.")
+        sub_name = parts[1].strip().lower()
+        uname = user.lower()
+        if uname in feed.subscriptions and sub_name in feed.subscriptions[uname]:
+            url = feed.subscriptions[uname][sub_name]
+            title, link = feed.fetch_latest_article(url)
+            if title and link:
+                combined_message = f"Latest from your subscription '{sub_name}':\n{title}\nLink: {link}"
+                multiline_send(send_multiline_message_fn, user, combined_message)
             else:
-                send_message_fn(response_target(actual_channel, integration), f"Feed generation API error: {api_response.status_code}")
-        except Exception as e:
-            send_message_fn(response_target(actual_channel, integration), f"Error generating feed: {e}")
+                send_private_message_fn(user, f"No entry available for {sub_name}.")
+        else:
+            send_private_message_fn(user, f"You are not subscribed to feed '{sub_name}'.")
 
-    # !setinterval
-    elif lower_message.startswith("!setinterval"):
-        parts = message.split(" ", 1)
-        if len(parts) < 2:
-            send_message_fn(response_target(actual_channel, integration), "Usage: !setinterval <minutes>")
-            return
-        try:
-            minutes = int(parts[1].strip())
-            if key not in feed.channel_intervals:
-                feed.channel_intervals[key] = 0
-            feed.channel_intervals[key] = minutes * 60
-            send_message_fn(response_target(actual_channel, integration), f"Feed check interval set to {minutes} minutes for {target}.")
-        except ValueError:
-            send_message_fn(response_target(actual_channel, integration), "Invalid number of minutes.")
-
-    # !search
-    elif lower_message.startswith("!search"):
-        parts = message.split(" ", 1)
-        if len(parts) < 2 or not parts[1].strip():
-            send_message_fn(response_target(actual_channel, integration), "Usage: !search <query>")
-            return
-        query = parts[1].strip()
-        results = search_feeds(query)
-        if not results:
-            send_message_fn(response_target(actual_channel, integration), "No valid feeds found.")
-            return
-        lines = [f"{title} {url}" for title, url in results]
-        multiline_send(send_multiline_message_fn, response_target(actual_channel, integration), "\n".join(lines))
-
-    # !join
+    # ------------------ OP COMMANDS: JOIN & PART ------------------
     elif lower_message.startswith("!join"):
         if user.lower() not in [a.lower() for a in admins]:
             send_private_message_fn(user, "Only a bot admin can use !join.")
@@ -375,7 +261,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         except Exception as e:
             send_message_fn(response_target(actual_channel, integration), f"Error joining channel: {e}")
 
-    # !part
     elif lower_message.startswith("!part"):
         if user.lower() not in [a.lower() for a in admins]:
             send_private_message_fn(user, "Only a bot admin can use !part.")
@@ -410,7 +295,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                 json.dump(admin_mapping, f, indent=4)
             send_message_fn(response_target(actual_channel, integration), f"Leaving channel: {part_channel}")
             try:
-                from irc import current_irc_client
+                from irc_client import current_irc_client
                 if current_irc_client:
                     current_irc_client.send(f"PART {part_channel}\r\n".encode("utf-8"))
             except Exception as e:
@@ -418,191 +303,302 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         except Exception as e:
             send_message_fn(response_target(actual_channel, integration), f"Error parting channel: {e}")
 
-    # !addnetwork
-    elif lower_message.startswith("!addnetwork"):
-        if integration != "irc":
-            send_message_fn(response_target(actual_channel, integration), "This command is for IRC only.")
-            return
-        if user.lower() != admin.lower():
-            send_private_message_fn(user, "Only the bot owner can use !addnetwork.")
-            return
-        parts = message.split()
-        if len(parts) < 5:
-            send_message_fn(response_target(actual_channel, integration), "Usage: !addnetwork <networkname> <server_info> <channels> <admin> [-ssl]")
-            return
-        
-        network_name = parts[1].strip()
-        server_info = parts[2].strip()
-        use_ssl_flag = "-ssl" in parts
-        channels_idx = 3 if not use_ssl_flag else 4
-        admin_idx = 4 if not use_ssl_flag else 5
-        if len(parts) <= admin_idx:
-            send_message_fn(response_target(actual_channel, integration), "Usage: !addnetwork <networkname> <server_info> <channels> <admin> [-ssl]")
-            return
-        
-        channels_str = parts[channels_idx].strip()
-        network_admin = parts[admin_idx].strip()
-
-        if "/" not in server_info:
-            send_message_fn(response_target(actual_channel, integration), "Invalid server_info format. Use irc.server.com/6667")
-            return
-        server_name, port_str = server_info.split("/", 1)
-        try:
-            port_number = int(port_str)
-        except ValueError:
-            send_message_fn(response_target(actual_channel, integration), "Invalid port number.")
-            return
-        channels_list = [ch.strip() if ch.startswith("#") else "#" + ch.strip() for ch in channels_str.split(",")]
-        if not channels_list:
-            send_message_fn(response_target(actual_channel, integration), "No channels provided.")
-            return
-
-        logging.info(f"[!addnetwork] Starting connection attempt for {network_name} ({server_name}:{port_number}, SSL: {use_ssl_flag})")
-        send_message_fn(response_target(actual_channel, integration),
-            f"Connecting to network {network_name} ({server_name}:{port_number}, SSL: {use_ssl_flag}) on channels {channels_list} with admin {network_admin}...")
-        
-        import threading
-        import os
-        from irc_client import connect_to_network, irc_command_parser, send_message
-        global irc_secondary
-        def connect_new():
-            try:
-                logging.info(f"[!addnetwork] Thread started for {server_name}:{port_number}")
-                new_client = connect_to_network(server_name, port_number, use_ssl_flag, channels_list[0])
-                if new_client:
-                    logging.info(f"[!addnetwork] Connected to {server_name}:{port_number}")
-                    for ch in channels_list:
-                        new_client.send(f"JOIN {ch}\r\n".encode("utf-8"))
-                        send_message(new_client, ch, "FuzzyFeeds has joined the channel!")
-                        composite = f"{server_name}|{ch}"
-                        irc_secondary[composite] = new_client
-                        logging.info(f"[!addnetwork] Joined {ch}, registered {composite}")
-                    send_message_fn(response_target(actual_channel, integration),
-                        f"Successfully connected to {server_name}:{port_number} and joined channels: {', '.join(channels_list)}.")
-                    threading.Thread(target=irc_command_parser, args=(new_client,), daemon=True).start()
-                    return True
-                else:
-                    logging.error(f"[!addnetwork] Failed to connect to {server_name}:{port_number}")
-                    send_message_fn(response_target(actual_channel, integration),
-                        f"Failed to connect to {server_name}:{port_number}.")
-                    return False
-            except Exception as e:
-                logging.error(f"[!addnetwork] Exception in connect_new: {e}")
-                send_message_fn(response_target(actual_channel, integration),
-                    f"Error connecting to {server_name}:{port_number}: {e}")
-                return False
-        
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-        networks_file = os.path.join(BASE_DIR, "networks.json")
-        
-        connection_thread = threading.Thread(target=connect_new, daemon=True)
-        connection_thread.start()
-        logging.info(f"[!addnetwork] Connection thread launched for {network_name}")
-        connection_thread.join()
-        
-        from persistence import load_json, save_json
-        networks = load_json(networks_file, default={})
-        if connection_thread.is_alive() or not hasattr(connection_thread, 'result') or connection_thread.result:
-            logging.info(f"[!addnetwork] Preparing to save {network_name} to {networks_file}")
-            networks[network_name] = {
-                "server": server_name,
-                "port": port_number,
-                "Channels": channels_list,
-                "ssl": use_ssl_flag,
-                "admin": network_admin
-            }
-            try:
-                save_json(networks_file, networks)
-                logging.info(f"[!addnetwork] Successfully saved {network_name} to {networks_file}")
-                send_message_fn(response_target(actual_channel, integration),
-                    f"Network {network_name} saved to configuration.")
-            except Exception as e:
-                logging.error(f"[!addnetwork] Failed to save {network_name} to {networks_file}: {e}")
-                send_message_fn(response_target(actual_channel, integration),
-                    f"Connected but failed to save network config: {e}")
-
-    # !delnetwork
-    elif lower_message.startswith("!delnetwork") or lower_message.startswith("!deletenetwork"):
-        if integration != "irc":
-            send_message_fn(response_target(actual_channel, integration), "This command is for IRC only.")
-            return
-        if user.lower() != admin.lower():
-            send_private_message_fn(user, "Only the bot owner can use !delnetwork.")
-            return
-        parts = message.split(maxsplit=1)
-        if len(parts) != 2:
-            send_message_fn(response_target(actual_channel, integration), "Usage: !delnetwork <networkname>")
-            return
-        network_name = parts[1].strip()
-        from persistence import load_json, save_json
-        networks_file = "networks.json"
-        networks = load_json(networks_file, default={})
-        if network_name in networks:
-            del networks[network_name]
-            save_json(networks_file, networks)
-            send_message_fn(response_target(actual_channel, integration), f"Network '{network_name}' has been deleted.")
-        else:
-            send_message_fn(response_target(actual_channel, integration), f"Network '{network_name}' not found.")
-
-    # !addsub
-    elif lower_message.startswith("!addsub"):
+    # ------------------ FEED COMMANDS ------------------
+    elif lower_message.startswith("!addfeed"):
         parts = message.split(" ", 2)
         if len(parts) < 3:
-            send_private_message_fn(user, "Usage: !addsub <feed_name> <URL>")
+            send_message_fn(response_target(actual_channel, integration), "Usage: !addfeed <feed_name> <URL>")
             return
         feed_name = parts[1].strip()
         feed_url = parts[2].strip()
-        uname = user
-        if uname not in feed.subscriptions:
-            feed.subscriptions[uname] = {}
-        feed.subscriptions[uname][feed_name] = feed_url
-        feed.save_subscriptions()
-        send_private_message_fn(user, f"Subscribed to feed: {feed_name} ({feed_url})")
+        if key not in feed.channel_feeds:
+            feed.channel_feeds[key] = {}
+        feed.channel_feeds[key][feed_name] = feed_url
+        feed.save_feeds()
+        send_message_fn(response_target(actual_channel, integration), f"Feed added: {feed_name} ({feed_url})")
 
-    # !unsub
-    elif lower_message.startswith("!unsub"):
+    elif lower_message.startswith("!delfeed"):
+        if not effective_op:
+            send_private_message_fn(user, "Not authorized to use !delfeed.")
+            return
         parts = message.split(" ", 1)
         if len(parts) < 2:
-            send_private_message_fn(user, "Usage: !unsub <feed_name>")
+            send_message_fn(response_target(actual_channel, integration), "Usage: !delfeed <feed_name or pattern>")
             return
-        feed_name = parts[1].strip()
-        uname = user
-        if uname in feed.subscriptions and feed_name in feed.subscriptions[uname]:
-            del feed.subscriptions[uname][feed_name]
-            feed.save_subscriptions()
-            send_private_message_fn(user, f"Unsubscribed from feed: {feed_name}")
-        else:
-            send_private_message_fn(user, f"Not subscribed to feed '{feed_name}'.")
+        pattern = parts[1].strip()
+        if key not in feed.channel_feeds:
+            send_message_fn(response_target(actual_channel, integration), "No feeds found for this channel.")
+            return
+        matched = match_feed(feed.channel_feeds[key], pattern)
+        if matched is None:
+            send_message_fn(response_target(actual_channel, integration), f"No feeds match '{pattern}'.")
+            return
+        if isinstance(matched, list):
+            send_message_fn(response_target(actual_channel, integration), f"Multiple feeds match '{pattern}': {', '.join(matched)}. Please be more specific.")
+            return
+        del feed.channel_feeds[key][matched]
+        feed.save_feeds()
+        send_message_fn(response_target(actual_channel, integration), f"Feed removed: {matched}")
 
-    # !mysubs
-    elif lower_message.startswith("!mysubs"):
-        uname = user
-        if uname in feed.subscriptions and feed.subscriptions[uname]:
-            lines = [f"{name}: {url}" for name, url in feed.subscriptions[uname].items()]
-            multiline_send(send_multiline_message_fn, user, "\n".join(lines))
+    elif lower_message.startswith("!listfeeds"):
+        if key in feed.channel_feeds and feed.channel_feeds[key]:
+            lines = [f"{name}: {url}" for name, url in feed.channel_feeds[key].items()]
+            multiline_send(send_multiline_message_fn, response_target(actual_channel, integration), "\n".join(lines))
         else:
-            send_private_message_fn(user, "No subscriptions found.")
+            send_message_fn(response_target(actual_channel, integration), "No feeds found for this channel.")
 
-    # !latestsub
-    elif lower_message.startswith("!latestsub"):
+    elif lower_message.startswith("!latest"):
+        parts = message.split(" ", 1)
+        if len(parts) < 2:
+            send_message_fn(response_target(actual_channel, integration), "Usage: !latest <feed_name or pattern>")
+            return
+        pattern = parts[1].strip()
+        if key not in feed.channel_feeds:
+            send_message_fn(response_target(actual_channel, integration), "No feeds found for this channel.")
+            return
+        matched = match_feed(feed.channel_feeds[key], pattern)
+        if matched is None:
+            send_message_fn(response_target(actual_channel, integration), f"No feed matches '{pattern}'.")
+            return
+        if isinstance(matched, list):
+            send_message_fn(response_target(actual_channel, integration), f"Multiple feeds match '{pattern}': {', '.join(matched)}. Please be more specific.")
+            return
+        feed_name = matched
+        title, link = feed.fetch_latest_article(feed.channel_feeds[key][feed_name])
+        if title and link:
+            send_message_fn(response_target(actual_channel, integration), f"Latest from {feed_name}: {title}")
+            send_message_fn(response_target(actual_channel, integration), f"Link: {link}")
+        else:
+            send_message_fn(response_target(actual_channel, integration), f"No entry available for {feed_name}.")
+
+    elif lower_message.startswith("!getfeed"):
         parts = message.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
-            send_private_message_fn(user, "Usage: !latestsub <feed_name>")
+            send_message_fn(response_target(actual_channel, integration), "Usage: !getfeed <title_or_domain>")
             return
-        feed_name = parts[1].strip()
-        uname = user
-        if uname in feed.subscriptions and feed_name in feed.subscriptions[uname]:
-            url = feed.subscriptions[uname][feed_name]
-            title, link = feed.fetch_latest_article(url)
-            if title and link:
-                send_message_fn(response_target(actual_channel, integration), f"Latest from your subscription '{feed_name}': {title}")
-                send_message_fn(response_target(actual_channel, integration), f"Link: {link}")
-            else:
-                send_message_fn(response_target(actual_channel, integration), f"No entry available for {feed_name}.")
+        query = parts[1].strip()
+        results = search_feeds(query)
+        if not results:
+            send_message_fn(response_target(actual_channel, integration), "No matching feed found.")
+            return
+        feed_title, feed_url = results[0]
+        title, link = feed.fetch_latest_article(feed_url)
+        if title and link:
+            send_message_fn(response_target(actual_channel, integration), f"Latest from {feed_title}: {title}")
+            send_message_fn(response_target(actual_channel, integration), f"Link: {link}")
         else:
-            send_private_message_fn(user, f"You are not subscribed to feed '{feed_name}'.")
+            send_message_fn(response_target(actual_channel, integration), f"No entry available for feed {feed_title}.")
 
-    # !setsetting
+    elif lower_message.startswith("!getadd"):
+        parts = message.split(" ", 1)
+        if len(parts) < 2 or not parts[1].strip():
+            send_message_fn(response_target(actual_channel, integration), "Usage: !getadd <title_or_domain>")
+            return
+        query = parts[1].strip()
+        results = search_feeds(query)
+        if not results:
+            send_message_fn(response_target(actual_channel, integration), "No matching feed found.")
+            return
+        selected = None
+        for title, url in results:
+            if query.lower() in title.lower():
+                selected = (title, url)
+                break
+        if not selected:
+            selected = results[0]
+        feed_title, feed_url = selected
+        if key not in feed.channel_feeds:
+            feed.channel_feeds[key] = {}
+        feed.channel_feeds[key][feed_title] = feed_url
+        feed.save_feeds()
+        send_message_fn(response_target(actual_channel, integration), f"Feed '{feed_title}' added: {feed_url}")
+
+    elif lower_message.startswith("!genfeed"):
+        parts = message.split(" ", 1)
+        if len(parts) < 2 or not parts[1].strip():
+            send_message_fn(response_target(actual_channel, integration), "Usage: !genfeed <website_url>")
+            return
+        website_url = parts[1].strip()
+        API_ENDPOINT = "https://api.rss.app/v1/generate"
+        params = {"url": website_url}
+        try:
+            api_response = requests.get(API_ENDPOINT, params=params, timeout=10)
+            if api_response.status_code == 200:
+                result = api_response.json()
+                feed_url = result.get("feed_url")
+                if feed_url:
+                    send_message_fn(response_target(actual_channel, integration), f"Generated feed for {website_url}: {feed_url}")
+                else:
+                    send_message_fn(response_target(actual_channel, integration), "Feed generation failed: no feed_url in response.")
+            else:
+                send_message_fn(response_target(actual_channel, integration), f"Feed generation API error: {api_response.status_code}")
+        except Exception as e:
+            send_message_fn(response_target(actual_channel, integration), f"Error generating feed: {e}")
+
+    elif lower_message.startswith("!setinterval"):
+        parts = message.split(" ", 1)
+        if len(parts) < 2:
+            send_message_fn(response_target(actual_channel, integration), "Usage: !setinterval <minutes>")
+            return
+        try:
+            minutes = int(parts[1].strip())
+            if key not in feed.channel_intervals:
+                feed.channel_intervals[key] = 0
+            feed.channel_intervals[key] = minutes * 60
+            send_message_fn(response_target(actual_channel, integration), f"Feed check interval set to {minutes} minutes for {target}.")
+        except ValueError:
+            send_message_fn(response_target(actual_channel, integration), "Invalid number of minutes.")
+
+    elif lower_message.startswith("!search"):
+        parts = message.split(" ", 1)
+        if len(parts) < 2 or not parts[1].strip():
+            send_message_fn(response_target(actual_channel, integration), "Usage: !search <query>")
+            return
+        query = parts[1].strip()
+        results = search_feeds(query)
+        if not results:
+            send_message_fn(response_target(actual_channel, integration), "No valid feeds found.")
+            return
+        lines = [f"{title} {url}" for title, url in results]
+        multiline_send(send_multiline_message_fn, response_target(actual_channel, integration), "\n".join(lines))
+
+    # ------------------ OWNER COMMANDS ------------------
+    elif lower_message.startswith("!network"):
+        if user.lower() != admin.lower():
+            send_private_message_fn(user, "Only the bot owner can use !network commands.")
+            return
+        parts = message.split()
+        if len(parts) < 2:
+            send_message_fn(response_target(actual_channel, integration), "Usage: !network <add|set|connect|del> ...")
+            return
+        subcommand = parts[1].lower()
+        if subcommand == "add":
+            # Expected: !network add <networkName> <server/port> [-ssl] <#channel> <opName>
+            if len(parts) < 6:
+                send_message_fn(response_target(actual_channel, integration),
+                                  "Usage: !network add <networkName> <server/port> [-ssl] <#channel> <opName>")
+                return
+            network_name = parts[2].strip()
+            server_info = parts[3].strip()
+            use_ssl_flag = False
+            index = 4
+            if parts[4].lower() == "-ssl":
+                use_ssl_flag = True
+                index += 1
+            if len(parts) < index + 2:
+                send_message_fn(response_target(actual_channel, integration),
+                                  "Usage: !network add <networkName> <server/port> [-ssl] <#channel> <opName>")
+                return
+            channel_name = parts[index].strip()
+            opName = parts[index + 1].strip()
+            if "/" not in server_info:
+                send_message_fn(response_target(actual_channel, integration), "Invalid server_info format. Use server/port")
+                return
+            server_name, port_str = server_info.split("/", 1)
+            try:
+                port_number = int(port_str)
+            except Exception as e:
+                send_message_fn(response_target(actual_channel, integration), "Invalid port number.")
+                return
+            BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+            networks_file = os.path.join(BASE_DIR, "networks.json")
+            networks = persistence.load_json(networks_file, default={})
+            networks[network_name] = {
+                "server": server_name,
+                "port": port_number,
+                "Channels": [channel_name],
+                "ssl": use_ssl_flag,
+                "admin": opName
+            }
+            persistence.save_json(networks_file, networks)
+            send_message_fn(response_target(actual_channel, integration),
+                            f"Network {network_name} added to configuration.")
+        elif subcommand == "set":
+            # Expected: !network set irc.<networkName>.<field> <value>
+            if len(parts) < 4:
+                send_message_fn(response_target(actual_channel, integration),
+                                "Usage: !network set irc.<networkName>.<field> <value>")
+                return
+            key_field = parts[2].strip()
+            value = " ".join(parts[3:])
+            if not key_field.startswith("irc."):
+                send_message_fn(response_target(actual_channel, integration), "Key must start with 'irc.'")
+                return
+            remainder = key_field[4:]
+            if "." not in remainder:
+                send_message_fn(response_target(actual_channel, integration),
+                                "Invalid key format. Use irc.<networkName>.<field>")
+                return
+            networkName, field = remainder.split(".", 1)
+            BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+            networks_file = os.path.join(BASE_DIR, "networks.json")
+            networks = persistence.load_json(networks_file, default={})
+            if networkName not in networks:
+                send_message_fn(response_target(actual_channel, integration), f"Network {networkName} not found.")
+                return
+            networks[networkName][field] = value
+            persistence.save_json(networks_file, networks)
+            send_message_fn(response_target(actual_channel, integration),
+                            f"Network {networkName} updated: {field} set to {value}.")
+        elif subcommand == "connect":
+            # Expected: !network connect <networkName>
+            if len(parts) < 3:
+                send_message_fn(response_target(actual_channel, integration), "Usage: !network connect <networkName>")
+                return
+            networkName = parts[2].strip()
+            BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+            networks_file = os.path.join(BASE_DIR, "networks.json")
+            networks = persistence.load_json(networks_file, default={})
+            if networkName not in networks:
+                send_message_fn(response_target(actual_channel, integration), f"Network {networkName} not found.")
+                return
+            net = networks[networkName]
+            server_name = net.get("server")
+            port_number = net.get("port")
+            channels_list = net.get("Channels", [])
+            use_ssl_flag = net.get("ssl", False)
+            if not channels_list:
+                send_message_fn(response_target(actual_channel, integration), "No channels defined for this network.")
+                return
+            try:
+                from irc_client import connect_to_network, irc_command_parser, send_message
+            except Exception as e:
+                send_message_fn(response_target(actual_channel, integration),
+                                f"Error importing IRC client: {e}")
+                return
+            new_client = connect_to_network(server_name, port_number, use_ssl_flag, channels_list[0])
+            if new_client:
+                for ch in channels_list:
+                    new_client.send(f"JOIN {ch}\r\n".encode("utf-8"))
+                    send_message(new_client, ch, "FuzzyFeeds has joined the channel!")
+                send_message_fn(response_target(actual_channel, integration),
+                                f"Connected to network {networkName} and joined channels: {', '.join(channels_list)}.")
+                threading.Thread(target=irc_command_parser, args=(new_client,), daemon=True).start()
+            else:
+                send_message_fn(response_target(actual_channel, integration),
+                                f"Failed to connect to network {networkName}.")
+        elif subcommand in ["del", "delete"]:
+            # Expected: !network del <networkName>
+            if len(parts) < 3:
+                send_message_fn(response_target(actual_channel, integration), "Usage: !network del <networkName>")
+                return
+            networkName = parts[2].strip()
+            BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+            networks_file = os.path.join(BASE_DIR, "networks.json")
+            networks = persistence.load_json(networks_file, default={})
+            if networkName not in networks:
+                send_message_fn(response_target(actual_channel, integration), f"Network {networkName} not found.")
+                return
+            del networks[networkName]
+            persistence.save_json(networks_file, networks)
+            send_message_fn(response_target(actual_channel, integration),
+                            f"Network {networkName} has been removed and the bot will leave that server if connected.")
+        else:
+            send_message_fn(response_target(actual_channel, integration),
+                            "Unknown !network subcommand. Use add, set, connect, or del.")
+        return
+
+    # ------------------ SETTINGS AND ADMIN COMMANDS ------------------
     elif lower_message.startswith("!setsetting"):
         parts = message.split(" ", 2)
         if len(parts) < 3:
@@ -610,7 +606,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             return
         key_setting = parts[1].strip()
         value = parts[2].strip()
-        import users
         users.add_user(user)
         user_data = users.get_user(user)
         if "settings" not in user_data:
@@ -618,25 +613,21 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         user_data["settings"][key_setting] = value
         users.save_users()
         send_private_message_fn(user, f"Setting '{key_setting}' set to '{value}'.")
-
-    # !getsetting
+    
     elif lower_message.startswith("!getsetting"):
         parts = message.split(" ", 1)
         if len(parts) < 2:
             send_private_message_fn(user, "Usage: !getsetting <key>")
             return
         key_setting = parts[1].strip()
-        import users
         users.add_user(user)
         user_data = users.get_user(user)
         if "settings" in user_data and key_setting in user_data["settings"]:
             send_private_message_fn(user, f"{key_setting}: {user_data['settings'][key_setting]}")
         else:
             send_private_message_fn(user, f"No setting found for '{key_setting}'.")
-
-    # !settings
+    
     elif lower_message.startswith("!settings"):
-        import users
         users.add_user(user)
         user_data = users.get_user(user)
         if "settings" in user_data and user_data["settings"]:
@@ -644,8 +635,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             multiline_send(send_multiline_message_fn, user, "\n".join(lines))
         else:
             send_private_message_fn(user, "No settings found.")
-
-    # !admin
+    
     elif lower_message.startswith("!admin"):
         try:
             with open(admin_file, "r") as f:
@@ -665,8 +655,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             multiline_send(send_multiline_message_fn, response_target(actual_channel, integration), output)
         except Exception as e:
             send_private_message_fn(user, f"Error reading admin info: {e}")
-
-    # !stats
+    
     elif lower_message.startswith("!stats"):
         response_target_value = response_target(actual_channel, integration)
         uptime_seconds = int(time.time() - __import__("config").start_time)
@@ -692,16 +681,14 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                 f"Channel '{target}' Feeds: {num_channel_feeds}"
             ]
         multiline_send(send_multiline_message_fn, response_target_value, "\n".join(response_lines))
-
-    # !quit
+    
     elif lower_message.startswith("!quit"):
         if user.lower() != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !quit.")
             return
         send_message_fn(response_target(actual_channel, integration), "Shutting down...")
         os._exit(0)
-
-    # !reload
+    
     elif lower_message.startswith("!reload"):
         if user.lower() != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !reload.")
@@ -711,16 +698,14 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), "Configuration reloaded.")
         except Exception as e:
             send_message_fn(response_target(actual_channel, integration), f"Error reloading config: {e}")
-
-    # !restart
+    
     elif lower_message.startswith("!restart"):
         if user.lower() != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !restart.")
             return
         send_message_fn(response_target(actual_channel, integration), "Restarting bot...")
         os.execv(sys.executable, [sys.executable] + sys.argv)
-
-    # !help
+    
     elif lower_message.startswith("!help"):
         parts = message.split(" ", 1)
         if len(parts) == 2:
@@ -728,7 +713,35 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             help_text = get_help()
         multiline_send(send_multiline_message_fn, user, help_text)
-
+    
     else:
         send_message_fn(response_target(actual_channel, integration), "Unknown command. Use !help for a list.")
+
+# ---------------------------------------------------------------------
+# Helper: search_feeds (used by !search, !getfeed, !getadd)
+# ---------------------------------------------------------------------
+def search_feeds(query):
+    url = "https://cloud.feedly.com/v3/search/feeds?query=" + query
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code != 200:
+            logging.error("Feed search HTTP error: %s", response.status_code)
+            return []
+        data = response.json()
+        results = data.get("results", [])
+        valid_feeds = []
+        for item in results:
+            feed_url = item.get("feedId", "")
+            if feed_url.startswith("feed/"):
+                feed_url = feed_url[5:]
+            parsed = feedparser.parse(feed_url)
+            if parsed.bozo == 0 and "title" in parsed.feed:
+                feed_title = parsed.feed.get("title")
+                valid_feeds.append((feed_title, feed_url))
+            if len(valid_feeds) >= 5:
+                break
+        return valid_feeds
+    except Exception as e:
+        logging.error("Error searching feeds: %s", e)
+        return []
 
