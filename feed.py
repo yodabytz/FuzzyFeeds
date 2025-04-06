@@ -5,8 +5,6 @@ import logging
 import json
 from persistence import load_json, save_json
 
-# Optional: keep this line. It won't hurt, although the main fix
-# is using requests before parsing the raw text.
 feedparser.USER_AGENT = "FuzzyFeedsBot/1.0 (+https://github.com/YourUser/YourRepo)"
 
 FEEDS_FILE = "feeds.json"
@@ -19,7 +17,6 @@ channels = []
 channel_feeds = {}
 channel_intervals = {}
 last_check_times = {}
-# Added initialization for subscription last-check records:
 last_check_subs = {}
 subscriptions = {}
 posted_links = {}
@@ -39,9 +36,7 @@ def parse_with_custom_user_agent(url):
         logging.error(f"[feed.py] Feed returned {resp.status_code}: {resp.text[:200]}")
         return feedparser.FeedParserDict()
 
-    # Strip any leading whitespace or BOM from the response text
-    text = resp.text.lstrip()
-    return feedparser.parse(text)
+    return feedparser.parse(resp.text)
 
 def load_feeds():
     global channels, channel_feeds, channel_intervals, last_check_times
@@ -56,8 +51,7 @@ def load_feeds():
             if composite_key not in channels:
                 channels.append(composite_key)
 
-    global channel_feeds
-    channel_feeds = load_json(FEEDS_FILE, default={})
+    channel_feeds.update(load_json(FEEDS_FILE, default={}))
     migrate_plain_keys_to_composite()
 
     loaded_intervals = load_json("intervals.json", default={})
@@ -66,8 +60,10 @@ def load_feeds():
         last_check_times[chan] = 0
 
     load_posted_links()
+    load_subscriptions()
 
 def migrate_plain_keys_to_composite():
+    global posted_links
     networks = load_json(NETWORKS_FILE, default={})
     feeds_changed = False
     for net_info in networks.values():
@@ -84,7 +80,6 @@ def migrate_plain_keys_to_composite():
     if feeds_changed:
         save_json(FEEDS_FILE, channel_feeds)
 
-    global posted_links
     posted_links = load_json(POSTED_LINKS_FILE, default={})
     links_changed = False
     for net_info in networks.values():
@@ -148,37 +143,4 @@ def fetch_latest_article(url):
     except Exception as e:
         logging.error(f"[feed.py] Error fetching feed {url}: {e}")
         return None, None
-
-def check_feeds(send_message_func, channels_to_check=None):
-    try:
-        current_time = time.time()
-        channels_list = channels_to_check if channels_to_check is not None else channels
-        for chan in channels_list:
-            feeds_to_check = channel_feeds.get(chan, {})
-            interval = channel_intervals.get(chan, default_interval)
-            if current_time - last_check_times.get(chan, 0) >= interval:
-                for feed_name, feed_url in feeds_to_check.items():
-                    d = parse_with_custom_user_agent(feed_url)
-                    if d.entries:
-                        entry = d.entries[0]
-                        published_time = None
-                        if entry.get("published_parsed"):
-                            published_time = time.mktime(entry.published_parsed)
-                        elif entry.get("updated_parsed"):
-                            published_time = time.mktime(entry.updated_parsed)
-                        if published_time is not None and published_time <= last_check_times.get(chan, 0):
-                            continue
-                        title = entry.title.strip() if entry.get("title") else "No Title"
-                        link = entry.link.strip() if entry.get("link") else ""
-                        if link and not is_link_posted(chan, link):
-                            combined_message = f"New Feed from {feed_name}: {title}\nLink: {link}"
-                            send_message_func(chan, combined_message)
-                            mark_link_posted(chan, link)
-                last_check_times[chan] = current_time
-    except Exception as e:
-        logging.error(f"Error in check_feeds: {e}")
-
-# Automatically load feeds & subscriptions on import
-load_feeds()
-load_subscriptions()
 
