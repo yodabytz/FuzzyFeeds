@@ -7,7 +7,7 @@ from feed import (
     load_feeds, channel_feeds, is_link_posted, mark_link_posted
 )
 from status import irc_client, irc_secondary
-from matrix_integration import send_matrix_message as matrix_fallback
+from matrix_integration import send_message as matrix_fallback
 from discord_integration import send_discord_message as discord_fallback
 
 logging.basicConfig(level=logging.INFO)
@@ -18,7 +18,7 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=
     load_feeds()
     new_feed_count = 0
 
-    for chan, feeds in channel_feeds.items():
+    for raw_chan, feeds in channel_feeds.items():
         for feed_name, url in feeds.items():
             try:
                 parsed = feedparser.parse(url)
@@ -29,17 +29,29 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=
                 title = latest_entry.get("title", "No title")
                 link = latest_entry.get("link")
 
-                # Normalize to composite key if needed
-                if "|" not in chan:
-                    chan = f"{server}|{chan}"
-
-                network, raw_channel = chan.split("|", 1)
-
-                if link and is_link_posted(chan, link):
-                    logging.info(f"[SKIP] {chan} already posted: {link}")
-                    continue
+                # Determine platform and set normalized channel key
+                if raw_chan.startswith("!"):
+                    # Matrix
+                    chan_type = "matrix"
+                    chan = raw_chan
+                elif raw_chan.isdigit():
+                    # Discord
+                    chan_type = "discord"
+                    chan = raw_chan
+                elif "|" in raw_chan:
+                    # Already composite IRC
+                    chan_type = "irc"
+                    chan = raw_chan
+                else:
+                    # Basic IRC, make composite
+                    chan_type = "irc"
+                    chan = f"{server}|{raw_chan}"
 
                 if not link:
+                    continue
+
+                if is_link_posted(chan, link):
+                    logging.info(f"[SKIP] {chan} already posted: {link}")
                     continue
 
                 mark_link_posted(chan, link)
@@ -47,38 +59,38 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=
                 title_msg = f"{feed_name}: {title}"
                 link_msg = f"Link: {link}"
 
-                # Detect protocol and route accordingly
-                if raw_channel.startswith("!"):
+                if chan_type == "matrix":
                     if matrix_send:
                         matrix_send(chan, title_msg)
                         matrix_send(chan, link_msg)
                     else:
                         matrix_fallback(chan, title_msg)
                         matrix_fallback(chan, link_msg)
-                elif raw_channel.isdigit():
+                elif chan_type == "discord":
                     if discord_send:
                         discord_send(chan, title_msg)
                         discord_send(chan, link_msg)
                     else:
                         discord_fallback(chan, title_msg)
                         discord_fallback(chan, link_msg)
-                else:
+                elif chan_type == "irc":
                     if irc_send:
                         irc_send(chan, title_msg)
                         irc_send(chan, link_msg)
-                    elif network == server:
-                        if irc_client:
-                            irc_client.send_message(raw_channel, title_msg)
-                            irc_client.send_message(raw_channel, link_msg)
-                    elif network in irc_secondary:
-                        client = irc_secondary[network]
-                        client.send_message(raw_channel, title_msg)
-                        client.send_message(raw_channel, link_msg)
+                    else:
+                        net, channel = chan.split("|", 1)
+                        if net == server and irc_client:
+                            irc_client.send_message(channel, title_msg)
+                            irc_client.send_message(channel, link_msg)
+                        elif net in irc_secondary:
+                            client = irc_secondary[net]
+                            client.send_message(channel, title_msg)
+                            client.send_message(channel, link_msg)
 
                 new_feed_count += 1
 
             except Exception as e:
-                logging.error(f"Error polling {feed_name} in {chan}: {e}")
+                logging.error(f"Error polling {feed_name} in {raw_chan}: {e}")
 
     if new_feed_count:
         logging.info(f"Posted {new_feed_count} new feed entries.")
@@ -89,3 +101,4 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, interval_ov
     while True:
         poll_feeds(irc_send, matrix_send, discord_send, private_send)
         time.sleep(interval_override or default_interval)
+
