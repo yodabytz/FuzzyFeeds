@@ -708,14 +708,23 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
     
     elif lower_message.startswith("!help"):
         parts = message.split(" ", 1)
-        if len(parts) == 2:
-            help_text = get_help(parts[1].strip())
+        if len(parts) == 1:
+            help_text = (
+                "Available Help Categories:\n"
+                "  USER  - Basic usage commands any user can run\n"
+                "  OP    - Channel OP/Admin commands\n"
+                "  OWNER - Bot owner commands\n"
+                "Type: !help <category> (e.g. !help user) to see details."
+            )
         else:
-            help_text = get_help()
+            category = parts[1].strip().upper()
+            if category in help_data:
+                cmds = help_data[category]
+                lines = [f"{cmd}: {desc}" for cmd, desc in cmds.items()]
+                help_text = f"Commands for {category}:\n" + "\n".join(lines)
+            else:
+                help_text = f"No help information found for '{parts[1].strip()}'."
         multiline_send(send_multiline_message_fn, user, help_text)
-    
-    else:
-        send_message_fn(response_target(actual_channel, integration), "Unknown command. Use !help for a list.")
 
 # ---------------------------------------------------------------------
 # Helper: search_feeds (used by !search, !getfeed, !getadd)
