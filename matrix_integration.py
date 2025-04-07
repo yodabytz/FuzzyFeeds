@@ -212,8 +212,7 @@ class MatrixBot:
         def matrix_send_private(user_, msg):
             asyncio.create_task(self.send_message(room_key, msg))
         def matrix_send_multiline(target, msg):
-            for line in msg.splitlines():
-                asyncio.create_task(self.send_message(target, line))
+            asyncio.create_task(self.send_message(target, msg))
         is_op_flag = (get_localpart(sender).lower() in ([a.lower() for a in admins] + [config_admin.lower()]))
         from commands import handle_centralized_command
         handle_centralized_command("matrix", matrix_send, matrix_send_private, matrix_send_multiline, sender, room_key, command, is_op_flag)
@@ -229,6 +228,20 @@ class MatrixBot:
             await self.process_command(room, event.body, event.sender)
 
     async def send_message(self, room_id, message):
+        link = None
+        for line in message.splitlines():
+            if line.startswith("Link:"):
+                link = line[len("Link:"):].strip()
+                break
+        if link:
+            if room_id not in self.posted_articles:
+                self.posted_articles[room_id] = set()
+            if link in self.posted_articles[room_id]:
+                logging.info(f"Link already posted in {room_id}: {link}")
+                return
+            else:
+                self.posted_articles[room_id].add(link)
+                save_posted_articles(self.posted_articles)
         try:
             await self.client.room_send(
                 room_id,
