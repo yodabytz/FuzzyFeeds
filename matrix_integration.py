@@ -104,6 +104,7 @@ async def get_dm_room(user):
                 return room_id
     except Exception as e:
         logging.error(f"Error retrieving m.direct for DM: {e}")
+    
     try:
         response = await matrix_bot_instance.client.room_create(
             invite=[user],
@@ -185,7 +186,7 @@ class MatrixBot:
                         display_name = room
                     matrix_room_names[room] = display_name
                     logging.info(f"Joined Matrix room: {room} (Display name: {display_name})")
-                    await self.send_message(room, f"🤖 FuzzyFeeds Bot is online! Type `!help` for commands. (Room: {display_name})")
+                    # Announcement removed per request.
                 else:
                     logging.error(f"Error joining room {room}: {response}")
             except Exception as e:
@@ -227,13 +228,13 @@ class MatrixBot:
             logging.info(f"Matrix command received in {room.room_id}: {event.body}")
             await self.process_command(room, event.body, event.sender)
 
-    async def send_message(self, room_id, message):
+    async def send_message(self, room_id, message, bypass_posted_check=False):
         link = None
         for line in message.splitlines():
             if line.startswith("Link:"):
                 link = line[len("Link:"):].strip()
                 break
-        if link:
+        if link and not bypass_posted_check:
             if room_id not in self.posted_articles:
                 self.posted_articles[room_id] = set()
             if link in self.posted_articles[room_id]:
@@ -270,7 +271,7 @@ class MatrixBot:
         await self.initial_sync()
         await self.sync_forever()
 
-def send_matrix_message(room, message):
+def send_matrix_message(room, message, bypass_posted_check=False):
     global matrix_bot_instance, matrix_event_loop
     if matrix_bot_instance is None:
         logging.error("Matrix bot instance not initialized.")
@@ -279,12 +280,20 @@ def send_matrix_message(room, message):
         logging.error("Matrix event loop not available.")
         return
     matrix_event_loop.call_soon_threadsafe(
-        lambda: asyncio.ensure_future(matrix_bot_instance.send_message(room, message), loop=matrix_event_loop)
+        lambda: asyncio.ensure_future(
+            matrix_bot_instance.send_message(room, message, bypass_posted_check),
+            loop=matrix_event_loop
+        )
     )
 
+# Export send_matrix_message for legacy compatibility.
 send_message = send_matrix_message
 
 def start_matrix_bot():
+    """
+    Initializes and runs the Matrix bot.
+    This function schedules the bot's run() coroutine and then runs the event loop forever.
+    """
     global matrix_bot_instance, matrix_event_loop
     loop = asyncio.new_event_loop()
     matrix_event_loop = loop
@@ -305,6 +314,7 @@ def start_matrix_bot():
         loop.stop()
 
 def disable_feed_loop():
+    # No-op function for compatibility.
     pass
 
 if __name__ == "__main__":
