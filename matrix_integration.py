@@ -74,7 +74,6 @@ matrix_dm_rooms = {}
 
 async def update_direct_messages(room_id, user):
     try:
-        # Use get_account_data (the correct method in 0.25.2)
         dm_data = await matrix_bot_instance.client.get_account_data("m.direct")
         dm_content = dm_data.content if dm_data and hasattr(dm_data, "content") else {}
     except Exception as e:
@@ -105,15 +104,12 @@ async def get_dm_room(user):
                 return room_id
     except Exception as e:
         logging.error(f"Error retrieving m.direct for DM: {e}")
-    
     try:
-        # Create a new DM room using room_create
         response = await matrix_bot_instance.client.room_create(
             invite=[user],
             is_direct=True,
             preset="trusted_private_chat"
         )
-        # In matrix‑nio 0.25.2, the response contains a room_id attribute.
         room_id = getattr(response, "room_id", None)
         if room_id and room_id.startswith("!"):
             matrix_dm_rooms[user] = room_id
@@ -163,7 +159,7 @@ class MatrixBot:
         self.processing_enabled = False
         self.posted_articles = load_posted_articles()
         self.client.add_event_callback(self.message_callback, RoomMessageText)
-        self.last_help_timestamp = {}  # For rate-limiting !help commands
+        self.last_help_timestamp = {}
 
     async def login(self):
         response = await self.client.login(self.password, device_name="FuzzyFeeds Bot")
@@ -216,7 +212,9 @@ class MatrixBot:
         def matrix_send_private(user_, msg):
             asyncio.create_task(self.send_message(room_key, msg))
         def matrix_send_multiline(target, msg):
-            asyncio.create_task(self.send_message(target, msg))
+            lines = msg.splitlines()
+            for line in lines:
+                asyncio.create_task(self.send_message(target, line))
         is_op_flag = (get_localpart(sender).lower() in ([a.lower() for a in admins] + [config_admin.lower()]))
         from commands import handle_centralized_command
         handle_centralized_command("matrix", matrix_send, matrix_send_private, matrix_send_multiline, sender, room_key, command, is_op_flag)
@@ -232,7 +230,6 @@ class MatrixBot:
             await self.process_command(room, event.body, event.sender)
 
     async def send_message(self, room_id, message):
-        # Check if a "Link:" line is present to avoid reposting
         link = None
         for line in message.splitlines():
             if line.startswith("Link:"):
@@ -291,10 +288,6 @@ def send_matrix_message(room, message):
 send_message = send_matrix_message
 
 def start_matrix_bot():
-    """
-    Initializes and runs the Matrix bot.
-    This function schedules the bot's run() coroutine and then runs the event loop forever.
-    """
     global matrix_bot_instance, matrix_event_loop
     loop = asyncio.new_event_loop()
     matrix_event_loop = loop
@@ -302,7 +295,6 @@ def start_matrix_bot():
     logging.info("Starting Matrix integration...")
     channels_data = load_channels()
     matrix_channels = channels_data.get("matrix_channels", [])
-    # Ensure that each matrix channel has a feed dictionary (even if empty)
     for room in matrix_channels:
         if room not in feed.channel_feeds:
             feed.channel_feeds[room] = {}
@@ -316,9 +308,7 @@ def start_matrix_bot():
         loop.stop()
 
 def disable_feed_loop():
-    # No-op function for compatibility.
     pass
 
 if __name__ == "__main__":
     start_matrix_bot()
-
