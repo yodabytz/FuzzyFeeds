@@ -43,10 +43,13 @@ def composite_key(channel, integration):
     else:
         return channel
 
+# FIX: Update this function so that if the composite key already exists, we just return it.
 def migrate_plain_key_if_needed(channel, integration):
     if integration != "irc":
         return channel
     comp = composite_key(channel, integration)
+    if comp in feed.channel_feeds:
+        return comp
     if channel in feed.channel_feeds:
         feed.channel_feeds[comp] = feed.channel_feeds[channel]
         del feed.channel_feeds[channel]
@@ -473,7 +476,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             return
         subcommand = parts[1].lower()
         if subcommand == "add":
-            # Expected: !network add <networkName> <server/port> [-ssl] <#channel> <opName>
             if len(parts) < 6:
                 send_message_fn(response_target(actual_channel, integration),
                                   "Usage: !network add <networkName> <server/port> [-ssl] <#channel> <opName>")
@@ -514,7 +516,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration),
                             f"Network {network_name} added to configuration.")
         elif subcommand == "set":
-            # Expected: !network set irc.<networkName>.<field> <value>
             if len(parts) < 4:
                 send_message_fn(response_target(actual_channel, integration),
                                 "Usage: !network set irc.<networkName>.<field> <value>")
@@ -541,7 +542,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration),
                             f"Network {networkName} updated: {field} set to {value}.")
         elif subcommand == "connect":
-            # Expected: !network connect <networkName>
             if len(parts) < 3:
                 send_message_fn(response_target(actual_channel, integration), "Usage: !network connect <networkName>")
                 return
@@ -578,7 +578,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                 send_message_fn(response_target(actual_channel, integration),
                                 f"Failed to connect to network {networkName}.")
         elif subcommand in ["del", "delete"]:
-            # Expected: !network del <networkName>
             if len(parts) < 3:
                 send_message_fn(response_target(actual_channel, integration), "Usage: !network del <networkName>")
                 return
