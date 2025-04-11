@@ -2,9 +2,10 @@
 import time
 import logging
 import feedparser
-from config import default_interval, feeds_file, server
+from config import default_interval, feeds_file, server, start_time
 from feed import (
-    load_feeds, channel_feeds, is_link_posted, mark_link_posted
+    load_feeds, channel_feeds, is_link_posted, mark_link_posted,
+    fetch_latest_article  # now returns (title, link, pub_time)
 )
 from status import irc_client, irc_secondary
 from matrix_integration import send_message as matrix_fallback
@@ -21,39 +22,47 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=
     for raw_chan, feeds in channel_feeds.items():
         for feed_name, url in feeds.items():
             try:
-                parsed = feedparser.parse(url)
-                if not parsed.entries:
+                # Get the latest article along with its publication time.
+                title, link, pub_time = fetch_latest_article(url)
+                if not title or not link:
                     continue
 
-                latest_entry = parsed.entries[0]
-                title = latest_entry.get("title", "No title")
-                link = latest_entry.get("link")
-
-                # Determine platform and set normalized channel key
+                # Determine platform and set normalized channel key.
                 if raw_chan.startswith("!"):
-                    # Matrix
+                    # Matrix – use raw channel as key.
                     chan_type = "matrix"
                     chan = raw_chan
                 elif raw_chan.isdigit():
-                    # Discord
+                    # Discord – key is the raw channel id.
                     chan_type = "discord"
                     chan = raw_chan
                 elif "|" in raw_chan:
-                    # Already composite IRC
+                    # Already composite key for IRC.
                     chan_type = "irc"
                     chan = raw_chan
                 else:
-                    # Basic IRC, make composite
+                    # Basic IRC channel; create composite.
                     chan_type = "irc"
                     chan = f"{server}|{raw_chan}"
 
+                # Skip if no link.
                 if not link:
                     continue
 
+                # Check publication time against bot start time.
+                # If the feed's latest entry was published before the bot started,
+                # mark it as posted and skip it.
+                if pub_time and pub_time < start_time:
+                    logging.info(f"[SKIP OLD] In {chan}, feed '{feed_name}' published at {pub_time} is older than bot start time {start_time}. Marking as posted.")
+                    mark_link_posted(chan, link)
+                    continue
+
+                # Check if this link has already been posted.
                 if is_link_posted(chan, link):
                     logging.info(f"[SKIP] {chan} already posted: {link}")
                     continue
 
+                # Mark the link as posted so we don't repost it.
                 mark_link_posted(chan, link)
 
                 title_msg = f"{feed_name}: {title}"
@@ -101,4 +110,3 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, interval_ov
     while True:
         poll_feeds(irc_send, matrix_send, discord_send, private_send)
         time.sleep(interval_override or default_interval)
-
