@@ -11,6 +11,7 @@ import sys
 import os
 import importlib
 import asyncio
+import shlex
 
 from config import admin, ops, admins, admin_file, server, channels as config_channels
 import feed
@@ -44,7 +45,7 @@ def composite_key(channel, integration):
     else:
         return channel
 
-# FIX: Return composite key immediately if it exists; otherwise, migrate the plain key.
+# FIX: Return composite key immediately if it exists; otherwise, perform migration.
 def migrate_plain_key_if_needed(channel, integration):
     if integration != "irc":
         return channel
@@ -105,7 +106,7 @@ def search_feeds(query):
         logging.error("Error searching feeds: %s", e)
         return []
 
-# UPDATED: Compare both stored feed names and the input pattern in lowercase.
+# UPDATED: Both stored feed names and pattern are compared in lowercase for case-insensitive matching.
 def match_feed(feed_dict, pattern):
     pattern_lower = pattern.lower()
     if "*" in pattern or "?" in pattern:
@@ -313,12 +314,17 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # ------------------ FEED COMMANDS ------------------
     elif lower_message.startswith("!addfeed"):
-        parts = message.split(" ", 2)
-        if len(parts) < 3:
+        # Use shlex.split to allow quoted feed names
+        try:
+            args = shlex.split(message)
+        except Exception as e:
+            send_message_fn(response_target(actual_channel, integration), "Error parsing command.")
+            return
+        if len(args) < 3:
             send_message_fn(response_target(actual_channel, integration), "Usage: !addfeed <feed_name> <URL>")
             return
-        feed_name = parts[1].strip()
-        feed_url = parts[2].strip()
+        feed_name = args[1].strip()  # quotes removed automatically
+        feed_url = args[2].strip()
         if key not in feed.channel_feeds:
             feed.channel_feeds[key] = {}
         feed.channel_feeds[key][feed_name] = feed_url
@@ -375,7 +381,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         title, link = feed.fetch_latest_article(feed.channel_feeds[key][feed_name])
         if title and link:
             if integration == "matrix":
-                # Combine title and link so Matrix doesn't skip the link line.
+                # Combine title and link so that Matrix doesn't skip the link line.
                 combined = f"Latest from {feed_name}: {title}\nURL: {link}"
                 send_message_fn(response_target(actual_channel, integration), combined)
             else:
@@ -699,7 +705,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         send_message_fn(response_target(actual_channel, integration), "Restarting bot gracefully...")
         try:
             async def graceful_shutdown():
-                # Disconnect Discord
                 try:
                     from discord_integration import bot as discord_bot
                     if discord_bot:
@@ -707,7 +712,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                         logging.info("Discord bot disconnected gracefully.")
                 except Exception as e:
                     logging.error(f"Error disconnecting Discord bot: {e}")
-                # Disconnect Matrix
                 try:
                     from matrix_integration import matrix_bot_instance
                     if matrix_bot_instance:
@@ -715,7 +719,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                         logging.info("Matrix bot disconnected gracefully.")
                 except Exception as e:
                     logging.error(f"Error disconnecting Matrix bot: {e}")
-                # Disconnect IRC
                 try:
                     from irc_client import irc_client as current_irc
                     if current_irc:
