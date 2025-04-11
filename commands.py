@@ -44,7 +44,7 @@ def composite_key(channel, integration):
     else:
         return channel
 
-# FIX: If the composite key already exists, return it immediately.
+# FIX: Return composite key immediately if it exists; otherwise, migrate the plain key.
 def migrate_plain_key_if_needed(channel, integration):
     if integration != "irc":
         return channel
@@ -105,7 +105,7 @@ def search_feeds(query):
         logging.error("Error searching feeds: %s", e)
         return []
 
-# UPDATED: Normalize both keys and pattern to lowercase for consistent, case-insensitive matching.
+# UPDATED: Compare both stored feed names and the input pattern in lowercase.
 def match_feed(feed_dict, pattern):
     pattern_lower = pattern.lower()
     if "*" in pattern or "?" in pattern:
@@ -374,8 +374,13 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         feed_name = matched
         title, link = feed.fetch_latest_article(feed.channel_feeds[key][feed_name])
         if title and link:
-            send_message_fn(response_target(actual_channel, integration), f"Latest from {feed_name}: {title}")
-            send_message_fn(response_target(actual_channel, integration), f"Link: {link}")
+            if integration == "matrix":
+                # Combine title and link so Matrix doesn't skip the link line.
+                combined = f"Latest from {feed_name}: {title}\nURL: {link}"
+                send_message_fn(response_target(actual_channel, integration), combined)
+            else:
+                send_message_fn(response_target(actual_channel, integration), f"Latest from {feed_name}: {title}")
+                send_message_fn(response_target(actual_channel, integration), f"Link: {link}")
         else:
             send_message_fn(response_target(actual_channel, integration), f"No entry available for {feed_name}.")
 
@@ -694,6 +699,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         send_message_fn(response_target(actual_channel, integration), "Restarting bot gracefully...")
         try:
             async def graceful_shutdown():
+                # Disconnect Discord
                 try:
                     from discord_integration import bot as discord_bot
                     if discord_bot:
@@ -701,6 +707,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                         logging.info("Discord bot disconnected gracefully.")
                 except Exception as e:
                     logging.error(f"Error disconnecting Discord bot: {e}")
+                # Disconnect Matrix
                 try:
                     from matrix_integration import matrix_bot_instance
                     if matrix_bot_instance:
@@ -708,6 +715,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                         logging.info("Matrix bot disconnected gracefully.")
                 except Exception as e:
                     logging.error(f"Error disconnecting Matrix bot: {e}")
+                # Disconnect IRC
                 try:
                     from irc_client import irc_client as current_irc
                     if current_irc:
@@ -767,4 +775,3 @@ def search_feeds(query):
     except Exception as e:
         logging.error("Error searching feeds: %s", e)
         return []
-
