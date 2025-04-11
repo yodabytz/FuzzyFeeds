@@ -10,6 +10,7 @@ import threading
 import sys
 import os
 import importlib
+import asyncio
 
 from config import admin, ops, admins, admin_file, server, channels as config_channels
 import feed
@@ -43,7 +44,7 @@ def composite_key(channel, integration):
     else:
         return channel
 
-# FIX: Update this function so that if the composite key already exists, we just return it.
+# FIX: If the composite key already exists, return it immediately.
 def migrate_plain_key_if_needed(channel, integration):
     if integration != "irc":
         return channel
@@ -104,9 +105,11 @@ def search_feeds(query):
         logging.error("Error searching feeds: %s", e)
         return []
 
+# UPDATED: Normalize both keys and pattern to lowercase for consistent, case-insensitive matching.
 def match_feed(feed_dict, pattern):
+    pattern_lower = pattern.lower()
     if "*" in pattern or "?" in pattern:
-        matches = [name for name in feed_dict.keys() if fnmatch.fnmatch(name, pattern)]
+        matches = [name for name in feed_dict.keys() if fnmatch.fnmatch(name.lower(), pattern_lower)]
         if len(matches) == 1:
             return matches[0]
         elif len(matches) == 0:
@@ -114,7 +117,10 @@ def match_feed(feed_dict, pattern):
         else:
             return matches
     else:
-        return pattern if pattern in feed_dict else None
+        for key in feed_dict.keys():
+            if key.lower() == pattern_lower:
+                return key
+        return None
 
 def multiline_send(send_multiline_fn, target, message):
     lines = message.split("\n")
@@ -154,7 +160,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
     is_admin_flag = (user.lower() == admin.lower())
     effective_op = is_op_flag or (user.lower() in [op.lower() for op in ops]) or is_admin_flag
 
-    # Read admin.json and check if user is channel admin for target
     try:
         with open(admin_file, "r") as f:
             admin_mapping = json.load(f)
@@ -681,28 +686,38 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             ]
         multiline_send(send_multiline_message_fn, response_target_value, "\n".join(response_lines))
     
-    elif lower_message.startswith("!quit"):
-        if user.lower() != admin.lower():
-            send_private_message_fn(user, "Only the bot owner can use !quit.")
-            return
-        send_message_fn(response_target(actual_channel, integration), "Shutting down...")
-        os._exit(0)
-    
-    elif lower_message.startswith("!reload"):
-        if user.lower() != admin.lower():
-            send_private_message_fn(user, "Only the bot owner can use !reload.")
-            return
-        try:
-            importlib.reload(__import__("config"))
-            send_message_fn(response_target(actual_channel, integration), "Configuration reloaded.")
-        except Exception as e:
-            send_message_fn(response_target(actual_channel, integration), f"Error reloading config: {e}")
-    
+    # ------------------ GRACEFUL RESTART COMMAND ------------------
     elif lower_message.startswith("!restart"):
         if user.lower() != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !restart.")
             return
-        send_message_fn(response_target(actual_channel, integration), "Restarting bot...")
+        send_message_fn(response_target(actual_channel, integration), "Restarting bot gracefully...")
+        try:
+            async def graceful_shutdown():
+                try:
+                    from discord_integration import bot as discord_bot
+                    if discord_bot:
+                        await discord_bot.close()
+                        logging.info("Discord bot disconnected gracefully.")
+                except Exception as e:
+                    logging.error(f"Error disconnecting Discord bot: {e}")
+                try:
+                    from matrix_integration import matrix_bot_instance
+                    if matrix_bot_instance:
+                        await matrix_bot_instance.client.close()
+                        logging.info("Matrix bot disconnected gracefully.")
+                except Exception as e:
+                    logging.error(f"Error disconnecting Matrix bot: {e}")
+                try:
+                    from irc_client import irc_client as current_irc
+                    if current_irc:
+                        current_irc.close()
+                        logging.info("IRC connection closed gracefully.")
+                except Exception as e:
+                    logging.error(f"Error disconnecting IRC: {e}")
+            asyncio.run(graceful_shutdown())
+        except Exception as e:
+            logging.error(f"Error during graceful shutdown: {e}")
         os.execv(sys.executable, [sys.executable] + sys.argv)
     
     elif lower_message.startswith("!help"):
