@@ -45,7 +45,7 @@ def composite_key(channel, integration):
     else:
         return channel
 
-# FIX: Return composite key immediately if it exists; otherwise, perform migration.
+# Return composite key if it exists; otherwise migrate plain key.
 def migrate_plain_key_if_needed(channel, integration):
     if integration != "irc":
         return channel
@@ -106,7 +106,7 @@ def search_feeds(query):
         logging.error("Error searching feeds: %s", e)
         return []
 
-# UPDATED: Both stored feed names and pattern are compared in lowercase for case-insensitive matching.
+# Compare feed names case-insensitively.
 def match_feed(feed_dict, pattern):
     pattern_lower = pattern.lower()
     if "*" in pattern or "?" in pattern:
@@ -135,31 +135,45 @@ def response_target(actual_channel, integration):
         return actual_channel
     return actual_channel
 
+# NEW: Normalize username keys by stripping whitespace and, for Discord, splitting at '#' and lowercasing.
+def get_user_key(user, integration):
+    user = user.strip()
+    if integration == "discord":
+        return user.split("#")[0].lower() if "#" in user else user.lower()
+    else:
+        return user.lower()
+
 def handle_centralized_command(integration, send_message_fn, send_private_message_fn, send_multiline_message_fn,
                                user, target, message, is_op_flag, irc_conn=None):
     now = time.time()
-    if user in user_abuse and now < user_abuse[user].get('block_until', 0):
+    user_key = get_user_key(user, integration)
+    
+    if integration == "discord":
+        computed_op = user_key in [a.lower() for a in admins] or user_key == admin.lower()
+    else:
+        computed_op = is_op_flag
+    effective_op = computed_op or (user_key in [op.lower() for op in ops])
+    
+    if user_key in user_abuse and now < user_abuse[user_key].get('block_until', 0):
         send_private_message_fn(user, "You are temporarily blocked from sending commands due to abuse. Please wait 5 minutes.")
         return
-    if user in last_command_timestamp and now - last_command_timestamp[user] < RATE_LIMIT_SECONDS:
-        abuse = user_abuse.get(user, {'violations': 0, 'block_until': 0})
+    if user_key in last_command_timestamp and now - last_command_timestamp[user_key] < RATE_LIMIT_SECONDS:
+        abuse = user_abuse.get(user_key, {'violations': 0, 'block_until': 0})
         abuse['violations'] += 1
-        user_abuse[user] = abuse
+        user_abuse[user_key] = abuse
         if abuse['violations'] >= VIOLATION_THRESHOLD:
             abuse['block_until'] = now + BLOCK_DURATION
-            user_abuse[user] = abuse
+            user_abuse[user_key] = abuse
             send_private_message_fn(user, "You are sending commands too quickly. You have been blocked for 5 minutes.")
             return
         else:
             send_private_message_fn(user, "You're sending commands too quickly. Please wait 3 seconds.")
             return
-    last_command_timestamp[user] = now
-    if user in user_abuse:
-        user_abuse[user]['violations'] = 0
+    last_command_timestamp[user_key] = now
+    if user_key in user_abuse:
+        user_abuse[user_key]['violations'] = 0
 
     logging.info(f"[commands.py] Received command from {user} in {target} via {integration}: {message}")
-    is_admin_flag = (user.lower() == admin.lower())
-    effective_op = is_op_flag or (user.lower() in [op.lower() for op in ops]) or is_admin_flag
 
     try:
         with open(admin_file, "r") as f:
@@ -169,7 +183,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         logging.error(f"Error reading admin_file {admin_file}: {e}")
 
     channel_admin = admin_mapping.get(target)
-    if channel_admin and user.lower() == channel_admin.lower():
+    if channel_admin and user_key == channel_admin.lower():
         logging.info(f"User {user} recognized as channel admin for {target}; granting effective_op.")
         effective_op = True
 
@@ -188,10 +202,9 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             return
         sub_name = parts[1].strip().lower()
         feed_url = parts[2].strip()
-        uname = user.lower()
-        if uname not in feed.subscriptions:
-            feed.subscriptions[uname] = {}
-        feed.subscriptions[uname][sub_name] = feed_url
+        if user_key not in feed.subscriptions:
+            feed.subscriptions[user_key] = {}
+        feed.subscriptions[user_key][sub_name] = feed_url
         feed.save_subscriptions()
         send_private_message_fn(user, f"Subscribed to feed: {sub_name} ({feed_url})")
 
@@ -201,18 +214,16 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_private_message_fn(user, "Usage: !unsub <feed_name>")
             return
         sub_name = parts[1].strip().lower()
-        uname = user.lower()
-        if uname in feed.subscriptions and sub_name in feed.subscriptions[uname]:
-            del feed.subscriptions[uname][sub_name]
+        if user_key in feed.subscriptions and sub_name in feed.subscriptions[user_key]:
+            del feed.subscriptions[user_key][sub_name]
             feed.save_subscriptions()
             send_private_message_fn(user, f"Unsubscribed from feed: {sub_name}")
         else:
             send_private_message_fn(user, f"Not subscribed to feed '{sub_name}'.")
 
     elif lower_message.startswith("!mysubs"):
-        uname = user.lower()
-        if uname in feed.subscriptions and feed.subscriptions[uname]:
-            lines = [f"{k}: {v}" for k, v in feed.subscriptions[uname].items()]
+        if user_key in feed.subscriptions and feed.subscriptions[user_key]:
+            lines = [f"{k}: {v}" for k, v in feed.subscriptions[user_key].items()]
             multiline_send(send_multiline_message_fn, user, "\n".join(lines))
         else:
             send_private_message_fn(user, "No subscriptions found.")
@@ -224,9 +235,8 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_private_message_fn(user, "Usage: !latestsub <feed_name>")
             return
         sub_name = parts[1].strip().lower()
-        uname = user.lower()
-        if uname in feed.subscriptions and sub_name in feed.subscriptions[uname]:
-            url = feed.subscriptions[uname][sub_name]
+        if user_key in feed.subscriptions and sub_name in feed.subscriptions[user_key]:
+            url = feed.subscriptions[user_key][sub_name]
             title, link = feed.fetch_latest_article(url)
             if title and link:
                 combined_message = f"Latest from your subscription '{sub_name}':\n{title}\nLink: {link}"
@@ -238,7 +248,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # ------------------ OP COMMANDS: JOIN & PART ------------------
     elif lower_message.startswith("!join"):
-        if user.lower() not in [a.lower() for a in admins]:
+        if user_key not in [a.lower() for a in admins]:
             send_private_message_fn(user, "Only a bot admin can use !join.")
             return
         parts = message.split()
@@ -271,7 +281,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), f"Error joining channel: {e}")
 
     elif lower_message.startswith("!part"):
-        if user.lower() not in [a.lower() for a in admins]:
+        if user_key not in [a.lower() for a in admins]:
             send_private_message_fn(user, "Only a bot admin can use !part.")
             return
         parts = message.split()
@@ -314,7 +324,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # ------------------ FEED COMMANDS ------------------
     elif lower_message.startswith("!addfeed"):
-        # Use shlex.split to allow quoted feed names
         try:
             args = shlex.split(message)
         except Exception as e:
@@ -323,7 +332,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         if len(args) < 3:
             send_message_fn(response_target(actual_channel, integration), "Usage: !addfeed <feed_name> <URL>")
             return
-        feed_name = args[1].strip()  # quotes removed automatically
+        feed_name = args[1].strip()
         feed_url = args[2].strip()
         if key not in feed.channel_feeds:
             feed.channel_feeds[key] = {}
@@ -381,7 +390,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         title, link = feed.fetch_latest_article(feed.channel_feeds[key][feed_name])
         if title and link:
             if integration == "matrix":
-                # Combine title and link so that Matrix doesn't skip the link line.
                 combined = f"Latest from {feed_name}: {title}\nURL: {link}"
                 send_message_fn(response_target(actual_channel, integration), combined)
             else:
@@ -655,7 +663,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         try:
             with open(admin_file, "r") as f:
                 admin_mapping = json.load(f)
-            if user.lower() == admin.lower() or user.lower() in [a.lower() for a in admins]:
+            if user_key == admin.lower() or user_key in [a.lower() for a in admins]:
                 irc_admins = {k: v for k, v in admin_mapping.items() if k.startswith("#")}
                 discord_admins = {k: v for k, v in admin_mapping.items() if k.isdigit()}
                 matrix_admins = {k: v for k, v in admin_mapping.items() if k.startswith("!")}
@@ -675,7 +683,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         response_target_value = response_target(actual_channel, integration)
         uptime_seconds = int(time.time() - __import__("config").start_time)
         uptime = str(datetime.timedelta(seconds=uptime_seconds))
-        if user.lower() == admin.lower() or user.lower() in [a.lower() for a in admins]:
+        if user_key == admin.lower() or user_key in [a.lower() for a in admins]:
             irc_keys = [k for k in feed.channel_feeds if "|" in k or k.startswith("#")]
             discord_keys = [k for k in feed.channel_feeds if k.isdigit()]
             matrix_keys = [k for k in feed.channel_feeds if k.startswith("!")]
@@ -699,7 +707,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
     
     # ------------------ GRACEFUL RESTART COMMAND ------------------
     elif lower_message.startswith("!restart"):
-        if user.lower() != admin.lower():
+        if user_key != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !restart.")
             return
         send_message_fn(response_target(actual_channel, integration), "Restarting bot gracefully...")
