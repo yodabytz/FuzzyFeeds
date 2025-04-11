@@ -138,9 +138,15 @@ def fetch_latest_article(url):
             entry = d.entries[0]
             title = entry.title.strip() if entry.get("title") else "No Title"
             link = entry.link.strip() if entry.get("link") else ""
-            return title, link
-        return None, None
+            # Attempt to get publication time from 'published_parsed' or 'updated_parsed'
+            if entry.get("published_parsed"):
+                pub_time = time.mktime(entry.published_parsed)
+            elif entry.get("updated_parsed"):
+                pub_time = time.mktime(entry.updated_parsed)
+            else:
+                pub_time = 0
+            return title, link, pub_time
+        return None, None, 0
     except Exception as e:
         logging.error(f"[feed.py] Error fetching feed {url}: {e}")
-        return None, None
-
+        return None, None, 0
