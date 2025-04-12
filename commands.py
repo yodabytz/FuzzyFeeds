@@ -135,7 +135,7 @@ def response_target(actual_channel, integration):
         return actual_channel
     return actual_channel
 
-# NEW: Normalize username keys by stripping whitespace and, for Discord, splitting at '#' and lowercasing.
+# Normalize username keys by stripping whitespace and, for Discord, splitting at '#' and lowercasing.
 def get_user_key(user, integration):
     user = user.strip()
     if integration == "discord":
@@ -237,7 +237,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         sub_name = parts[1].strip().lower()
         if user_key in feed.subscriptions and sub_name in feed.subscriptions[user_key]:
             url = feed.subscriptions[user_key][sub_name]
-            title, link = feed.fetch_latest_article(url)
+            title, link, pub_time = feed.fetch_latest_article(url)
             if title and link:
                 combined_message = f"Latest from your subscription '{sub_name}':\n{title}\nLink: {link}"
                 multiline_send(send_multiline_message_fn, user, combined_message)
@@ -387,7 +387,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), f"Multiple feeds match '{pattern}': {', '.join(matched)}. Please be more specific.")
             return
         feed_name = matched
-        title, link = feed.fetch_latest_article(feed.channel_feeds[key][feed_name])
+        title, link, pub_time = feed.fetch_latest_article(feed.channel_feeds[key][feed_name])
         if title and link:
             if integration == "matrix":
                 combined = f"Latest from {feed_name}: {title}\nURL: {link}"
@@ -409,7 +409,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), "No matching feed found.")
             return
         feed_title, feed_url = results[0]
-        title, link = feed.fetch_latest_article(feed_url)
+        title, link, pub_time = feed.fetch_latest_article(feed_url)
         if title and link:
             send_message_fn(response_target(actual_channel, integration), f"Latest from {feed_title}: {title}")
             send_message_fn(response_target(actual_channel, integration), f"Link: {link}")
