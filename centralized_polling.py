@@ -69,7 +69,7 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=
                 link_msg = f"Link: {link}"
 
                 if chan_type == "matrix":
-                    # Fix: combine title and link into one message (with a newline) so order is preserved.
+                    # Combine title and link into one message with a newline
                     combined_msg = f"{title_msg}\n{link_msg}"
                     if matrix_send:
                         matrix_send(chan, combined_msg)
