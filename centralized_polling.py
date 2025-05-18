@@ -14,75 +14,60 @@ from discord_integration import send_discord_message as discord_fallback
 logging.basicConfig(level=logging.INFO)
 
 def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=None):
-    logging.info("Polling feeds...")
-
-    load_feeds()
     new_feed_count = 0
+    # Load the latest feeds into memory (this also clears stale entries)
+    load_feeds()
 
     for raw_chan, feeds in channel_feeds.items():
         for feed_name, url in feeds.items():
             try:
-                # Get the latest article along with its publication time.
+                # Fetch latest entry
                 title, link, pub_time = fetch_latest_article(url)
-                if not title or not link:
-                    continue
 
-                # Determine platform and set normalized channel key.
-                if raw_chan.startswith("!"):
-                    # Matrix – use raw channel as key.
-                    chan_type = "matrix"
-                    chan = raw_chan
-                elif raw_chan.isdigit():
-                    # Discord – key is the raw channel id.
-                    chan_type = "discord"
-                    chan = raw_chan
-                elif "|" in raw_chan:
-                    # Already composite key for IRC.
-                    chan_type = "irc"
+                # Determine channel type and composite key
+                if "|" in raw_chan:
+                    # Already composite (e.g. "server|#channel")
+                    chan_type = "irc"  # only IRC uses pipes here
                     chan = raw_chan
                 else:
-                    # Basic IRC channel; create composite.
+                    # Basic IRC channel; create composite for posting
                     chan_type = "irc"
                     chan = f"{server}|{raw_chan}"
 
-                # Skip if no link.
+                # Skip if no link returned
                 if not link:
                     continue
 
-                # Check publication time against bot start time.
-                # If the feed's latest entry was published before the bot started,
-                # mark it as posted and skip it.
+                # Skip entries older than bot start
                 if pub_time and pub_time < start_time:
-                    logging.info(f"[SKIP OLD] In {chan}, feed '{feed_name}' published at {pub_time} is older than bot start time {start_time}. Marking as posted.")
+                    logging.info(f"[SKIP OLD] In {chan}, feed '{feed_name}' is older than bot start time {start_time}. Marking as posted.")
                     mark_link_posted(chan, link)
                     continue
 
-                # Check if this link has already been posted.
+                # Skip if already posted
                 if is_link_posted(chan, link):
                     logging.info(f"[SKIP] {chan} already posted: {link}")
                     continue
 
-                # Mark the link as posted so we don't repost it.
+                # Mark as posted to prevent duplicates
                 mark_link_posted(chan, link)
 
+                # Prepare messages
                 title_msg = f"{feed_name}: {title}"
-                link_msg = f"Link: {link}"
+                link_msg  = f"Link: {link}"
 
-                if chan_type == "matrix":
-                    # Combine title and link into one message with a newline
-                    combined_msg = f"{title_msg}\n{link_msg}"
-                    if matrix_send:
-                        matrix_send(chan, combined_msg)
-                    else:
-                        matrix_fallback(chan, combined_msg)
-                elif chan_type == "discord":
-                    if discord_send:
-                        discord_send(chan, title_msg)
-                        discord_send(chan, link_msg)
-                    else:
-                        discord_fallback(chan, title_msg)
-                        discord_fallback(chan, link_msg)
-                elif chan_type == "irc":
+                # Dispatch to Matrix
+                if "|" in raw_chan and raw_chan.count("|") == 1 and raw_chan not in channel_feeds:
+                    # (not used for Matrix)
+                    pass
+
+                # Send to Discord
+                if "|" in raw_chan and raw_chan.count("|") == 1 and raw_chan not in channel_feeds:
+                    # (not used for Discord)
+                    pass
+
+                # Public dispatch based on channel type
+                if chan_type == "irc":
                     if irc_send:
                         irc_send(chan, title_msg)
                         irc_send(chan, link_msg)
@@ -95,6 +80,18 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=
                             client = irc_secondary[net]
                             client.send_message(channel, title_msg)
                             client.send_message(channel, link_msg)
+
+                # ── Private subscriptions: send to any user who subscribed to this URL
+                if private_send:
+                    from feed import subscriptions
+                    for user, subs in subscriptions.items():
+                        for sub_name, sub_url in subs.items():
+                            if sub_url == url:
+                                combined = (
+                                    f"Subscription '{sub_name}' — {feed_name}:\n"
+                                    f"{title}\nLink: {link}"
+                                )
+                                private_send(user, combined)
 
                 new_feed_count += 1
 
