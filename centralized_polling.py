@@ -44,7 +44,9 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=
 
                 # Skip if entry is older than bot start
                 if pub_time and pub_time < start_time:
-                    logging.info(f"[SKIP OLD] In {chan}, feed '{feed_name}' published at {pub_time} before start time {start_time}. Marking as posted.")
+                    logging.info(
+                        f"[SKIP OLD] In {chan}, feed '{feed_name}' published at {pub_time} before start time {start_time}. Marking as posted."
+                    )
                     mark_link_posted(chan, link)
                     continue
 
@@ -90,17 +92,36 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=
                             client.send_message(channel, title_msg)
                             client.send_message(channel, link_msg)
 
-                # ── Private subscriptions: send DM to subscribed users
-                if private_send:
-                    from feed import subscriptions
-                    for user, subs in subscriptions.items():
-                        for sub_name, sub_url in subs.items():
-                            if sub_url == url:
-                                dm = (
-                                    f"Subscription '{sub_name}' — {feed_name}:\n"
-                                    f"{title}\nLink: {link}"
-                                )
-                                private_send(user, dm)
+                # ── Private subscriptions: send DMs on the appropriate network
+                from feed import subscriptions
+                for user, subs in subscriptions.items():
+                    for sub_name, sub_url in subs.items():
+                        if sub_url != url:
+                            continue
+                        dm = (
+                            f"Subscription '{sub_name}' — {feed_name}:\n"
+                            f"{title}\nLink: {link}"
+                        )
+                        # Matrix users start with '@'
+                        if user.startswith("@"):
+                            if matrix_send:
+                                matrix_send(user, dm)
+                            else:
+                                matrix_fallback(user, dm)
+                            continue
+                        # Discord user IDs are purely digits
+                        if user.isdigit():
+                            if discord_send:
+                                discord_send(user, dm)
+                            else:
+                                discord_fallback(user, dm)
+                            continue
+                        # Otherwise assume plain IRC nick
+                        if irc_send:
+                            irc_send(f"{server}|{user}", dm)
+                        else:
+                            if irc_client:
+                                irc_client.send_message(user, dm)
 
                 new_feed_count += 1
 
