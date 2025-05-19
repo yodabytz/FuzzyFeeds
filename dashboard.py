@@ -528,10 +528,11 @@ def index():
             if composite not in feed.channel_feeds:
                 feed.channel_feeds[composite] = {}
 
-    # Also include channels from primary config if missing
+    # Also include default channels as composites (to avoid plain “#…” keys)
     for channel in config.channels:
-        if channel not in feed.channel_feeds:
-            feed.channel_feeds[channel] = {}
+        composite = f"{config.server}|{channel}"
+        if composite not in feed.channel_feeds:
+            feed.channel_feeds[composite] = {}
 
     # Prepare IRC status info
     irc_servers = []
