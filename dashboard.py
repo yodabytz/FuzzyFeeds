@@ -5,7 +5,7 @@ import datetime
 import logging
 import json
 from collections import deque
-from flask import Flask, jsonify, render_template_string, request, Response
+from flask import Flask, jsonify, render_template_string, request, Response, redirect, url_for
 import config
 
 from config import start_time, dashboard_port, dashboard_username, dashboard_password
@@ -26,9 +26,9 @@ from persistence import load_json
 from connection_state import connection_status, connection_lock
 
 MATRIX_ALIASES_FILE = os.path.join(os.path.dirname(__file__), "matrix_aliases.json")
+POSTED_LOG_FILE    = os.path.join(os.path.dirname(__file__), "posted_links.json")
 
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
-
 MAX_ERRORS = 50
 errors_deque = deque()
 
@@ -43,7 +43,6 @@ class DashboardErrorHandler(logging.Handler):
 handler = DashboardErrorHandler()
 handler.setLevel(logging.ERROR)
 logging.getLogger().addHandler(handler)
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
 from functools import wraps
@@ -60,11 +59,99 @@ def authenticate():
 def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-         auth = request.authorization
-         if not auth or not check_auth(auth.username, auth.password):
-              return authenticate()
-         return f(*args, **kwargs)
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
     return decorated
+
+app = Flask(__name__)
+
+@app.route('/clear_logs')
+@requires_auth
+def clear_logs():
+    try:
+        if os.path.exists(POSTED_LOG_FILE):
+            with open(POSTED_LOG_FILE, 'w') as f:
+                json.dump({}, f)
+        return redirect(url_for('index'))
+    except Exception as e:
+        return f"Error clearing logs: {e}", 500
+
+@app.route('/events')
+@requires_auth
+def events():
+    def generate():
+        while True:
+            # Posted counts
+            posted_data = load_json(POSTED_LOG_FILE, default={})
+            posted_counts = {"IRC":0, "Matrix":0, "Discord":0}
+            for k, lst in posted_data.items():
+                if k.startswith("!"):
+                    posted_counts["Matrix"] += len(lst)
+                elif k.isdigit():
+                    posted_counts["Discord"] += len(lst)
+                else:
+                    posted_counts["IRC"] += len(lst)
+            # Statuses
+            irc_servers = []
+            irc_status = {}
+            if config.server:
+                irc_servers.append(config.server)
+                with connection_lock:
+                    irc_status[config.server] = "green" if connection_status["primary"].get(config.server) else "red"
+            networks = load_json(os.path.join(os.path.dirname(__file__), "networks.json"), default={})
+            for net in networks.values():
+                srv = net.get("server", "")
+                if srv and srv not in irc_servers:
+                    irc_servers.append(srv)
+                    with connection_lock:
+                        irc_status[srv] = "green" if connection_status["secondary"].get(srv) else "red"
+            try:
+                from matrix_integration import matrix_bot_instance
+                matrix_status = "green" if matrix_bot_instance else "red"
+            except:
+                matrix_status = "red"
+            try:
+                from discord_integration import bot
+                discord_status = "green" if bot else "red"
+            except:
+                discord_status = "red"
+            # Feed totals breakdown
+            feed_totals = {
+                "IRC": {"feeds":0, "channels":0},
+                "Matrix": {"feeds":0, "channels":0},
+                "Discord": {"feeds":0, "channels":0}
+            }
+            for key, items in feed.channel_feeds.items():
+                cnt = len(items)
+                if key.startswith("!"):
+                    feed_totals["Matrix"]["feeds"] += cnt
+                    feed_totals["Matrix"]["channels"] += 1
+                elif key.isdigit():
+                    feed_totals["Discord"]["feeds"] += cnt
+                    feed_totals["Discord"]["channels"] += 1
+                else:
+                    feed_totals["IRC"]["feeds"] += cnt
+                    feed_totals["IRC"]["channels"] += 1
+            # Overall totals
+            total_feeds = sum(len(v) for v in feed.channel_feeds.values())
+            total_channels = len(feed.channel_feeds)
+            data = {
+                "posted_counts": posted_counts,
+                "irc_servers": irc_servers,
+                "irc_status": irc_status,
+                "matrix_status": matrix_status,
+                "discord_status": discord_status,
+                "matrix_server": config.matrix_homeserver,
+                "discord_server": "discord.com",
+                "feed_totals": feed_totals,
+                "total_feeds": total_feeds,
+                "total_channels": total_channels
+            }
+            yield f"data: {json.dumps(data)}\n\n"
+            time.sleep(1)
+    return Response(generate(), mimetype='text/event-stream')
 
 def build_feed_tree(networks):
     tree = {}
@@ -74,417 +161,350 @@ def build_feed_tree(networks):
         if "|" in key:
             server, channel = key.split("|", 1)
         elif key.startswith("#"):
-            server = config.server
-            channel = key
+            server, channel = config.server, key
         elif key.startswith("!"):
-            server = "Matrix"
-            channel = key
+            server, channel = "Matrix", key
         elif str(key).isdigit():
-            server = "Discord"
-            channel = key
+            server, channel = "Discord", key
         else:
-            server = ""
-            channel = key
-
-        if server not in tree:
-            tree[server] = {}
-        if channel not in tree[server]:
-            tree[server][channel] = []
-        for feed_name, link in feeds_dict.items():
-            tree[server][channel].append({"feed_name": feed_name, "link": link})
+            server, channel = "", key
+        tree.setdefault(server, {}).setdefault(channel, [])
+        for fn, link in feeds_dict.items():
+            tree[server][channel].append({"feed_name": fn, "link": link})
     return tree
 
 def sort_feed_tree(feed_tree):
-    def order_key(server):
-        s = server.lower()
-        if s == "matrix":
-            return (2, s)
-        elif s == "discord":
-            return (3, s)
-        else:
-            return (1, s)
+    def order_key(s):
+        sl = s.lower()
+        if sl == "matrix": return (2, sl)
+        if sl == "discord": return (3, sl)
+        return (1, sl)
     return sorted(feed_tree.items(), key=lambda x: order_key(x[0]))
 
 def dash(text):
     return f'<span style="color:#d3d3d3;">{text}</span>'
 
-def build_irc_tree(irc_tree):
+def build_irc_tree(tree):
     lines = []
-    base_indent = ""
-    server_keys = list(irc_tree.keys())
-    for s_idx, server in enumerate(server_keys):
-        is_last_server = (s_idx == len(server_keys) - 1)
-        connector = dash("└── ") if is_last_server else dash("├── ")
-        server_line = base_indent + connector + f'<span style="color:#d63384; font-weight:bold;">{server}</span>'
-        lines.append(server_line)
-        channels = list(irc_tree[server].keys())
-        for c_idx, channel in enumerate(channels):
-            if channel == "FuzzyFeeds":
-                continue
-            is_last_channel = (c_idx == len(channels) - 1)
-            indent_prefix = "    " if is_last_server else dash("│") + "   "
-            connector = dash("└── ") if is_last_channel else dash("├── ")
-            channel_line = base_indent + indent_prefix + connector + f'<span style="color:#d63384; font-weight:bold;">{channel}</span>'
-            lines.append(channel_line)
-            feeds = irc_tree[server][channel]
-            for f_idx, feed_item in enumerate(feeds):
-                is_last_feed = (f_idx == len(feeds) - 1)
-                feed_indent = "    " if is_last_channel else dash("│") + "   "
-                connector = dash("└── ") if is_last_feed else dash("├── ")
-                feed_name = feed_item.get("feed_name", "Unknown")
-                feed_link = feed_item.get("link", "#")
-                feed_line = base_indent + indent_prefix + feed_indent + connector + f'<span style="color:#6610f2; font-weight:bold;">{feed_name}</span>: {feed_link}'
-                lines.append(feed_line)
+    servers = list(tree.keys())
+    for si, srv in enumerate(servers):
+        last_s = (si == len(servers) - 1)
+        conn = dash("└── ") if last_s else dash("├── ")
+        lines.append(conn + f'<span style="color:#d63384; font-weight:bold;">{srv}</span>')
+        channels = list(tree[srv].keys())
+        for ci, ch in enumerate(channels):
+            if ch == "FuzzyFeeds": continue
+            last_c = (ci == len(channels) - 1)
+            indent = "    "
+            conn2 = dash("└── ") if last_c else dash("├── ")
+            lines.append(indent + conn2 + f'<span style="color:#d63384; font-weight:bold;">{ch}</span>')
+            feeds = tree[srv][ch]
+            for fi, f in enumerate(feeds):
+                last_f = (fi == len(feeds) - 1)
+                conn3 = dash("└── ") if last_f else dash("├── ")
+                lines.append(indent*2 + conn3 + f'<span style="color:#6610f2;">{f["feed_name"]}</span>: {f["link"]}')
     return "\n".join(lines)
 
-def build_matrix_tree(matrix_tree, matrix_aliases):
-    lines = []
-    header_line = dash("└── ") + f'<span style="color:#d63384; font-weight:bold;">Matrix</span>'
-    lines.append(header_line)
-    room_keys = sorted(matrix_tree.keys())
-    n_rooms = len(room_keys)
-    for r_idx, room in enumerate(room_keys):
-        is_last_room = (r_idx == n_rooms - 1)
+def build_matrix_tree(tree, aliases):
+    lines = [dash("└── ") + f'<span style="color:#d63384; font-weight:bold;">Matrix</span>']
+    rooms = sorted(tree.keys())
+    for ri, room in enumerate(rooms):
+        last_r = (ri == len(rooms) - 1)
         indent = "    "
-        room_connector = dash("└── ") if is_last_room else dash("├── ")
-        room_display = matrix_aliases.get(room, room)
-        room_line = indent + room_connector + f'<span style="color:#d63384; font-weight:bold;">{room_display}</span>'
-        lines.append(room_line)
-        feeds = matrix_tree[room]
-        n_feeds = len(feeds)
-        feed_indent = indent + (dash("│") + "   " if not is_last_room else "    ")
-        for f_idx, feed_item in enumerate(feeds):
-            is_last_feed = (f_idx == n_feeds - 1)
-            feed_connector = dash("└── ") if is_last_feed else dash("├── ")
-            feed_line = feed_indent + feed_connector + f'<span style="color:#6610f2;">{feed_item.get("feed_name", "Unknown")}</span>: {feed_item.get("link", "#")}'
-            lines.append(feed_line)
+        conn = dash("└── ") if last_r else dash("├── ")
+        disp = aliases.get(room, matrix_room_names.get(room, room))
+        lines.append(indent + conn + f'<span style="color:#d63384; font-weight:bold;">{disp}</span>')
+        feeds = tree[room]
+        subindent = indent + (dash("│") + "   " if not last_r else "    ")
+        for fi, f in enumerate(feeds):
+            last_f = (fi == len(feeds) - 1)
+            conn2 = dash("└── ") if last_f else dash("├── ")
+            lines.append(subindent + conn2 + f'<span style="color:#6610f2;">{f["feed_name"]}</span>: {f["link"]}')
     return "\n".join(lines)
 
-def build_discord_tree(discord_tree):
+def build_discord_tree(tree):
     lines = []
-    channel_keys = sorted(discord_tree.keys())
-    for idx, channel in enumerate(channel_keys):
-        is_last = (idx == len(channel_keys) - 1)
-        connector = dash("└── ") if is_last else dash("├── ")
-        lines.append("    " + connector + f'<span style="color:#d63384; font-weight:bold;">{channel}</span>')
-        feeds = discord_tree[channel]
-        for f_idx, feed_item in enumerate(feeds):
-            is_last_feed = (f_idx == len(feeds) - 1)
-            feed_connector = dash("└── ") if is_last_feed else dash("├── ")
-            feed_name = feed_item.get("feed_name", "Unknown")
-            feed_link = feed_item.get("link", "#")
-            lines.append("        " + feed_connector + f'<span style="color:#6610f2; font-weight:bold;">{feed_name}</span>: {feed_link}')
+    channels = sorted(tree.keys())
+    for ci, ch in enumerate(channels):
+        last_c = (ci == len(channels) - 1)
+        conn = dash("└── ") if last_c else dash("├── ")
+        lines.append("    " + conn + f'<span style="color:#d63384; font-weight:bold;">{ch}</span>')
+        for fi, f in enumerate(tree[ch]):
+            last_f = (fi == len(tree[ch]) - 1)
+            conn2 = dash("└── ") if last_f else dash("├── ")
+            lines.append("        " + conn2 + f'<span style="color:#6610f2;">{f["feed_name"]}</span>: {f["link"]}')
     return "\n".join(lines)
 
-def build_unicode_tree(feed_tree_sorted, matrix_aliases):
-    new_tree = {"IRC": {}, "Matrix": {}, "Discord": {}}
-    for server, channels in feed_tree_sorted:
-        if server.lower() == "matrix":
-            new_tree["Matrix"].update(channels)
-        elif server.lower() == "discord":
-            new_tree["Discord"].update(channels)
+def build_unicode_tree(sorted_tree, aliases):
+    nt = {"IRC": {}, "Matrix": {}, "Discord": {}}
+    for srv, chans in sorted_tree:
+        sl = srv.lower()
+        if sl == "matrix":
+            nt["Matrix"].update(chans)
+        elif sl == "discord":
+            nt["Discord"].update(chans)
         else:
-            if server not in new_tree["IRC"]:
-                new_tree["IRC"][server] = {}
-            new_tree["IRC"][server].update(channels)
-    tree_sections = []
-    if new_tree["IRC"]:
-        tree_sections.append("IRC")
-        tree_sections.append(build_irc_tree(new_tree["IRC"]))
-    if new_tree["Matrix"]:
-        tree_sections.append("Matrix")
-        tree_sections.append(build_matrix_tree(new_tree["Matrix"], matrix_aliases))
-    if new_tree["Discord"]:
-        tree_sections.append("Discord")
-        tree_sections.append(build_discord_tree(new_tree["Discord"]))
-    return "\n".join(tree_sections)
-
-app = Flask(__name__)
+            nt["IRC"].setdefault(srv, {}).update(chans)
+    parts = []
+    if nt["IRC"]:
+        parts.extend(["IRC", build_irc_tree(nt["IRC"])])
+    if nt["Matrix"]:
+        parts.extend(["Matrix", build_matrix_tree(nt["Matrix"], aliases)])
+    if nt["Discord"]:
+        parts.extend(["Discord", build_discord_tree(nt["Discord"])])
+    return "\n".join(parts)
 
 DASHBOARD_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>FuzzyFeeds Dashboard</title>
-    <link href="https://fonts.googleapis.com/css2?family=Passion+One&family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
-    <link rel="icon" href="/static/images/favicon.ico" type="image/x-icon">
-    <style>
-      body { font-family: 'Montserrat', sans-serif; padding-top: 60px; }
-      h1 { font-family: 'Passion One', sans-serif; font-size: 3rem; }
-      .container { max-width: 1400px; }
-      .card { margin-bottom: 20px; border-radius: 15px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-      .footer { text-align: center; margin-top: 20px; color: #777; }
-      .logo-img { margin-right: 10px; }
-      pre.tree { background: #f8f9fa; padding: 15px; border: 1px solid #dee2e6; border-radius: 5px; white-space: pre-wrap; font-family: monospace; font-size: 14px; }
-      .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
-      .status-green { background-color: green; }
-      .status-red { background-color: red; }
-      #goTop { position: fixed; bottom: 20px; right: 20px; background-color: #007bff; color: white; padding: 10px 15px; border-radius: 50%; text-align: center; cursor: pointer; z-index: 1000; }
-    </style>
+  <meta charset="UTF-8">
+  <title>FuzzyFeeds Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Passion+One&family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+  <link rel="icon" href="/static/images/favicon.ico" type="image/x-icon">
+  <style>
+    body { font-family: 'Montserrat', sans-serif; padding-top: 60px; }
+    h1 { font-family: 'Passion One', sans-serif; font-size: 3rem; }
+    .container { max-width: 1400px; }
+    .card { margin-bottom: 20px; border-radius: 15px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+    pre.tree { background: #f8f9fa; padding: 15px; border: 1px solid #dee2e6; border-radius: 5px; white-space: pre-wrap; font-family: monospace; font-size:14px;}
+    .status-dot { height:10px; width:10px; border-radius:50%; display:inline-block; margin-right:5px; }
+    .status-green { background-color:green; }
+    .status-red { background-color:red; }
+    #goTop { position:fixed; bottom:20px; right:20px; background:#007bff; color:white; padding:10px 15px; border-radius:50%; cursor:pointer;}
+  </style>
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top">
-      <span class="navbar-brand mb-0 h1">FuzzyFeeds Dashboard</span>
-    </nav>
-
-    <div class="container">
-        <h1 class="mt-4">
-          <img class="logo-img" src="/static/images/fuzzyfeeds-logo-sm.png" width="100" height="100" alt="FuzzyFeeds Logo">
-          FuzzyFeeds Analytics Dashboard
-        </h1>
-        <p class="lead">Monitor uptime, feeds, subscriptions, and errors.</p>
-        
-        <div class="row">
-          <div class="col-md-4">
-              <div class="card">
-                  <div class="card-header bg-primary text-white" style="font-weight:600;">Stats</div>
-                  <div class="card-body">
-                      <h5 class="card-title" id="uptime">Uptime: {{ uptime }}</h5>
-                      <!-- Updated status section -->
-                      <p>
-                        <div id="irc_status_container">
-                          {% for server in irc_servers %}
-                            <div>
-                              <span class="status-dot {% if server in irc_status and irc_status[server] == 'green' %}status-green{% else %}status-red{% endif %}"></span>
-                              <span style="font-weight:600;">IRC Server:</span> {{ server }}
-                            </div>
-                          {% endfor %}
-                        </div>
-                        <div id="matrix_status_container">
-                          <span class="status-dot {% if matrix_status == 'green' %}status-green{% else %}status-red{% endif %}"></span>
-                          <span style="font-weight:600;">Matrix Server:</span> {{ matrix_server }}
-                        </div>
-                        <div id="discord_status_container">
-                          <span class="status-dot {% if discord_status == 'green' %}status-green{% else %}status-red{% endif %}"></span>
-                          <span style="font-weight:600;">Discord Server:</span> {{ discord_server }}
-                        </div>
-                      </p>
-                  </div>
-              </div>
-          </div>
-          <div class="col-md-4">
-              <div class="card">
-                  <div class="card-header bg-success text-white" style="font-weight:600;">Total Channel Feeds</div>
-                  <div class="card-body">
-                      <h5 class="card-title" id="total_feeds">{{ total_feeds }} feeds</h5>
-                      <p class="card-text">Across <span id="total_channels">{{ total_channels }}</span> channels/rooms.</p>
-                  </div>
-              </div>
-          </div>
-          <div class="col-md-4">
-              <div class="card">
-                  <div class="card-header bg-info text-white" style="font-weight:600;">User Subscriptions</div>
-                  <div class="card-body">
-                      <h5 class="card-title" id="total_subscriptions">{{ total_subscriptions }} total</h5>
-                      <p class="card-text" style="font-size: 0.9em;">
-                        {% for username, subs_dict in subscriptions.items() %}
-                          {{ username }}: {{ subs_dict|length }}<br/>
-                        {% endfor %}
-                      </p>
-                  </div>
-              </div>
-          </div>
-        </div>
-
-        <div class="row">
-            <div class="col-md-4">
-              <div class="card">
-                <div class="card-header bg-secondary text-white" style="font-weight:600;">IRC Channels</div>
-                <div class="card-body">
-                  {% if irc_channels %}
-                  <table class="table table-sm table-bordered">
-                    <thead>
-                      <tr>
-                        <th>Server | Channel</th>
-                        <th style="width:80px;"># Feeds</th>
-                      </tr>
-                    </thead>
-                    <tbody id="irc_table_body">
-                      {% for composite, feeds in irc_channels.items() %}
-                      <tr>
-                        <td>{{ composite|safe }}</td>
-                        <td>{{ feeds|length }}</td>
-                      </tr>
-                      {% endfor %}
-                    </tbody>
-                  </table>
-                  {% else %}
-                  <p>No IRC channels configured.</p>
-                  {% endif %}
-                </div>
-              </div>
+  <nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top">
+    <span class="navbar-brand mb-0 h1">FuzzyFeeds Dashboard</span>
+    <a href="/clear_logs" class="btn btn-danger ml-auto">Clear Logs</a>
+  </nav>
+  <div class="container">
+    <h1 class="mt-4">
+      <img src="/static/images/fuzzyfeeds-logo-sm.png" width="100" height="100" alt="Logo">
+      FuzzyFeeds Analytics Dashboard
+    </h1>
+    <p class="lead">Monitor uptime, feeds, subscriptions, and errors.</p>
+    <div class="row">
+      <div class="col-md-4">
+        <div class="card">
+          <div class="card-header bg-primary text-white">Stats</div>
+          <div class="card-body">
+            <h5 id="uptime" class="card-title">Uptime: {{ uptime }}</h5>
+            <div id="irc_status_container">
+              {% for srv in irc_servers %}
+                <div><span class="status-dot {% if irc_status[srv]=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>IRC:</strong> {{ srv }}</div>
+              {% endfor %}
             </div>
-            <div class="col-md-4">
-              <div class="card">
-                <div class="card-header bg-secondary text-white" style="font-weight:600;">Matrix Rooms</div>
-                <div class="card-body">
-                  {% if matrix_rooms %}
-                  <table class="table table-sm table-bordered">
-                    <thead>
-                      <tr>
-                        <th>Room</th>
-                        <th style="width:80px;"># Feeds</th>
-                      </tr>
-                    </thead>
-                    <tbody id="matrix_table_body">
-                      {% for room, feeds in matrix_rooms.items() %}
-                      <tr>
-                        <td>
-                          {% if matrix_aliases[room] is defined %}
-                            {{ matrix_aliases[room] }}
-                          {% elif matrix_room_names[room] is defined and matrix_room_names[room] %}
-                            {{ matrix_room_names[room] }}
-                          {% else %}
-                            {{ room }}
-                          {% endif %}
-                        </td>
-                        <td>{{ feeds|length }}</td>
-                      </tr>
-                      {% endfor %}
-                    </tbody>
-                  </table>
-                  {% else %}
-                  <p>No Matrix rooms configured.</p>
-                  {% endif %}
-                </div>
-              </div>
+            <div id="matrix_status_container">
+              <span class="status-dot {% if matrix_status=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>Matrix:</strong> {{ matrix_server }}
             </div>
-            <div class="col-md-4">
-              <div class="card">
-                <div class="card-header bg-secondary text-white" style="font-weight:600;">Discord Channels</div>
-                <div class="card-body">
-                  {% if discord_channels %}
-                  <table class="table table-sm table-bordered">
-                    <thead>
-                      <tr>
-                        <th>Channel ID</th>
-                        <th style="width:80px;"># Feeds</th>
-                      </tr>
-                    </thead>
-                    <tbody id="discord_table_body">
-                      {% for channel, feeds in discord_channels.items() %}
-                      <tr>
-                        <td>{{ channel }}</td>
-                        <td>{{ feeds|length }}</td>
-                      </tr>
-                      {% endfor %}
-                    </tbody>
-                  </table>
-                  {% else %}
-                  <p>No Discord channels configured.</p>
-                  {% endif %}
-                </div>
-              </div>
+            <div id="discord_status_container">
+              <span class="status-dot {% if discord_status=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>Discord:</strong> {{ discord_server }}
             </div>
-        </div>
-        
-        <div class="row">
-          <div class="col-md-12">
-              <div class="card">
-                <div class="card-header bg-dark text-white" style="font-weight:600;">Fuzzy Tree</div>
-                <div class="card-body">
-                  <pre class="tree">{{ feed_tree_html|safe }}</pre>
-                </div>
-              </div>
+            <hr>
+            <div id="posted_counts">
+              <strong>Feeds Posted:</strong><br>
+              IRC: <span id="irc_posted">0</span><br>
+              Matrix: <span id="matrix_posted">0</span><br>
+              Discord: <span id="discord_posted">0</span>
+            </div>
           </div>
         </div>
-        
-        <div class="row">
-          <div class="col-md-12">
-              <div class="card">
-                <div class="card-header bg-danger text-white" style="font-weight:600;">Errors</div>
-                <div class="card-body">
-                  <pre class="card-text" id="errors">{{ errors }}</pre>
-                </div>
-              </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card">
+          <div class="card-header bg-success text-white">Total Channel Feeds</div>
+          <div class="card-body">
+            <h5 id="total_feeds" class="card-title">{{ total_feeds }} feeds</h5>
+            <p class="card-text">Across <span id="total_channels">{{ total_channels }}</span> channels/rooms.</p>
+            <hr>
+            <div id="feed_totals">
+              IRC: <span id="irc_feeds">0</span> feeds across <span id="irc_chans">0</span> channels<br>
+              Matrix: <span id="matrix_feeds">0</span> feeds across <span id="matrix_chans">0</span> rooms<br>
+              Discord: <span id="discord_feeds">0</span> feeds across <span id="discord_chans">0</span> channels
+            </div>
           </div>
         </div>
-    </div>
-    <div id="goTop" onclick="window.scrollTo({top: 0, behavior: 'smooth'});">⇧</div>
-    <div class="footer">
-      <p>© FuzzyFeeds <span id="current_year">{{ current_year }}</span></p>
+      </div>
+      <div class="col-md-4">
+        <div class="card">
+          <div class="card-header bg-info text-white">User Subscriptions</div>
+          <div class="card-body">
+            <h5 id="total_subscriptions" class="card-title">{{ total_subscriptions }} total</h5>
+            <p class="card-text" style="font-size:0.9em;">
+              {% for user, subs in subscriptions.items() %}
+                {{ user }}: {{ subs|length }}<br/>
+              {% endfor %}
+            </p>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <script>
-      let uptimeInterval = setInterval(function(){
-          fetch('/uptime').then(response => {
-              if (!response.ok) throw new Error('Failed');
-              return response.json();
-          }).then(data => {
-              document.getElementById("uptime").innerText = "Uptime: " + data.uptime;
-              document.getElementById("uptime").style.color = "";
-          }).catch(error => {
-              document.getElementById("uptime").innerText = "DOWN";
-              document.getElementById("uptime").style.color = "red";
-          });
-      }, 1000);
+    <div class="row">
+      <div class="col-md-4">
+        <div class="card">
+          <div class="card-header bg-secondary text-white">IRC Channels</div>
+          <div class="card-body">
+            {% if irc_channels %}
+            <table class="table table-sm table-bordered">
+              <thead><tr><th>Server | Channel</th><th># Feeds</th></tr></thead>
+              <tbody id="irc_table_body">
+                {% for comp, feeds in irc_channels.items() %}
+                  <tr><td>{{ comp|safe }}</td><td>{{ feeds|length }}</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            {% else %}
+            <p>No IRC channels configured.</p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card">
+          <div class="card-header bg-secondary text-white">Matrix Rooms</div>
+          <div class="card-body">
+            {% if matrix_rooms %}
+            <table class="table table-sm table-bordered">
+              <thead><tr><th>Room</th><th># Feeds</th></tr></thead>
+              <tbody id="matrix_table_body">
+                {% for room, feeds in matrix_rooms.items() %}
+                  <tr>
+                    <td>
+                      {% if matrix_aliases[room] %}
+                        {{ matrix_aliases[room] }}
+                      {% elif matrix_room_names[room] %}
+                        {{ matrix_room_names[room] }}
+                      {% else %}
+                        {{ room }}
+                      {% endif %}
+                    </td>
+                    <td>{{ feeds|length }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            {% else %}
+            <p>No Matrix rooms configured.</p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card">
+          <div class="card-header bg-secondary text-white">Discord Channels</div>
+          <div class="card-body">
+            {% if discord_channels %}
+            <table class="table table-sm table-bordered">
+              <thead><tr><th>Channel ID</th><th># Feeds</th></tr></thead>
+              <tbody id="discord_table_body">
+                {% for ch, feeds in discord_channels.items() %}
+                  <tr><td>{{ ch }}</td><td>{{ feeds|length }}</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            {% else %}
+            <p>No Discord channels configured.</p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
 
-      async function updateStats() {
-        try {
-          const response = await fetch('/stats_data');
-          if (!response.ok) throw new Error('Network response was not ok');
-          const data = await response.json();
-          
-          document.getElementById("total_feeds").innerText = data.total_feeds + " feeds";
-          document.getElementById("total_channels").innerText = data.total_channels;
-          document.getElementById("total_subscriptions").innerText = data.total_subscriptions + " total";
-          document.getElementById("current_year").innerText = data.current_year;
+    <div class="row">
+      <div class="col-md-12">
+        <div class="card">
+          <div class="card-header bg-dark text-white">Fuzzy Tree</div>
+          <div class="card-body">
+            <pre class="tree">{{ feed_tree_html|safe }}</pre>
+          </div>
+        </div>
+      </div>
+    </div>
 
-          let userSubsHtml = "";
-          for (const [username, subsDict] of Object.entries(data.subscriptions)) {
-            userSubsHtml += `${username}: ${Object.keys(subsDict).length}<br/>`;
-          }
-          const subsCardText = document.querySelector("#total_subscriptions").parentNode.querySelector(".card-text");
-          if (subsCardText) {
-            subsCardText.innerHTML = userSubsHtml;
-          }
+    <div class="row">
+      <div class="col-md-12">
+        <div class="card">
+          <div class="card-header bg-danger text-white">Errors</div>
+          <div class="card-body">
+            <pre id="errors" class="card-text">{{ errors }}</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
-          let ircTable = "";
-          for (const [comp, fs] of Object.entries(data.irc_channels)) {
-            ircTable += `<tr><td>${comp}</td><td>${Object.keys(fs).length}</td></tr>`;
-          }
-          document.getElementById("irc_table_body").innerHTML = ircTable;
+  <div id="goTop" onclick="window.scrollTo({top:0,behavior:'smooth'});">⇧</div>
+  <div class="footer"><p>© FuzzyFeeds <span id="current_year">{{ current_year }}</span></p></div>
 
-          let matrixTable = "";
-          for (const [room, fs] of Object.entries(data.matrix_rooms)) {
-            const alias = data.matrix_aliases[room] || data.matrix_room_names[room] || room;
-            matrixTable += `<tr><td>${alias}</td><td>${Object.keys(fs).length}</td></tr>`;
-          }
-          document.getElementById("matrix_table_body").innerHTML = matrixTable;
+  <script>
+    // Server-Sent Events for real-time updates
+    const evt = new EventSource('/events');
+    evt.onmessage = function(e) {
+      const d = JSON.parse(e.data);
+      document.getElementById('irc_posted').innerText     = d.posted_counts.IRC;
+      document.getElementById('matrix_posted').innerText  = d.posted_counts.Matrix;
+      document.getElementById('discord_posted').innerText = d.posted_counts.Discord;
+      document.getElementById('total_feeds').innerText    = d.total_feeds + ' feeds';
+      document.getElementById('total_channels').innerText = d.total_channels;
+      document.getElementById('irc_feeds').innerText      = d.feed_totals.IRC.feeds;
+      document.getElementById('irc_chans').innerText      = d.feed_totals.IRC.channels;
+      document.getElementById('matrix_feeds').innerText   = d.feed_totals.Matrix.feeds;
+      document.getElementById('matrix_chans').innerText   = d.feed_totals.Matrix.channels;
+      document.getElementById('discord_feeds').innerText  = d.feed_totals.Discord.feeds;
+      document.getElementById('discord_chans').innerText  = d.feed_totals.Discord.channels;
+      // Status dots
+      let html = '';
+      d.irc_servers.forEach(srv => {
+        const cls = d.irc_status[srv] === 'green' ? 'status-green' : 'status-red';
+        html += `<div><span class="status-dot ${cls}"></span><strong>IRC:</strong> ${srv}</div>`;
+      });
+      document.getElementById('irc_status_container').innerHTML    = html;
+      document.getElementById('matrix_status_container').innerHTML = `<span class="status-dot ${d.matrix_status==='green'?'status-green':'status-red'}"></span><strong>Matrix:</strong> ${d.matrix_server}`;
+      document.getElementById('discord_status_container').innerHTML= `<span class="status-dot ${d.discord_status==='green'?'status-green':'status-red'}"></span><strong>Discord:</strong> ${d.discord_server}`;
+    };
 
-          let discordTable = "";
-          for (const [chan, fs] of Object.entries(data.discord_channels)) {
-            discordTable += `<tr><td>${chan}</td><td>${Object.keys(fs).length}</td></tr>`;
-          }
-          document.getElementById("discord_table_body").innerHTML = discordTable;
-          
-          document.querySelector(".tree").innerHTML = data.feed_tree_html;
-          
-          document.getElementById("errors").innerText = data.errors;
-          
-          // New: Update the status dots for IRC, Matrix, and Discord servers.
-          if(data.irc_servers && data.irc_status) {
-            let ircHTML = "";
-            data.irc_servers.forEach(server => {
-              const dotClass = data.irc_status[server] === "green" ? "status-green" : "status-red";
-              ircHTML += `<div><span class="status-dot ${dotClass}"></span><span style="font-weight:600;">IRC Server:</span> ${server}</div>`;
-            });
-            document.getElementById("irc_status_container").innerHTML = ircHTML;
-          }
-          document.getElementById("matrix_status_container").innerHTML = `<span class="status-dot ${data.matrix_status === "green" ? "status-green" : "status-red"}"></span><span style="font-weight:600;">Matrix Server:</span> ${data.matrix_server}`;
-          document.getElementById("discord_status_container").innerHTML = `<span class="status-dot ${data.discord_status === "green" ? "status-green" : "status-red"}"></span><span style="font-weight:600;">Discord Server:</span> ${data.discord_server}`;
-          
-        } catch (err) {
-          console.error('Error fetching stats:', err);
+    // Uptime polling
+    setInterval(() => {
+      fetch('/uptime')
+        .then(r => r.json())
+        .then(d => document.getElementById('uptime').innerText = 'Uptime: ' + d.uptime)
+        .catch(_ => document.getElementById('uptime').innerText = 'DOWN');
+    }, 1000);
+
+    // Legacy stats update (tables/tree/errors)
+    async function updateStats() {
+      try {
+        const data = await (await fetch('/stats_data')).json();
+        // tables
+        let ircHtml = '', mHtml = '', dHtml = '';
+        for (const [comp, fs] of Object.entries(data.irc_channels)) {
+          ircHtml += `<tr><td>${comp}</td><td>${Object.keys(fs).length}</td></tr>`;
         }
+        for (const [room, fs] of Object.entries(data.matrix_rooms)) {
+          const alias = data.matrix_aliases[room] || data.matrix_room_names[room] || room;
+          mHtml += `<tr><td>${alias}</td><td>${Object.keys(fs).length}</td></tr>`;
+        }
+        for (const [ch, fs] of Object.entries(data.discord_channels)) {
+          dHtml += `<tr><td>${ch}</td><td>${Object.keys(fs).length}</td></tr>`;
+        }
+        document.getElementById('irc_table_body').innerHTML     = ircHtml;
+        document.getElementById('matrix_table_body').innerHTML  = mHtml;
+        document.getElementById('discord_table_body').innerHTML = dHtml;
+        document.querySelector('.tree').innerHTML = data.feed_tree_html;
+        document.getElementById('errors').innerText = data.errors;
+      } catch (e) {
+        console.error(e);
       }
-      setInterval(updateStats, 30000);
-      updateStats();
-    </script>
-    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
+    }
+    setInterval(updateStats, 30000);
+    updateStats();
+  </script>
+  <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 """
@@ -493,11 +513,10 @@ DASHBOARD_TEMPLATE = r"""
 @requires_auth
 def uptime_route():
     uptime_seconds = int(time.time() - start_time)
-    hours = uptime_seconds // 3600
+    hours   = uptime_seconds // 3600
     minutes = (uptime_seconds % 3600) // 60
     seconds = uptime_seconds % 60
-    uptime_str = f"{hours}h {minutes}m {seconds}s"
-    return jsonify({"uptime": uptime_str, "uptime_seconds": uptime_seconds})
+    return jsonify({"uptime": f"{hours}h {minutes}m {seconds}s", "uptime_seconds": uptime_seconds})
 
 @app.route('/')
 @requires_auth
@@ -506,115 +525,90 @@ def index():
     try:
         from feed import load_subscriptions
         load_subscriptions()
-    except Exception:
+    except:
         pass
 
-    # Load Matrix aliases if available
-    if os.path.isfile(MATRIX_ALIASES_FILE):
-        matrix_aliases = load_json(MATRIX_ALIASES_FILE, default={})
-    else:
-        matrix_aliases = {}
-
+    matrix_aliases = load_json(MATRIX_ALIASES_FILE, default={}) if os.path.isfile(MATRIX_ALIASES_FILE) else {}
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    networks_file = os.path.join(BASE_DIR, "networks.json")
-    networks = load_json(networks_file, default={}) if os.path.exists(networks_file) else {}
+    networks = load_json(os.path.join(BASE_DIR, "networks.json"), default={}) if os.path.exists(os.path.join(BASE_DIR, "networks.json")) else {}
 
-    # Fix: Ensure that for each network in networks.json, we add composite keys to feed.channel_feeds
-    for net_name, net_info in networks.items():
-        server_name = net_info.get("server", "")
-        channels_list = net_info.get("Channels", [])
-        for ch in channels_list:
-            composite = f"{server_name}|{ch}"
-            if composite not in feed.channel_feeds:
-                feed.channel_feeds[composite] = {}
+    # Ensure composite keys
+    for net in networks.values():
+        srv = net.get("server","")
+        for ch in net.get("Channels",[]):
+            feed.channel_feeds.setdefault(f"{srv}|{ch}", {})
+    for ch in config.channels:
+        feed.channel_feeds.setdefault(f"{config.server}|{ch}", {})
 
-    # Also include default channels as composites (to avoid plain “#…” keys)
-    for channel in config.channels:
-        composite = f"{config.server}|{channel}"
-        if composite not in feed.channel_feeds:
-            feed.channel_feeds[composite] = {}
-
-    # Prepare IRC status info
-    irc_servers = []
-    irc_status = {}
-    default_irc = config.server
-    if default_irc:
-        irc_servers.append(default_irc)
+    irc_servers, irc_status = [], {}
+    if config.server:
+        irc_servers.append(config.server)
         with connection_lock:
-            irc_status[default_irc] = "green" if connection_status["primary"].get(default_irc, False) else "red"
-    for net_name, details in networks.items():
-        server_name = details.get("server", "")
-        if server_name and server_name not in irc_servers:
-            irc_servers.append(server_name)
+            irc_status[config.server] = "green" if connection_status["primary"].get(config.server) else "red"
+    for net in networks.values():
+        srv = net.get("server","")
+        if srv and srv not in irc_servers:
+            irc_servers.append(srv)
             with connection_lock:
-                irc_status[server_name] = "green" if connection_status["secondary"].get(server_name, False) else "red"
+                irc_status[srv] = "green" if connection_status["secondary"].get(srv) else "red"
+
     try:
         from matrix_integration import matrix_bot_instance
-        matrix_status = "green" if matrix_bot_instance is not None else "red"
-    except Exception:
+        matrix_status = "green" if matrix_bot_instance else "red"
+    except:
         matrix_status = "red"
     try:
         from discord_integration import bot
-        discord_status = "green" if bot is not None else "red"
-    except Exception:
+        discord_status = "green" if bot else "red"
+    except:
         discord_status = "red"
-    matrix_server = config.matrix_homeserver
-    discord_server = "discord.com"
 
     uptime_seconds = int(time.time() - start_time)
-    uptime_str = str(datetime.timedelta(seconds=uptime_seconds))
-    total_feeds = sum(len(fds) for fds in feed.channel_feeds.values())
+    uptime_str     = str(datetime.timedelta(seconds=uptime_seconds))
+    total_feeds    = sum(len(v) for v in feed.channel_feeds.values())
     total_channels = len(feed.channel_feeds)
-    total_subscriptions = sum(len(subs) for subs in feed.subscriptions.values())
+    total_subs     = sum(len(v) for v in feed.subscriptions.values())
 
-    feed_tree = build_feed_tree(networks)
-    feed_tree_sorted = sort_feed_tree(feed_tree)
-    feed_tree_html = build_unicode_tree(feed_tree_sorted, matrix_aliases)
+    tree           = build_feed_tree(networks)
+    sorted_tree    = sort_feed_tree(tree)
+    feed_tree_html = build_unicode_tree(sorted_tree, matrix_aliases)
+    errors_str     = "\n".join(errors_deque) if errors_deque else "No errors reported."
+    current_year   = datetime.datetime.now().year
 
-    errors_str = "\n".join(errors_deque) if errors_deque else "No errors reported."
-    current_year = datetime.datetime.now().year
-
-    # Build IRC channels table data
     irc_channels = {}
     for key, feeds_dict in feed.channel_feeds.items():
         if key == "FuzzyFeeds":
             continue
         if "|" in key:
-            server, channel = key.split("|", 1)
-        elif key.startswith('#'):
-            server = config.server
-            channel = key
+            srv, ch = key.split("|",1)
+        elif key.startswith("#"):
+            srv, ch = config.server, key
         else:
             continue
-        composite = f"{server}{dash(' | ')}{channel}"
-        if composite in irc_channels:
-            if isinstance(feeds_dict, dict):
-                irc_channels[composite].update(feeds_dict)
-        else:
-            irc_channels[composite] = feeds_dict.copy() if isinstance(feeds_dict, dict) else feeds_dict
+        comp = f"{srv}{dash(' | ')}{ch}"
+        irc_channels[comp] = feeds_dict
 
     return render_template_string(
         DASHBOARD_TEMPLATE,
         uptime=uptime_str,
         total_feeds=total_feeds,
         total_channels=total_channels,
-        total_subscriptions=total_subscriptions,
+        total_subscriptions=total_subs,
         irc_channels=irc_channels,
-        matrix_rooms={k: v for k, v in feed.channel_feeds.items() if k.startswith('!')},
-        discord_channels={k: v for k, v in feed.channel_feeds.items() if str(k).isdigit()},
+        matrix_rooms={k:v for k,v in feed.channel_feeds.items() if k.startswith("!")},
+        discord_channels={k:v for k,v in feed.channel_feeds.items() if k.isdigit()},
         feed_tree_html=feed_tree_html,
         errors=errors_str,
         current_year=current_year,
         matrix_room_names=matrix_room_names,
         matrix_aliases=matrix_aliases,
         subscriptions=feed.subscriptions,
-        server_start_time=start_time,
+        irc_servers=irc_servers,
         irc_status=irc_status,
         matrix_status=matrix_status,
         discord_status=discord_status,
-        irc_servers=irc_servers,
-        matrix_server=matrix_server,
-        discord_server=discord_server
+        matrix_server=config.matrix_homeserver,
+        discord_server="discord.com"
     )
 
 @app.route('/stats_data')
@@ -624,87 +618,46 @@ def stats_data():
     try:
         from feed import load_subscriptions
         load_subscriptions()
-    except Exception:
+    except:
         pass
 
-    if os.path.isfile(MATRIX_ALIASES_FILE):
-        matrix_aliases = load_json(MATRIX_ALIASES_FILE, default={})
-    else:
-        matrix_aliases = {}
-
+    matrix_aliases = load_json(MATRIX_ALIASES_FILE, default={}) if os.path.isfile(MATRIX_ALIASES_FILE) else {}
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    networks_file = os.path.join(BASE_DIR, "networks.json")
-    networks = load_json(networks_file, default={}) if os.path.exists(networks_file) else {}
+    networks = load_json(os.path.join(BASE_DIR,"networks.json"), default={}) if os.path.exists(os.path.join(BASE_DIR,"networks.json")) else {}
 
-    # Same fix applied in stats_data: ensure composite keys for networks
-    for net_name, net_info in networks.items():
-        server_name = net_info.get("server", "")
-        channels_list = net_info.get("Channels", [])
-        for ch in channels_list:
-            composite = f"{server_name}|{ch}"
-            if composite not in feed.channel_feeds:
-                feed.channel_feeds[composite] = {}
+    for net in networks.values():
+        srv = net.get("server","")
+        for ch in net.get("Channels",[]):
+            feed.channel_feeds.setdefault(f"{srv}|{ch}", {})
+    for ch in config.channels:
+        feed.channel_feeds.setdefault(f"{config.server}|{ch}", {})
 
-    uptime_seconds = int(time.time() - start_time)
-    uptime_str = str(datetime.timedelta(seconds=uptime_seconds))
-    total_feeds = sum(len(fds) for fds in feed.channel_feeds.values())
-    total_channels = len(feed.channel_feeds)
-    total_subscriptions = sum(len(subs) for subs in feed.subscriptions.values())
+    uptime_seconds     = int(time.time() - start_time)
+    uptime_str         = str(datetime.timedelta(seconds=uptime_seconds))
+    total_feeds        = sum(len(v) for v in feed.channel_feeds.values())
+    total_channels     = len(feed.channel_feeds)
+    total_subscriptions= sum(len(v) for v in feed.subscriptions.values())
 
-    feed_tree = build_feed_tree(networks)
-    feed_tree_sorted = sort_feed_tree(feed_tree)
-    feed_tree_html = build_unicode_tree(feed_tree_sorted, matrix_aliases)
-
-    errors_str = "\n".join(errors_deque) if errors_deque else "No errors reported."
-    current_year = datetime.datetime.now().year
-
-    # Build server status information
-    from config import server as default_irc_server, matrix_homeserver
-    irc_servers = []
-    irc_status = {}
-    if default_irc_server:
-        irc_servers.append(default_irc_server)
-        with connection_lock:
-            irc_status[default_irc_server] = "green" if connection_status["primary"].get(default_irc_server, False) else "red"
-    for net_name, details in networks.items():
-        server_name = details.get("server", "")
-        if server_name and server_name not in irc_servers:
-            irc_servers.append(server_name)
-            with connection_lock:
-                irc_status[server_name] = "green" if connection_status["secondary"].get(server_name, False) else "red"
-    try:
-        from matrix_integration import matrix_bot_instance
-        matrix_status = "green" if matrix_bot_instance is not None else "red"
-    except Exception:
-        matrix_status = "red"
-    try:
-        from discord_integration import bot
-        discord_status = "green" if bot is not None else "red"
-    except Exception:
-        discord_status = "red"
-    matrix_server = matrix_homeserver
-    discord_server = "discord.com"
+    tree           = build_feed_tree(networks)
+    sorted_tree    = sort_feed_tree(tree)
+    feed_tree_html = build_unicode_tree(sorted_tree, matrix_aliases)
+    errors_str     = "\n".join(errors_deque) if errors_deque else "No errors reported."
+    current_year   = datetime.datetime.now().year
 
     return {
         "uptime": uptime_str,
         "total_feeds": total_feeds,
         "total_channels": total_channels,
         "total_subscriptions": total_subscriptions,
-        "irc_channels": {k: v for k, v in feed.channel_feeds.items() if ("|" in k or k.startswith("#"))},
-        "matrix_rooms": {k: v for k, v in feed.channel_feeds.items() if k.startswith('!')},
-        "discord_channels": {k: v for k, v in feed.channel_feeds.items() if str(k).isdigit()},
-        "feed_tree_html": feed_tree_html,
-        "errors": errors_str,
-        "current_year": current_year,
-        "matrix_room_names": matrix_room_names,
-        "matrix_aliases": matrix_aliases,
-        "subscriptions": feed.subscriptions,
-        "irc_servers": irc_servers,
-        "irc_status": irc_status,
-        "matrix_status": matrix_status,
-        "discord_status": discord_status,
-        "matrix_server": matrix_server,
-        "discord_server": discord_server
+        "irc_channels":     {k:v for k,v in feed.channel_feeds.items() if ("|" in k or k.startswith("#"))},
+        "matrix_rooms":     {k:v for k,v in feed.channel_feeds.items() if k.startswith("!")},
+        "discord_channels": {k:v for k,v in feed.channel_feeds.items() if k.isdigit()},
+        "feed_tree_html":   feed_tree_html,
+        "errors":           errors_str,
+        "current_year":     current_year,
+        "matrix_room_names":matrix_room_names,
+        "matrix_aliases":   matrix_aliases,
+        "subscriptions":    feed.subscriptions
     }
 
 @app.errorhandler(400)
