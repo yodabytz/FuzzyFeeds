@@ -337,5 +337,3 @@ def handle_centralized_command(
             send_message_fn(response_target(channel, integration),
                             "Unknown !network subcommand. Use add, set, connect, or del.")
         return
-
-
