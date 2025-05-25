@@ -228,7 +228,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             send_private_message_fn(user, "No subscriptions found.")
 
-    # IMPORTANT: !latestsub must be checked before !latest
     elif lower_message.startswith("!latestsub"):
         parts = message.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
@@ -261,7 +260,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), "Error: Channel must start with '#'")
             return
         try:
-            import os
             channels_data = channels.load_channels()
             if join_channel not in channels_data["irc_channels"]:
                 channels_data["irc_channels"].append(join_channel)
@@ -427,9 +425,9 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration), "No matching feed found.")
             return
         selected = None
-        for title, url in results:
-            if query.lower() in title.lower():
-                selected = (title, url)
+        for title_, url_ in results:
+            if query.lower() in title_.lower():
+                selected = (title_, url_)
                 break
         if not selected:
             selected = results[0]
@@ -449,7 +447,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         API_ENDPOINT = "https://api.rss.app/v1/generate"
         params = {"url": website_url}
 
-        import os
         RSS_APP_API_KEY = os.getenv("RSS_APP_API_KEY")
         if not RSS_APP_API_KEY:
             send_message_fn(
@@ -531,159 +528,209 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     # ------------------ OWNER COMMANDS ------------------
     elif lower_message.startswith("!network"):
-        if user.lower() != admin.lower():
+        # only the bot owner may manage networks
+        if user_key != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !network commands.")
             return
-        parts = message.split()
-        if len(parts) < 2:
-            send_message_fn(response_target(actual_channel, integration), "Usage: !network <add|set|connect|del> ...")
+
+        # tokenize to handle quoted names/values
+        try:
+            args = shlex.split(message)
+        except Exception as e:
+            send_message_fn(response_target(actual_channel, integration),
+                            f"Error parsing command: {e}")
             return
-        subcommand = parts[1].lower()
-        if subcommand == "add":
-            if len(parts) < 6:
+
+        if len(args) < 2:
+            send_message_fn(response_target(actual_channel, integration),
+                            "Usage: !network <add|set|connect|del> ...")
+            return
+
+        action = args[1].lower()
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        networks_file = os.path.join(BASE_DIR, "networks.json")
+        networks = persistence.load_json(networks_file, default={})
+
+        if action == "add":
+            # !network add <networkName> <server/port> [-ssl] <#channel> <opName>
+            if len(args) < 6:
                 send_message_fn(response_target(actual_channel, integration),
-                                  "Usage: !network add <networkName> <server/port> [-ssl] <#channel> <opName>")
+                                "Usage: !network add <networkName> <server/port> [-ssl] <#channel> <opName>")
                 return
-            network_name = parts[2].strip()
-            server_info = parts[3].strip()
-            use_ssl_flag = False
+
+            network_name = args[2]
+            server_info = args[3]
+            use_ssl = False
             index = 4
-            if parts[4].lower() == "-ssl":
-                use_ssl_flag = True
-                index += 1
-            if len(parts) < index + 2:
+            if args[4].lower() == "-ssl":
+                use_ssl = True
+                index = 5
+
+            if len(args) < index + 2:
                 send_message_fn(response_target(actual_channel, integration),
-                                  "Usage: !network add <networkName> <server/port> [-ssl] <#channel> <opName>")
+                                "Usage: !network add <networkName> <server/port> [-ssl] <#channel> <opName>")
                 return
-            channel_name = parts[index].strip()
-            opName = parts[index + 1].strip()
+
+            channel_name = args[index]
+            op_name     = args[index + 1]
+
             if "/" not in server_info:
-                send_message_fn(response_target(actual_channel, integration), "Invalid server_info format. Use server/port")
+                send_message_fn(response_target(actual_channel, integration),
+                                "Invalid server/port format. Use e.g. irc.example.net/6667")
                 return
-            server_name, port_str = server_info.split("/", 1)
+
+            server_host, port_str = server_info.split("/", 1)
             try:
-                port_number = int(port_str)
-            except Exception as e:
-                send_message_fn(response_target(actual_channel, integration), "Invalid port number.")
+                port = int(port_str)
+            except ValueError:
+                send_message_fn(response_target(actual_channel, integration),
+                                "Invalid port number.")
                 return
-            BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-            networks_file = os.path.join(BASE_DIR, "networks.json")
-            networks = persistence.load_json(networks_file, default={})
+
+            # build entry
             networks[network_name] = {
-                "server": server_name,
-                "port": port_number,
+                "server": server_host,
+                "port":   port,
                 "Channels": [channel_name],
-                "ssl": use_ssl_flag,
-                "admin": opName
+                "ssl":    use_ssl,
+                "admin":  op_name
             }
             persistence.save_json(networks_file, networks)
             send_message_fn(response_target(actual_channel, integration),
-                            f"Network {network_name} added to configuration.")
-        elif subcommand == "set":
-            if len(parts) < 4:
+                            f"Network '{network_name}' added: {server_host}:{port} ssl={use_ssl}, channel={channel_name}, admin={op_name}")
+
+        elif action == "set":
+            # !network set irc.<networkName>.<field> <value>
+            if len(args) < 4:
                 send_message_fn(response_target(actual_channel, integration),
                                 "Usage: !network set irc.<networkName>.<field> <value>")
                 return
-            key_field = parts[2].strip()
-            value = " ".join(parts[3:])
+
+            key_field = args[2]
+            value     = args[3]
+
             if not key_field.startswith("irc."):
-                send_message_fn(response_target(actual_channel, integration), "Key must start with 'irc.'")
+                send_message_fn(response_target(actual_channel, integration),
+                                "Key must start with 'irc.'")
                 return
-            remainder = key_field[4:]
+
+            remainder = key_field[len("irc."):]
             if "." not in remainder:
                 send_message_fn(response_target(actual_channel, integration),
-                                "Invalid key format. Use irc.<networkName>.<field>")
+                                "Invalid key. Use irc.<networkName>.<field>")
                 return
-            networkName, field = remainder.split(".", 1)
-            BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-            networks_file = os.path.join(BASE_DIR, "networks.json")
-            networks = persistence.load_json(networks_file, default={})
-            if networkName not in networks:
-                send_message_fn(response_target(actual_channel, integration), f"Network {networkName} not found.")
+
+            network_name, field = remainder.split(".", 1)
+            if network_name not in networks:
+                send_message_fn(response_target(actual_channel, integration),
+                                f"Network '{network_name}' not found.")
                 return
-            networks[networkName][field] = value
+
+            # convert to correct type
+            if field == "port":
+                try:
+                    networks[network_name][field] = int(value)
+                except ValueError:
+                    send_message_fn(response_target(actual_channel, integration),
+                                    "Port must be an integer.")
+                    return
+            elif field == "ssl":
+                networks[network_name][field] = value.lower() in ("1","true","yes","on")
+            elif field == "Channels":
+                # comma-separated list
+                networks[network_name][field] = [c.strip() for c in value.split(",") if c.strip()]
+            else:
+                networks[network_name][field] = value
+
             persistence.save_json(networks_file, networks)
             send_message_fn(response_target(actual_channel, integration),
-                            f"Network {networkName} updated: {field} set to {value}.")
-        elif subcommand == "connect":
-            if len(parts) < 3:
-                send_message_fn(response_target(actual_channel, integration), "Usage: !network connect <networkName>")
+                            f"Network '{network_name}' field '{field}' set to '{networks[network_name][field]}'.")
+
+        elif action == "connect":
+            # !network connect <networkName>
+            if len(args) < 3:
+                send_message_fn(response_target(actual_channel, integration),
+                                "Usage: !network connect <networkName>")
                 return
-            networkName = parts[2].strip()
-            BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-            networks_file = os.path.join(BASE_DIR, "networks.json")
-            networks = persistence.load_json(networks_file, default={})
-            if networkName not in networks:
-                send_message_fn(response_target(actual_channel, integration), f"Network {networkName} not found.")
+
+            network_name = args[2]
+            if network_name not in networks:
+                send_message_fn(response_target(actual_channel, integration),
+                                f"Network '{network_name}' not found.")
                 return
-            net = networks[networkName]
-            server_name = net.get("server")
-            port_number = net.get("port")
+
+            net = networks[network_name]
+            server_host = net.get("server")
+            port        = net.get("port")
             channels_list = net.get("Channels", [])
-            use_ssl_flag = net.get("ssl", False)
-            if not channels_list:
-                send_message_fn(response_target(actual_channel, integration), "No channels defined for this network.")
+            use_ssl     = net.get("ssl", False)
+
+            if not server_host or not port or not channels_list:
+                send_message_fn(response_target(actual_channel, integration),
+                                f"Incomplete configuration for '{network_name}'.")
                 return
+
             try:
                 from irc_client import connect_to_network, irc_command_parser, send_message
-            except Exception as e:
+            except ImportError as e:
                 send_message_fn(response_target(actual_channel, integration),
                                 f"Error importing IRC client: {e}")
                 return
-            new_client = connect_to_network(server_name, port_number, use_ssl_flag, channels_list[0])
-            if new_client:
-                for ch in channels_list:
-                    new_client.send(f"JOIN {ch}\r\n".encode("utf-8"))
-                    send_message(new_client, ch, "FuzzyFeeds has joined the channel!")
+
+            client = connect_to_network(server_host, port, use_ssl, channels_list[0])
+            if not client:
                 send_message_fn(response_target(actual_channel, integration),
-                                f"Connected to network {networkName} and joined channels: {', '.join(channels_list)}.")
-                threading.Thread(target=irc_command_parser, args=(new_client,), daemon=True).start()
-            else:
-                send_message_fn(response_target(actual_channel, integration),
-                                f"Failed to connect to network {networkName}.")
-        elif subcommand in ["del", "delete"]:
-            if len(parts) < 3:
-                send_message_fn(response_target(actual_channel, integration), "Usage: !network del <networkName>")
-                return
-            networkName = parts[2].strip()
-            BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-            networks_file = os.path.join(BASE_DIR, "networks.json")
-            networks = persistence.load_json(networks_file, default={})
-            if networkName not in networks:
-                send_message_fn(response_target(actual_channel, integration), f"Network {networkName} not found.")
+                                f"Failed to connect to '{network_name}'.")
                 return
 
-            # --- Disconnect from the live network/server if running ---
+            for ch in channels_list:
+                client.send(f"JOIN {ch}\r\n".encode("utf-8"))
+                send_message(client, ch, "FuzzyFeeds is here!")
+
+            send_message_fn(response_target(actual_channel, integration),
+                            f"Connected to '{network_name}', joined: {', '.join(channels_list)}")
+            threading.Thread(target=irc_command_parser, args=(client,), daemon=True).start()
+
+        elif action in ("del","delete"):
+            # !network del <networkName>
+            if len(args) < 3:
+                send_message_fn(response_target(actual_channel, integration),
+                                "Usage: !network del <networkName>")
+                return
+
+            network_name = args[2]
+            if network_name not in networks:
+                send_message_fn(response_target(actual_channel, integration),
+                                f"Network '{network_name}' not found.")
+                return
+
+            # attempt to disconnect any live connections
             try:
                 from main import irc_secondary, connection_status, connection_lock
-                net_info = networks[networkName]
-                server_name = net_info.get("server", "")
-                channels_list = net_info.get("Channels", [])
+                net_info = networks[network_name]
+                server_host = net_info.get("server","")
                 with connection_lock:
-                    # Disconnect ALL channels for this network/server
-                    to_remove = [k for k in irc_secondary if k.startswith(server_name + "|")]
-                    disconnect_count = 0
-                    for composite in to_remove:
+                    to_remove = [k for k in irc_secondary if k.startswith(f"{server_host}|")]
+                    for key in to_remove:
                         try:
-                            conn = irc_secondary[composite]
-                            conn.send(f"QUIT :Network deleted by admin\r\n".encode("utf-8"))
+                            conn = irc_secondary.pop(key)
+                            conn.send(b"QUIT :Network removed by owner\r\n")
                             conn.close()
-                            disconnect_count += 1
-                        except Exception as e:
-                            logging.warning(f"Error disconnecting {composite}: {e}")
-                        del irc_secondary[composite]
-                    if server_name in connection_status.get("secondary", {}):
-                        del connection_status["secondary"][server_name]
-                if disconnect_count:
-                    send_message_fn(response_target(actual_channel, integration), f"Disconnected and removed {disconnect_count} connections for {networkName}.")
-            except Exception as e:
-                logging.warning(f"Could not disconnect live network: {e}")
+                        except:
+                            pass
+                    connection_status["secondary"].pop(server_host, None)
+            except:
+                pass
 
-            # --- Remove from networks.json ---
-            del networks[networkName]
+            # remove from file
+            del networks[network_name]
             persistence.save_json(networks_file, networks)
             send_message_fn(response_target(actual_channel, integration),
-                            f"Network {networkName} has been removed and the bot has disconnected from that server (if connected).")
+                            f"Network '{network_name}' deleted and any live connections closed.")
+
+        else:
+            send_message_fn(response_target(actual_channel, integration),
+                            "Unknown subcommand. Use add, set, connect or del.")
 
     # ------------------ SETTINGS AND ADMIN COMMANDS ------------------
     elif lower_message.startswith("!setsetting"):
@@ -700,7 +747,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         user_data["settings"][key_setting] = value
         users.save_users()
         send_private_message_fn(user, f"Setting '{key_setting}' set to '{value}'.")
-    
+
     elif lower_message.startswith("!getsetting"):
         parts = message.split(" ", 1)
         if len(parts) < 2:
@@ -713,7 +760,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_private_message_fn(user, f"{key_setting}: {user_data['settings'][key_setting]}")
         else:
             send_private_message_fn(user, f"No setting found for '{key_setting}'.")
-    
+
     elif lower_message.startswith("!settings"):
         users.add_user(user)
         user_data = users.get_user(user)
@@ -722,7 +769,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             multiline_send(send_multiline_message_fn, user, "\n".join(lines))
         else:
             send_private_message_fn(user, "No settings found.")
-    
+
     elif lower_message.startswith("!admin"):
         try:
             with open(admin_file, "r") as f:
@@ -742,7 +789,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             multiline_send(send_multiline_message_fn, response_target(actual_channel, integration), output)
         except Exception as e:
             send_private_message_fn(user, f"Error reading admin info: {e}")
-    
+
     elif lower_message.startswith("!stats"):
         response_target_value = response_target(actual_channel, integration)
         uptime_seconds = int(time.time() - __import__("config").start_time)
@@ -768,8 +815,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                 f"Channel '{target}' Feeds: {num_channel_feeds}"
             ]
         multiline_send(send_multiline_message_fn, response_target_value, "\n".join(response_lines))
-    
-    # ------------------ GRACEFUL RESTART COMMAND ------------------
+
     elif lower_message.startswith("!restart"):
         if user_key != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !restart.")
@@ -804,7 +850,7 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
     elif lower_message.startswith("!reload"):
-        if user.lower() != admin.lower():
+        if user_key != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !reload.")
             return
         try:
@@ -813,7 +859,6 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         except Exception as e:
             send_message_fn(response_target(actual_channel, integration), f"Error reloading config: {e}")
 
-    
     elif lower_message.startswith("!help"):
         parts = message.split(" ", 1)
         if len(parts) == 1:
@@ -861,4 +906,3 @@ def search_feeds(query):
     except Exception as e:
         logging.error("Error searching feeds: %s", e)
         return []
-
