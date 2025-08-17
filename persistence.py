@@ -25,3 +25,4 @@ def append_line(filename, line):
             f.write(f"{line}\n")
     except Exception as e:
         print(f"Error appending to {filename}: {e}")
+

@@ -7,6 +7,7 @@ from flask import Flask
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
+
 try:
     from irc_client import (
         connect_and_register,
