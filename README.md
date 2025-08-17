@@ -1,150 +1,144 @@
-# **FuzzyFeeds v1.0.0-beta** — Experimental beta release! Features may be unstable.
+# FuzzyFeeds - Multi-Platform RSS Bot
 
-FuzzyFeeds is an IRC bot that aggregates RSS and Atom feeds in real-time. It allows channel administrators to manage feeds, fetch the latest entries, and manage user subscriptions—with persistent storage, enhanced logging, rate limiting, and optional SSL support. Best used to monitor updates of GitHub Repos and users. Join us on [Discord](https://discord.gg/GWMetSSk) or Matrix #fuzzyfeeds:matrix.org.
-
-<img src="https://raw.githubusercontent.com/yodabytz/FuzzyFeeds/refs/heads/main/fuzzyfeeds-logo-lg.png" alt="FuzzyFeeds" width="200" height="200">
+FuzzyFeeds is a multi-platform RSS aggregation bot that supports IRC, Matrix, and Discord. It features a real-time web dashboard for monitoring feeds, connections, and errors.
 
 ## Features
 
-- **Feed Aggregation:** Supports both RSS and Atom feeds.
-- **Channel Administration:** Only designated channel admins can add or remove feeds.
-- **Persistent Data:** Feeds, subscriptions, and channel admin assignments are saved and reloaded across bot restarts.
-- **User Subscriptions:** Users can subscribe privately to feeds.
-- **Enhanced Logging & Rate Limiting:** Built-in logging for troubleshooting and simple per-user rate limiting.
-- **SSL Support:** Secure IRC connections can be enabled via configuration.
-- **GitHub Integration:** Easily monitor GitHub activity using an Atom feed (e.g., `https://github.com/yodabytz.atom`).
-- **Matrix Integration:** Automatically posts new feed updates to Matrix rooms and responds to commands.
-- **Discord Integration:** Posts new feeds to Discord channels and allows users to interact with feed commands.
-- **Web Dashboard:** Operates on port 1039 (or your chosen port) and showcases a sleek stats page.
-- **Add IRC Network Support** Use !network add <networkName> <server/port> [-ssl] <#channel> <adminName> to dynamically add new IRC networks on the fly.
-- **SASL Support** Log in via SASL or NickServ for more secure IRC authentication.
-
-<img src="https://raw.githubusercontent.com/yodabytz/FuzzyFeeds/refs/heads/main/dashboard-screenshot.jpg" alt="FuzzyFeeds" width="800">
+- **Multi-Platform Support**: IRC, Matrix, and Discord integration
+- **Real-time Web Dashboard**: Monitor bot status, feeds, and errors
+- **Centralized Feed Management**: Manage RSS feeds across all platforms
+- **User Subscriptions**: Personal feed subscriptions with DM delivery
+- **Dark Mode Dashboard**: Toggle between light and dark themes
+- **Live Connection Status**: Real-time connection monitoring
+- **Error Logging**: Real-time error tracking and display
 
 ## Installation
 
-1. **Clone the Repository:**
-
+1. Clone this repository:
    ```bash
-   git clone https://github.com/yodabytz/FuzzyFeeds.git
+   git clone <repository-url>
    cd FuzzyFeeds
+   ```
 
-## Install Dependencies:
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-```
-pip install -r requirements.txt
-```
+3. Configure the bot by editing `config.py`:
+   - Set your IRC server details
+   - Add your Matrix credentials
+   - Add your Discord bot token
+   - Configure dashboard credentials
 
-## Configure the Bot:
-Edit config.py to set your IRC, Matrix, and/or Discord server details, channels, admin credentials, SSL usage, and persistence file paths.
+4. Set up your channels and feeds in the JSON files:
+   - `channels.json`: Define channels/rooms for each platform
+   - `feeds.json`: Configure RSS feeds per channel
+   - `help.json`: Customize bot commands and help text
 
-## Usage:
-```
-python main.py
-```
+## Configuration
 
-## Commands
-```
-## Commands
+### config.py
+Edit `config.py` to set up your bot credentials and server details:
 
-- `!addfeed <feed_name> <URL>`  
-  *Channel Admin only.* Add an RSS/Atom feed to the current channel/room.
+```python
+# IRC Configuration
+server = "irc.example.com"
+sasl_username = "your_username"
+sasl_password = "your_password"
 
-- `!delfeed <feed_name>`  
-  *Channel Admin only.* Remove a feed from the current channel/room.
+# Matrix Configuration  
+matrix_homeserver = "https://matrix.org"
+matrix_user = "@your_bot:matrix.org"
+matrix_password = "your_matrix_password"
 
-- `!listfeeds`  
-  List all feeds in the current channel/room.
+# Discord Configuration
+discord_token = "your_discord_bot_token"
 
-- `!latest <feed_name>`  
-  Show the latest entry (title and link) for the specified feed in this channel/room.
-
-- `!setinterval <minutes>`  
-  *Channel Admin only.* Set the feed check interval for this channel/room.
-
-- `!addsub <feed_name> <URL>`  
-  Privately subscribe yourself to a feed (visible only to you).
-
-- `!unsub <feed_name>`  
-  Unsubscribe from one of your private feeds.
-
-- `!mysubs`  
-  List all of your private subscriptions.
-
-- `!getfeed <title_or_domain>`  
-  Search for a feed (by title or domain) and show its latest entry.
-
-- `!getadd <title_or_domain>`  
-  *Channel Admin only.* Search for a feed and automatically add it to the current channel/room.
-
-- `!genfeed <website_url>`  
-  Generate an RSS feed for a given website using an external API.
-
-- `!search <query>`  
-  Search the web for feeds matching a given query.
-
-- `!join <#channel or #room_alias>`  
-  *Bot Admin only.* Make the bot join a new IRC channel or Matrix room (and set an admin for it).
-
-- `!part <#channel or #room_alias>`  
-  *Bot Admin only.* Make the bot leave the specified channel/room and clear its feed configuration.
-
-- `!stats`  
-  Show bot statistics (e.g., uptime, feed counts, user subscriptions). Admins see more detailed info.
-
-- `!admin`  
-  Display the admin(s) assigned to each channel/room.
-
-- `!setsetting <key> <value>`  
-  Set a personal user setting.
-
-- `!getsetting <key>`  
-  Retrieve one of your personal user settings.
-
-- `!settings`  
-  List all your personal user settings.
-
-- `!help [command]`  
-  Show help for a specific command. (Also supports `!help USER`, `!help OP`, `!help OWNER` if you want role-based summaries.)
-
-- `!restart` / `!quit`  
-  *Owner only.* Restart or gracefully shut down the entire bot.
-
----
-
-### Network Management (Owner Only)
-
-- `!network add <networkName> <server/port> [-ssl] <#channel> <opName>`  
-  Creates a new IRC network entry in `networks.json` (with optional SSL, default channel, and channel admin).
-       Other commands
-       !set irc.freenode.sasl_user "mySASLUser"
-       !set irc.freenode.sasl_pass "SuperSecret"
-       !set irc.freenode.nickserv "NickServPassword"
-
-
-- `!set irc.<networkName>.<field> <value>`  
-  Updates a single field in the specified network config (e.g. `sasl_user`, `sasl_pass`, `nickserv`).
-
-- `!connect <networkName>`  
-  Immediately connect to a previously defined IRC network from `networks.json`.
-
-- `!delnetwork <networkName>`  
-  Removes a configured IRC network from `networks.json`.
-
+# Dashboard Configuration
+dashboard_username = "admin"
+dashboard_password = "your_password"
 ```
 
-## GitHub Feed:
-To monitor FuzzyFeeds' GitHub activity (e.g., repository creation or updates), add the following Atom feed:
+### Channel Setup
+Configure channels in `channels.json`:
+
+```json
+{
+    "irc_channels": ["#main", "#news"],
+    "matrix_channels": ["!room1:matrix.org"],
+    "discord_channels": ["123456789"]
+}
 ```
-https://github.com/yodabytz/FuzzyFeeds/commits/main.atom
+
+### Feed Configuration
+Add RSS feeds in `feeds.json`:
+
+```json
+{
+    "irc.example.com|#channel": {
+        "TechNews": "https://example.com/rss/tech"
+    }
+}
 ```
-Use the !addfeed command to add this feed to a channel.
+
+## Usage
+
+1. Start the bot:
+   ```bash
+   python main.py
+   ```
+
+2. Access the dashboard:
+   ```
+   http://localhost:1039
+   ```
+
+3. Bot Commands:
+   - `!listfeeds` - List all feeds in current channel
+   - `!stats` - Show bot statistics
+   - `!help` - Show help message
+   - `!addfeed <name> <url>` - Add RSS feed (admin only)
+   - `!removefeed <name>` - Remove RSS feed (admin only)
+
+## Dashboard Features
+
+- **Real-time Connection Status**: Monitor IRC, Matrix, and Discord connections
+- **Feed Statistics**: Track feed counts and posts across platforms
+- **Error Monitoring**: Real-time error logging and display
+- **Dark Mode**: Toggle between light and dark themes
+- **Feed Tree Visualization**: Hierarchical view of all feeds
+- **Log Management**: Clear logs functionality
+
+## File Structure
+
+- `main.py` - Main bot orchestration
+- `dashboard.py` - Web dashboard with real-time features
+- `irc_client.py` - IRC integration
+- `matrix_integration.py` - Matrix integration  
+- `discord_integration.py` - Discord integration
+- `centralized_polling.py` - Centralized RSS feed polling
+- `feed.py` - Feed management and parsing
+- `commands.py` - Bot command handling
+- `config.py` - Configuration settings
+
+## Requirements
+
+- Python 3.7+
+- Flask
+- matrix-nio (for Matrix support)
+- discord.py (for Discord support)
+- feedparser
+- requests
 
 ## Contributing
-Contributions are welcome! Please fork the repository and submit pull requests. For major changes, open an issue first to discuss what you would like to change.
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
 
 ## License
-This project is licensed under the MIT License.
 
-##To do
-1. add the !addnetwork command to have the bot connect to another IRC network
+This project is open source. See LICENSE file for details.
