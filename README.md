@@ -97,11 +97,40 @@ Add RSS feeds in `feeds.json`:
    ```
 
 3. Bot Commands:
-   - `!listfeeds` - List all feeds in current channel
-   - `!stats` - Show bot statistics
+
+   **User Commands:**
+   - `!listfeeds` - List all feeds for this channel
+   - `!latest <feed_name>` - Show the latest entry from a feed
+   - `!getfeed <title_or_domain>` - Search for a feed and display the latest entry
+   - `!genfeed <website_url>` - Generate an RSS feed for a given site via rss.app
+   - `!search <query>` - Search for feeds matching a query
+   - `!stats` - Display uptime, feed counts, and subscription counts
+   - `!addsub <feed_name> <URL>` - Subscribe privately to a feed
+   - `!unsub <feed_name>` - Unsubscribe from one of your private feeds
+   - `!mysubs` - List your private subscriptions
+   - `!latestsub <feed_name>` - Show the latest entry from one of your private subscriptions
+   - `!setsetting <key> <value>` - Set a personal user setting
+   - `!getsetting <key>` - Retrieve a personal user setting
+   - `!settings` - List all your personal settings
+   - `!admin` - Show admin info
    - `!help` - Show help message
-   - `!addfeed <name> <url>` - Add RSS feed (admin only)
-   - `!removefeed <name>` - Remove RSS feed (admin only)
+
+   **Channel Admin Commands:**
+   - `!addfeed <feed_name> <URL>` - Add an RSS feed to this channel
+   - `!delfeed <feed_name>` - Remove an RSS feed
+   - `!getadd <title_or_domain>` - Search & auto-add feed to this channel
+   - `!setinterval <minutes>` - Set the feed check interval
+
+   **Bot Owner Commands:**
+   - `!join <#channel> <adminname>` - Bot joins a channel
+   - `!part <#channel>` - Make the bot leave a channel
+   - `!network add <name> <server/port> [-ssl] <#channel> <opName>` - Create a new IRC network entry
+   - `!set irc.<name>.<field> <value>` - Update a network field (e.g. sasl_user)
+   - `!connect <networkName>` - Connect to a network from networks.json
+   - `!delnetwork <networkName>` - Remove a network config
+   - `!quit` - Shut down the bot
+   - `!reload` - Reload the bot's config
+   - `!restart` - Restart the bot
 
 ## Dashboard Features
 
