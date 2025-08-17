@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-import time
 import requests
 import feedparser
 import logging
@@ -7,6 +5,7 @@ import fnmatch
 import json
 import datetime
 import threading
+import time
 import sys
 import os
 import importlib
@@ -140,6 +139,11 @@ def get_user_key(user, integration):
     user = user.strip()
     if integration == "discord":
         return user.split("#")[0].lower() if "#" in user else user.lower()
+    elif integration == "matrix":
+        # Extract localpart from Matrix user ID (@localpart:homeserver.org)
+        if user.startswith("@") and ":" in user:
+            return user.split(":", 1)[0].lstrip("@").lower()
+        return user.lower()
     else:
         return user.lower()
 
@@ -338,28 +342,56 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         feed.save_feeds()
         send_message_fn(response_target(actual_channel, integration), f"Feed added: {feed_name} ({feed_url})")
 
-    elif lower_message.startswith("!delfeed"):
+    elif lower_message.strip().startswith("!delfeed"):
+        logging.info(f"!delfeed invoked by {user_key} on {key!r} with full message {message!r}")
+        logging.debug(f"Before deletion, feeds for {key}: {list(feed.channel_feeds.get(key, {}).keys())}")
+
         if not effective_op:
             send_private_message_fn(user, "Not authorized to use !delfeed.")
             return
+
         parts = message.split(" ", 1)
-        if len(parts) < 2:
-            send_message_fn(response_target(actual_channel, integration), "Usage: !delfeed <feed_name or pattern>")
+        if len(parts) < 2 or not parts[1].strip():
+            send_message_fn(
+                response_target(actual_channel, integration),
+                "Usage: !delfeed <feed_name or pattern>"
+            )
             return
         pattern = parts[1].strip()
-        if key not in feed.channel_feeds:
-            send_message_fn(response_target(actual_channel, integration), "No feeds found for this channel.")
+
+        feeds_for_chan = feed.channel_feeds.get(key)
+        if not feeds_for_chan:
+            send_message_fn(
+                response_target(actual_channel, integration),
+                "No feeds configured for this channel."
+            )
             return
-        matched = match_feed(feed.channel_feeds[key], pattern)
+
+        matched = match_feed(feeds_for_chan, pattern)
         if matched is None:
-            send_message_fn(response_target(actual_channel, integration), f"No feeds match '{pattern}'.")
+            send_message_fn(
+                response_target(actual_channel, integration),
+                f"No feeds match '{pattern}'."
+            )
             return
         if isinstance(matched, list):
-            send_message_fn(response_target(actual_channel, integration), f"Multiple feeds match '{pattern}': {', '.join(matched)}. Please be more specific.")
+            send_message_fn(
+                response_target(actual_channel, integration),
+                f"Multiple feeds match '{pattern}': {', '.join(matched)}. Please be more specific."
+            )
             return
-        del feed.channel_feeds[key][matched]
+
+        # perform the deletion
+        del feeds_for_chan[matched]
         feed.save_feeds()
-        send_message_fn(response_target(actual_channel, integration), f"Feed removed: {matched}")
+
+        logging.debug(f"After deletion, feeds for {key}: {list(feed.channel_feeds.get(key, {}).keys())}")
+        logging.info(f"Deleted feed {matched!r} from channel {key!r}")
+
+        send_message_fn(
+            response_target(actual_channel, integration),
+            f"Feed removed: {matched}"
+        )
 
     elif lower_message.startswith("!listfeeds"):
         if key in feed.channel_feeds and feed.channel_feeds[key]:
@@ -646,50 +678,59 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             send_message_fn(response_target(actual_channel, integration),
                             f"Network '{network_name}' field '{field}' set to '{networks[network_name][field]}'.")
 
-        elif action == "connect":
-            # !network connect <networkName>
-            if len(args) < 3:
-                send_message_fn(response_target(actual_channel, integration),
-                                "Usage: !network connect <networkName>")
+        elif subcommand == "connect":
+            if len(parts) < 3:
+                send_message_fn(response_target(actual_channel, integration), "Usage: !network connect <networkName>")
+                return
+            networkName = parts[2].strip()
+
+            # Load networks.json
+            BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+            networks_file = os.path.join(BASE_DIR, "networks.json")
+            networks = persistence.load_json(networks_file, default={})
+            if networkName not in networks:
+                send_message_fn(response_target(actual_channel, integration), f"Network {networkName} not found.")
                 return
 
-            network_name = args[2]
-            if network_name not in networks:
-                send_message_fn(response_target(actual_channel, integration),
-                                f"Network '{network_name}' not found.")
-                return
-
-            net = networks[network_name]
-            server_host = net.get("server")
-            port        = net.get("port")
-            channels_list = net.get("Channels", [])
-            use_ssl     = net.get("ssl", False)
-
-            if not server_host or not port or not channels_list:
-                send_message_fn(response_target(actual_channel, integration),
-                                f"Incomplete configuration for '{network_name}'.")
-                return
+            net = networks[networkName]
+            server_name    = net.get("server")
+            port_number    = net.get("port")
+            channels_list  = net.get("Channels", [])
+            use_ssl_flag   = net.get("ssl", False)
+            # ← ADD THESE TWO LINES TO PULL SASL CREDS
+            sasl_user      = net.get("sasl_user")
+            sasl_pass      = net.get("sasl_pass")
 
             try:
                 from irc_client import connect_to_network, irc_command_parser, send_message
-            except ImportError as e:
-                send_message_fn(response_target(actual_channel, integration),
-                                f"Error importing IRC client: {e}")
+            except Exception as e:
+                send_message_fn(response_target(actual_channel, integration), f"Error importing IRC client: {e}")
                 return
 
-            client = connect_to_network(server_host, port, use_ssl, channels_list[0])
-            if not client:
-                send_message_fn(response_target(actual_channel, integration),
-                                f"Failed to connect to '{network_name}'.")
-                return
+            # PASS SASL PARAMETERS INTO THE CONNECT CALL
+            new_client = connect_to_network(
+                server_name,
+                port_number,
+                use_ssl_flag,
+                channels_list[0],
+                sasl_user = sasl_user,
+                sasl_pass = sasl_pass
+            )
 
-            for ch in channels_list:
-                client.send(f"JOIN {ch}\r\n".encode("utf-8"))
-                send_message(client, ch, "FuzzyFeeds is here!")
-
-            send_message_fn(response_target(actual_channel, integration),
-                            f"Connected to '{network_name}', joined: {', '.join(channels_list)}")
-            threading.Thread(target=irc_command_parser, args=(client,), daemon=True).start()
+            if new_client:
+                for ch in channels_list:
+                    new_client.send(f"JOIN {ch}\r\n".encode("utf-8"))
+                    send_message(new_client, ch, "FuzzyFeeds has joined the channel!")
+                send_message_fn(
+                    response_target(actual_channel, integration),
+                    f"Connected to network {networkName} and joined channels: {', '.join(channels_list)}."
+                )
+                threading.Thread(target=irc_command_parser, args=(new_client,), daemon=True).start()
+            else:
+                send_message_fn(
+                    response_target(actual_channel, integration),
+                    f"Failed to connect to network {networkName}."
+                )
 
         elif action in ("del","delete"):
             # !network del <networkName>
@@ -906,3 +947,4 @@ def search_feeds(query):
     except Exception as e:
         logging.error("Error searching feeds: %s", e)
         return []
+

@@ -16,6 +16,7 @@ from config import (
 import channels as chan_module
 import os
 
+
 logging.basicConfig(level=logging.INFO)
 
 irc_client = None

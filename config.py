@@ -3,76 +3,56 @@ import time
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# ------------------------------
-# Primary IRC Server Configuration
-# ------------------------------
-server = "irc.example.net"       # Example IRC server
-port = 6667                      # Typical non-SSL port
-botnick = "FuzzyFeeds"           # The bot's nickname
-use_ssl = False                  # Set True if your IRC server requires SSL/TLS
+# IRC & Bot configuration
+server = "irc.example.com"          # Replace with your IRC server address
+port = 6667                   # Replace with your IRC port
+channels = ["#main"]          # Default channel(s) for the bot to join
+botnick = "FuzzyFeeds"
+use_sasl = True
+sasl_username = "your_username"  #Sasl username
+sasl_password = "your_password"    #sasl password
+nickserv_password = "your_password"
+admin = "your_admin"           # Placeholder: replace with your admin username
+admin_hostmask = "your.hostmask.com"  # Placeholder: replace with your admin hostmask
+admins = ["admin1", "admin2", "admin3"]
+ops = ["op1"]
 
-# ------------------------------
-# NickServ & SASL Settings
-# ------------------------------
-# If your IRC server requires SASL authentication, set use_sasl to True.
-# Then fill in sasl_username and sasl_password. Otherwise, leave them blank.
-use_sasl = False
-sasl_username = ""
-sasl_password = ""
-
-# If your server uses NickServ, fill in nickserv_password.
-# If also using SASL, you can leave this blank unless your network specifically requires both.
-nickserv_password = ""
-
-# ------------------------------
-# Bot Admin & Operator Settings
-# ------------------------------
-admin = "locoghost"              # Global bot owner
-admin_hostmask = "example.com"   # Placeholder for any hostmask checks
-admins = ["admin_name", "otheradmin", "otheradmin"]  # Additional global admins
-ops = ["other_op"]                # IRC "ops" authorized for certain commands
-
-# ------------------------------
-# General Configuration
-# ------------------------------
-start_time = time.time()
-default_interval = 300           # Default feed check interval (seconds)
-
-# ------------------------------
-# Dashboard (Flask) Configuration
-# ------------------------------
-dashboard_port = 1039
-dashboard_username = "admin"
-dashboard_password = "password123"
-
-# ------------------------------
-# Slack Integration (Optional)
-# ------------------------------
-enable_slack = False
-slack_token = ""
-slack_channel = "#general"
-
-# ------------------------------
-# Discord Integration (Optional)
-# ------------------------------
-enable_discord = False
-discord_token = ""
-discord_channel_id = ""
-
-# ------------------------------
-# Matrix Integration (Optional)
-# ------------------------------
-enable_matrix = False
-matrix_homeserver = "https://matrix.org"
-matrix_user = "@fuzzyfeeds:matrix.org"
-matrix_password = ""
-matrix_rooms = ["!example:matrix.org"]
-
-# ------------------------------
-# File Paths (Local Data)
-# ------------------------------
+# Persistence files (absolute paths)
 feeds_file = os.path.join(BASE_DIR, "feeds.json")
 subscriptions_file = os.path.join(BASE_DIR, "subscriptions.json")
+last_links_file = os.path.join(BASE_DIR, "last_feed_links.txt")
 help_file = os.path.join(BASE_DIR, "help.json")
 channels_file = os.path.join(BASE_DIR, "channels.json")
 admin_file = os.path.join(BASE_DIR, "admin.json")
+
+# SSL configuration for IRC: set to True to enable SSL.
+use_ssl = False
+
+# Bot start time for uptime calculations.
+start_time = time.time()
+default_interval = 300  # seconds
+
+# --- Integration Configuration ---
+
+# Dashboard configuration
+start_time = time.time()
+dashboard_port = 1039
+dashboard_username = "admin"
+dashboard_password = "your_password"
+
+# Slack configuration (optional)
+slack_token = "your_slack_token"
+slack_channel = "#general"  # e.g. "#general"
+enable_slack = False  # Set to True to enable Slack integration
+
+# Discord configuration (optional)
+discord_token = "your_discord_bot_token"
+discord_channel_id = "your_discord_channel_id"  # Replace with your Discord channel ID
+enable_discord = True  # Set to True to enable Discord integration
+
+# Matrix configuration (optional)
+matrix_homeserver = "https://matrix.org"
+matrix_user = "@your_bot:matrix.org"  # Full Matrix user ID is required
+matrix_password = "your_matrix_password"
+matrix_rooms = ["!your_room_id:matrix.org"]
+enable_matrix = True  # Set to True to enable Matrix integration

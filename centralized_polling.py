@@ -2,6 +2,8 @@
 import time
 import logging
 import feedparser
+import json
+import os
 from config import default_interval, feeds_file, server, start_time
 from feed import (
     load_feeds, channel_feeds, is_link_posted, mark_link_posted,
@@ -11,7 +13,30 @@ from status import irc_client, irc_secondary
 from matrix_integration import send_message as matrix_fallback
 from discord_integration import send_discord_message as discord_fallback
 
+
 logging.basicConfig(level=logging.INFO)
+
+# Startup feeds counter file
+STARTUP_FEEDS_FILE = os.path.join(os.path.dirname(__file__), "startup_feeds_count.json")
+
+def increment_startup_feeds_counter(platform):
+    """Increment the startup feeds counter for the given platform"""
+    try:
+        if os.path.exists(STARTUP_FEEDS_FILE):
+            with open(STARTUP_FEEDS_FILE, 'r') as f:
+                counts = json.load(f)
+        else:
+            counts = {"IRC": 0, "Matrix": 0, "Discord": 0, "startup_time": time.time()}
+        
+        if platform in counts:
+            counts[platform] += 1
+            
+        with open(STARTUP_FEEDS_FILE, 'w') as f:
+            json.dump(counts, f)
+            
+        logging.debug(f"Incremented {platform} startup feeds counter to {counts[platform]}")
+    except Exception as e:
+        logging.error(f"Error incrementing startup feeds counter for {platform}: {e}")
 
 def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=None):
     logging.info("Polling feeds...")
@@ -69,6 +94,7 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=
                         matrix_send(chan, combined_msg)
                     else:
                         matrix_fallback(chan, combined_msg)
+                    increment_startup_feeds_counter("Matrix")
                 # Dispatch to Discord
                 elif chan_type == "discord":
                     if discord_send:
@@ -77,6 +103,7 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=
                     else:
                         discord_fallback(chan, title_msg)
                         discord_fallback(chan, link_msg)
+                    increment_startup_feeds_counter("Discord")
                 # Dispatch to IRC
                 elif chan_type == "irc":
                     if irc_send:
@@ -91,6 +118,7 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=
                             client = irc_secondary[net]
                             client.send_message(channel, title_msg)
                             client.send_message(channel, link_msg)
+                    increment_startup_feeds_counter("IRC")
 
                 # ── Private subscriptions: send DMs on the appropriate network
                 from feed import subscriptions
@@ -138,3 +166,4 @@ def start_polling(irc_send, matrix_send, discord_send, private_send, interval_ov
     while True:
         poll_feeds(irc_send, matrix_send, discord_send, private_send)
         time.sleep(interval_override or default_interval)
+

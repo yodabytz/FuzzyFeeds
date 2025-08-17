@@ -1,3 +1,4 @@
+# users.py
 import os
 from persistence import load_json, save_json
 
@@ -36,3 +37,4 @@ def list_users(channel=None):
     if channel and channel.startswith("#"):
         return {user: data for user, data in users.items() if channel in data.get("channels", [])}
     return users
+

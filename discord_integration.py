@@ -8,6 +8,7 @@ from config import discord_token, admin, admins
 from commands import handle_centralized_command
 import feed
 
+
 logging.basicConfig(level=logging.INFO)
 
 intents = discord.Intents.default()

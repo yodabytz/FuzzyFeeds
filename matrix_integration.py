@@ -20,10 +20,12 @@ import users
 from commands import search_feeds, get_help
 from channels import load_channels
 
+
 logging.basicConfig(level=logging.INFO)
 
 GRACE_PERIOD = 5
 POSTED_FILE = "matrix_posted.json"
+ROOM_NAMES_FILE = "matrix_room_names.json"
 
 # --- Per-Room Posted Feeds Storage ---
 def load_posted_articles():
@@ -47,6 +49,27 @@ def save_posted_articles(posted_dict):
 # --- End Per-Room Posted Feeds Storage ---
 
 matrix_room_names = {}
+
+def load_room_names():
+    """Load room names from file"""
+    global matrix_room_names
+    if os.path.exists(ROOM_NAMES_FILE):
+        try:
+            with open(ROOM_NAMES_FILE, "r") as f:
+                matrix_room_names = json.load(f)
+                logging.info(f"Loaded {len(matrix_room_names)} room names from file")
+        except Exception as e:
+            logging.error(f"Error loading room names: {e}")
+            matrix_room_names = {}
+
+def save_room_names():
+    """Save room names to file"""
+    try:
+        with open(ROOM_NAMES_FILE, "w") as f:
+            json.dump(matrix_room_names, f, indent=4)
+        logging.info(f"Saved {len(matrix_room_names)} room names to file")
+    except Exception as e:
+        logging.error(f"Error saving room names: {e}")
 
 def match_feed(feed_dict, pattern):
     if "*" in pattern or "?" in pattern:
@@ -172,18 +195,17 @@ class MatrixBot:
 
     async def join_rooms(self):
         global matrix_room_names
+        # Load existing room names first
+        load_room_names()
+        
         channels_data = load_channels()
         matrix_channels = channels_data.get("matrix_channels", [])
         for room in matrix_channels:
             try:
                 response = await self.client.join(room)
                 if hasattr(response, "room_id"):
-                    try:
-                        state = await self.client.room_get_state_event(room, "m.room.name", "")
-                        display_name = state.content.get("name", room) if hasattr(state, 'content') else room 
-                    except Exception as e:
-                        logging.warning(f"Could not fetch display name for {room}: {e}")
-                        display_name = room
+                    # Try multiple methods to get room name
+                    display_name = await self.get_room_display_name(room)
                     matrix_room_names[room] = display_name
                     logging.info(f"Joined Matrix room: {room} (Display name: {display_name})")
                     # Announcement removed per request.
@@ -191,6 +213,54 @@ class MatrixBot:
                     logging.error(f"Error joining room {room}: {response}")
             except Exception as e:
                 logging.error(f"Exception joining room {room}: {e}")
+        
+        # Save updated room names
+        save_room_names()
+
+    async def get_room_display_name(self, room_id):
+        """Try multiple methods to get a readable room name in #roomname:domain format"""
+        try:
+            # Method 1: Try to get the canonical alias (preferred format: #roomname:domain.org)
+            state = await self.client.room_get_state_event(room_id, "m.room.canonical_alias", "")
+            if hasattr(state, 'content') and state.content.get("alias"):
+                alias = state.content["alias"]
+                # Ensure it starts with # for proper display
+                if not alias.startswith("#"):
+                    alias = "#" + alias
+                return alias
+        except Exception as e:
+            logging.debug(f"Could not fetch canonical alias for {room_id}: {e}")
+        
+        try:
+            # Method 2: Try to get any available aliases
+            state = await self.client.room_get_state_event(room_id, "m.room.aliases", "")
+            if hasattr(state, 'content') and state.content.get("aliases"):
+                aliases = state.content["aliases"]
+                if aliases and len(aliases) > 0:
+                    alias = aliases[0]
+                    # Ensure it starts with # for proper display
+                    if not alias.startswith("#"):
+                        alias = "#" + alias
+                    return alias
+        except Exception as e:
+            logging.debug(f"Could not fetch aliases for {room_id}: {e}")
+        
+        try:
+            # Method 3: Try to get the m.room.name state event and format it properly
+            state = await self.client.room_get_state_event(room_id, "m.room.name", "")
+            if hasattr(state, 'content') and state.content.get("name"):
+                room_name = state.content["name"].lower().replace(" ", "")
+                # Extract domain from room_id (!roomid:domain.org)
+                if ":" in room_id:
+                    domain = room_id.split(":", 1)[1]
+                    return f"#{room_name}:{domain}"
+                return f"#{room_name}"
+        except Exception as e:
+            logging.debug(f"Could not fetch m.room.name for {room_id}: {e}")
+        
+        # Fallback: return the room ID itself
+        logging.warning(f"Could not determine display name for {room_id}, using room ID")
+        return room_id
 
     async def initial_sync(self):
         logging.info("Performing initial sync...")
@@ -214,7 +284,8 @@ class MatrixBot:
             asyncio.create_task(self.send_message(room_key, msg))
         def matrix_send_multiline(target, msg):
             asyncio.create_task(self.send_message(target, msg))
-        is_op_flag = (get_localpart(sender).lower() in ([a.lower() for a in admins] + [config_admin.lower()]))
+        sender_localpart = get_localpart(sender).lower()
+        is_op_flag = (sender_localpart in ([a.lower() for a in admins] + [config_admin.lower()]))
         from commands import handle_centralized_command
         handle_centralized_command("matrix", matrix_send, matrix_send_private, matrix_send_multiline, sender, room_key, command, is_op_flag)
 
@@ -319,3 +390,4 @@ def disable_feed_loop():
 
 if __name__ == "__main__":
     start_matrix_bot()
+
