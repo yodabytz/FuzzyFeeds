@@ -890,6 +890,41 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             logging.error(f"Error during graceful shutdown: {e}")
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
+    elif lower_message.startswith("!quit"):
+        if user_key != admin.lower():
+            send_private_message_fn(user, "Only the bot owner can use !quit.")
+            return
+        send_message_fn(response_target(actual_channel, integration), "Shutting down bot gracefully...")
+        try:
+            async def graceful_shutdown():
+                try:
+                    from discord_integration import bot as discord_bot
+                    if discord_bot:
+                        await discord_bot.close()
+                        logging.info("Discord bot disconnected gracefully.")
+                except Exception as e:
+                    logging.error(f"Error disconnecting Discord bot: {e}")
+                try:
+                    from matrix_integration import matrix_bot_instance
+                    if matrix_bot_instance:
+                        await matrix_bot_instance.client.close()
+                        logging.info("Matrix bot disconnected gracefully.")
+                except Exception as e:
+                    logging.error(f"Error disconnecting Matrix bot: {e}")
+                try:
+                    from irc_client import irc_client as current_irc
+                    if current_irc:
+                        current_irc.close()
+                        logging.info("IRC connection closed gracefully.")
+                except Exception as e:
+                    logging.error(f"Error disconnecting IRC: {e}")
+            asyncio.run(graceful_shutdown())
+        except Exception as e:
+            logging.error(f"Error during graceful shutdown: {e}")
+        
+        logging.info("Bot shutdown complete.")
+        sys.exit(0)
+
     elif lower_message.startswith("!reload"):
         if user_key != admin.lower():
             send_private_message_fn(user, "Only the bot owner can use !reload.")
