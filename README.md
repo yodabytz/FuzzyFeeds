@@ -1,6 +1,8 @@
-# FuzzyFeeds - Multi-Platform RSS Bot 🤖
+# FuzzyFeeds - Multi-Platform RSS Bot
 
-> A powerful, multi-platform RSS aggregation bot with real-time web dashboard featuring both light and dark mode themes.
+FuzzyFeeds is a multi-platform RSS aggregation bot that supports IRC, Matrix, and Discord. It features a real-time web dashboard for monitoring feeds, connections, and errors.
+
+<img src="https://raw.githubusercontent.com/yodabytz/FuzzyFeeds/refs/heads/main/fuzzyfeeds-logo-lg.png" alt="FuzzyFeeds" width="200" height="200">
 
 FuzzyFeeds is a comprehensive RSS aggregation bot that seamlessly integrates with IRC, Matrix, and Discord platforms. It features a modern, responsive web dashboard with real-time monitoring capabilities and dual theme support for optimal viewing in any environment.
 
