@@ -258,7 +258,10 @@ def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel, 
 
             if not connected:
                 logging.error(f"Failed to register on {server_name}:{port_number} after attempt {attempt+1}")
-                irc.close()
+                try:
+                    irc.close()
+                except:
+                    pass
                 attempt += 1
                 time.sleep(5)
                 continue
@@ -270,7 +273,19 @@ def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel, 
 
             threading.Thread(target=process_message_queue, args=(irc,), daemon=True).start()
 
-            irc.send(f"JOIN {initial_channel}\r\n".encode("utf-8"))
+            # Test if connection is still alive before joining channels
+            try:
+                irc.send(f"JOIN {initial_channel}\r\n".encode("utf-8"))
+                logging.info(f"Successfully joined {initial_channel} on {server_name}:{port_number}")
+            except Exception as join_err:
+                logging.error(f"Failed to join channel on {server_name}:{port_number}: {join_err}")
+                try:
+                    irc.close()
+                except:
+                    pass
+                attempt += 1
+                time.sleep(5)
+                continue
 
             return irc
 
