@@ -3,6 +3,7 @@ import requests
 import time
 import logging
 import json
+import datetime
 from persistence import load_json, save_json
 import os, json, logging
 
@@ -75,6 +76,8 @@ def load_feeds():
         last_check_times[chan] = 0
 
     load_posted_links()
+    remove_duplicates_from_posted_links()
+    cleanup_old_posted_links()
     load_subscriptions()
 
 def migrate_plain_keys_to_composite():
@@ -135,6 +138,58 @@ def load_posted_links():
 def save_posted_links():
     save_json(POSTED_LINKS_FILE, posted_links)
 
+def cleanup_old_posted_links():
+    """Remove posted link entries older than 1 month to prevent file bloat"""
+    global posted_links
+    if not os.path.exists(POSTED_LINKS_FILE):
+        return
+    
+    one_month_ago = time.time() - (30 * 24 * 60 * 60)  # 30 days in seconds
+    cleaned = False
+    
+    for channel in list(posted_links.keys()):
+        if channel not in posted_links:
+            continue
+            
+        original_count = len(posted_links[channel])
+        # Since we don't store timestamps with links, we'll use a heuristic:
+        # Keep only the most recent half of the links for each channel
+        # This is a reasonable approximation for cleanup
+        if original_count > 20:  # Only cleanup if there are many links
+            keep_count = max(10, original_count // 2)  # Keep at least 10, or half
+            posted_links[channel] = posted_links[channel][-keep_count:]
+            if len(posted_links[channel]) < original_count:
+                cleaned = True
+                logging.info(f"Cleaned {original_count - len(posted_links[channel])} old entries from {channel}")
+    
+    if cleaned:
+        save_posted_links()
+        logging.info("Completed cleanup of old posted links")
+
+def remove_duplicates_from_posted_links():
+    """Remove duplicate entries from posted_links while preserving order"""
+    global posted_links
+    cleaned = False
+    
+    for channel in posted_links:
+        original_count = len(posted_links[channel])
+        # Remove duplicates while preserving order (keep last occurrence)
+        seen = set()
+        unique_links = []
+        for link in reversed(posted_links[channel]):
+            if link not in seen:
+                seen.add(link)
+                unique_links.append(link)
+        posted_links[channel] = list(reversed(unique_links))
+        
+        if len(posted_links[channel]) < original_count:
+            cleaned = True
+            logging.info(f"Removed {original_count - len(posted_links[channel])} duplicate entries from {channel}")
+    
+    if cleaned:
+        save_posted_links()
+        logging.info("Completed duplicate removal from posted links")
+
 def is_link_posted(channel, link):
     if channel not in posted_links:
         posted_links[channel] = []
@@ -143,8 +198,10 @@ def is_link_posted(channel, link):
 def mark_link_posted(channel, link):
     if channel not in posted_links:
         posted_links[channel] = []
-    posted_links[channel].append(link)
-    save_posted_links()
+    # Only add if not already present to prevent duplicates
+    if link not in posted_links[channel]:
+        posted_links[channel].append(link)
+        save_posted_links()
 
 def fetch_latest_article(url):
     try:
