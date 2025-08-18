@@ -1,18 +1,40 @@
-# FuzzyFeeds - Multi-Platform RSS Bot
+# FuzzyFeeds - Multi-Platform RSS Bot 🤖
 
-FuzzyFeeds is a multi-platform RSS aggregation bot that supports IRC, Matrix, and Discord. It features a real-time web dashboard for monitoring feeds, connections, and errors.
+> A powerful, multi-platform RSS aggregation bot with real-time web dashboard featuring both light and dark mode themes.
 
-<img src="https://raw.githubusercontent.com/yodabytz/FuzzyFeeds/refs/heads/main/fuzzyfeeds-logo-lg.png" alt="FuzzyFeeds" width="200" height="200">
+FuzzyFeeds is a comprehensive RSS aggregation bot that seamlessly integrates with IRC, Matrix, and Discord platforms. It features a modern, responsive web dashboard with real-time monitoring capabilities and dual theme support for optimal viewing in any environment.
 
-## Features
+## ✨ Key Features
 
-- **Multi-Platform Support**: IRC, Matrix, and Discord integration
-- **Real-time Web Dashboard**: Monitor bot status, feeds, and errors
-- **Centralized Feed Management**: Manage RSS feeds across all platforms
-- **User Subscriptions**: Personal feed subscriptions with DM delivery
-- **Dark Mode Dashboard**: Toggle between light and dark themes
-- **Live Connection Status**: Real-time connection monitoring
-- **Error Logging**: Real-time error tracking and display
+### 🌐 Multi-Platform Integration
+- **IRC Support**: Full IRC integration with SASL authentication and multi-server support
+- **Matrix Integration**: Native Matrix protocol support with room management
+- **Discord Bot**: Complete Discord bot integration with channel support
+
+### 📊 Real-time Web Dashboard
+- **🌙 Dark/Light Mode Toggle**: Seamlessly switch between dark and light themes with persistent preference storage
+- **📈 Live Connection Monitoring**: Real-time status indicators for all platform connections
+- **📰 Feed Statistics**: Track feed counts, posts, and activity across all platforms
+- **🌳 Feed Tree Visualization**: Hierarchical view of all configured feeds and channels
+- **⚡ Server-Sent Events**: Real-time updates without page refreshes
+
+### 🔧 Advanced Feed Management
+- **Centralized Control**: Manage RSS feeds across all platforms from a single interface
+- **👤 User Subscriptions**: Personal feed subscriptions with direct message delivery
+- **🔄 Smart Polling**: Intelligent feed polling with duplicate detection
+- **📝 Error Tracking**: Real-time error logging and monitoring dashboard
+
+### 🛡️ Security & Administration
+- **🔐 Multi-user Authentication**: Secure dashboard access with multiple user support
+- **👨‍💼 Admin Controls**: Comprehensive administrative commands and permissions
+- **🖥️ Dashboard Command Interface**: Execute bot commands directly from the web dashboard
+- **📋 Activity Logging**: Detailed logging of all bot activities and errors
+
+### 🌐 Proxy Support
+- **🔒 SOCKS4/5 & HTTP Proxy**: Full proxy support for all connection types
+- **🎯 Feeds-Only Proxy Mode**: Route only RSS requests through proxy for IP block bypass
+- **🔧 Granular Control**: Selective proxy routing per connection type
+- **🔐 Authentication Support**: Username/password authentication for proxy servers
 
 ## Installation
 
@@ -37,6 +59,16 @@ FuzzyFeeds is a multi-platform RSS aggregation bot that supports IRC, Matrix, an
    - `channels.json`: Define channels/rooms for each platform
    - `feeds.json`: Configure RSS feeds per channel
    - `help.json`: Customize bot commands and help text
+
+5. (Optional) Configure proxy support in `config.py`:
+   ```python
+   # Proxy configuration for RSS feeds only (recommended)
+   enable_proxy = True
+   feeds_only_proxy = True  # Only route RSS feeds through proxy
+   proxy_type = "socks5"
+   proxy_host = "127.0.0.1"
+   proxy_port = 9050
+   ```
 
 ## Configuration
 
@@ -97,40 +129,11 @@ Add RSS feeds in `feeds.json`:
    ```
 
 3. Bot Commands:
-
-   **User Commands:**
-   - `!listfeeds` - List all feeds for this channel
-   - `!latest <feed_name>` - Show the latest entry from a feed
-   - `!getfeed <title_or_domain>` - Search for a feed and display the latest entry
-   - `!genfeed <website_url>` - Generate an RSS feed for a given site via rss.app
-   - `!search <query>` - Search for feeds matching a query
-   - `!stats` - Display uptime, feed counts, and subscription counts
-   - `!addsub <feed_name> <URL>` - Subscribe privately to a feed
-   - `!unsub <feed_name>` - Unsubscribe from one of your private feeds
-   - `!mysubs` - List your private subscriptions
-   - `!latestsub <feed_name>` - Show the latest entry from one of your private subscriptions
-   - `!setsetting <key> <value>` - Set a personal user setting
-   - `!getsetting <key>` - Retrieve a personal user setting
-   - `!settings` - List all your personal settings
-   - `!admin` - Show admin info
+   - `!listfeeds` - List all feeds in current channel
+   - `!stats` - Show bot statistics
    - `!help` - Show help message
-
-   **Channel Admin Commands:**
-   - `!addfeed <feed_name> <URL>` - Add an RSS feed to this channel
-   - `!delfeed <feed_name>` - Remove an RSS feed
-   - `!getadd <title_or_domain>` - Search & auto-add feed to this channel
-   - `!setinterval <minutes>` - Set the feed check interval
-
-   **Bot Owner Commands:**
-   - `!join <#channel> <adminname>` - Bot joins a channel
-   - `!part <#channel>` - Make the bot leave a channel
-   - `!network add <name> <server/port> [-ssl] <#channel> <opName>` - Create a new IRC network entry
-   - `!set irc.<name>.<field> <value>` - Update a network field (e.g. sasl_user)
-   - `!connect <networkName>` - Connect to a network from networks.json
-   - `!delnetwork <networkName>` - Remove a network config
-   - `!quit` - Shut down the bot
-   - `!reload` - Reload the bot's config
-   - `!restart` - Restart the bot
+   - `!addfeed <name> <url>` - Add RSS feed (admin only)
+   - `!removefeed <name>` - Remove RSS feed (admin only)
 
 ## Dashboard Features
 
@@ -140,6 +143,26 @@ Add RSS feeds in `feeds.json`:
 - **Dark Mode**: Toggle between light and dark themes
 - **Feed Tree Visualization**: Hierarchical view of all feeds
 - **Log Management**: Clear logs functionality
+- **Command Interface**: Execute bot commands directly from the dashboard with admin privileges
+
+### Command Interface
+The dashboard includes a built-in command interface that allows you to execute any bot command with super admin privileges:
+
+- **Direct Command Execution**: Run commands like `!stats`, `!listfeeds`, `!addfeed`, etc.
+- **Real-time Response**: See command output immediately in the dashboard
+- **Full Admin Access**: All owner-level commands available (`!quit`, `!reload`, `!network`)
+- **Convenient Management**: No need to access IRC/Matrix/Discord to manage the bot
+
+## Proxy Support
+
+FuzzyFeeds includes comprehensive proxy support for bypassing IP blocks and enhancing privacy:
+
+- **Feeds-Only Mode**: Route only RSS requests through proxy (recommended for IP blocking issues)
+- **Full Proxy Mode**: Route all connections through proxy for complete anonymization
+- **Multiple Proxy Types**: SOCKS4, SOCKS5, HTTP, and HTTPS proxy support
+- **Authentication**: Username/password authentication for proxy servers
+
+See `PROXY_README.md` for detailed proxy configuration instructions and use cases.
 
 ## File Structure
 
@@ -161,6 +184,7 @@ Add RSS feeds in `feeds.json`:
 - discord.py (for Discord support)
 - feedparser
 - requests
+- PySocks (for proxy support)
 
 ## Contributing
 
