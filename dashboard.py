@@ -701,6 +701,28 @@ DASHBOARD_TEMPLATE = r"""
       </div>
     </div>
 
+    <!-- Command Interface -->
+    <div class="row">
+      <div class="col-md-12">
+        <div class="card">
+          <div class="card-header bg-primary text-white">
+            <i class="fas fa-terminal"></i> Bot Command Interface
+          </div>
+          <div class="card-body">
+            <div class="input-group mb-3">
+              <span class="input-group-text">!</span>
+              <input type="text" class="form-control" id="commandInput" placeholder="Enter bot command (without !)" 
+                     onkeypress="if(event.key==='Enter') executeCommand()">
+              <button class="btn btn-primary" type="button" onclick="executeCommand()">
+                <i class="fas fa-play"></i> Execute
+              </button>
+            </div>
+            <div id="commandOutput" style="background: var(--tree-bg); padding: 10px; border-radius: 5px; min-height: 100px; max-height: 300px; overflow-y: auto; font-family: monospace; white-space: pre-wrap; display: none;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Errors -->
     <div class="row">
       <div class="col-md-12">
@@ -851,6 +873,48 @@ DASHBOARD_TEMPLATE = r"""
     }
     setInterval(updateStats, 30000);
     updateStats();
+
+    // Command execution functionality
+    function executeCommand() {
+      const commandInput = document.getElementById('commandInput');
+      const commandOutput = document.getElementById('commandOutput');
+      const command = commandInput.value.trim();
+      
+      if (!command) {
+        alert('Please enter a command');
+        return;
+      }
+      
+      // Show loading state
+      commandOutput.style.display = 'block';
+      commandOutput.textContent = 'Executing command...';
+      
+      // Execute command
+      fetch('/execute_command', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ command: command })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          commandOutput.textContent = data.response;
+          commandOutput.style.color = 'var(--text-color)';
+        } else {
+          commandOutput.textContent = 'Error: ' + (data.error || 'Unknown error');
+          commandOutput.style.color = '#ff6b6b';
+        }
+      })
+      .catch(error => {
+        commandOutput.textContent = 'Network error: ' + error.message;
+        commandOutput.style.color = '#ff6b6b';
+      });
+      
+      // Clear input
+      commandInput.value = '';
+    }
   </script>
   <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
@@ -1071,6 +1135,52 @@ def stats_data():
         "matrix_room_names":    matrix_room_names,
         "subscriptions":        feed.subscriptions
     }
+
+@app.route('/execute_command', methods=['POST'])
+@requires_auth
+def execute_command():
+    """Execute a bot command from the dashboard as super admin"""
+    try:
+        data = request.get_json()
+        if not data or 'command' not in data:
+            return jsonify({"success": False, "error": "No command provided"}), 400
+        
+        command = data['command'].strip()
+        if not command.startswith('!'):
+            command = '!' + command
+            
+        # Import commands module to execute the command
+        from commands import handle_centralized_command
+        import config
+        
+        # Create a response buffer to capture output
+        response_buffer = []
+        
+        def dashboard_send_message(target, message):
+            response_buffer.append(f"[{target}] {message}")
+        
+        def dashboard_send_private_message(user, message):
+            response_buffer.append(f"[PM to {user}] {message}")
+        
+        # Execute command as super admin with proper parameters
+        handle_centralized_command(
+            "dashboard",  # integration type
+            dashboard_send_message,  # send_message_fn
+            dashboard_send_private_message,  # send_private_message_fn
+            dashboard_send_message,  # send_multiline_message_fn (same as send_message for dashboard)
+            config.admin,  # user
+            "#dashboard",  # target/channel
+            command,  # message/command
+            True  # is_op_flag (always True for dashboard admin)
+        )
+        
+        # Return the response
+        response = "\n".join(response_buffer) if response_buffer else "Command executed successfully (no output)"
+        return jsonify({"success": True, "response": response})
+        
+    except Exception as e:
+        logging.error(f"Dashboard command execution error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.errorhandler(400)
 def handle_bad_request(error):
