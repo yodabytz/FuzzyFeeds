@@ -138,16 +138,27 @@ def manage_secondary_network(network_name, net_info):
     while True:
         try:
             logging.info(f"[{network_name}] Attempting connection to {srv}:{prt}...")
+            # Ensure status starts as false before connection attempt
+            with connection_lock:
+                connection_status["secondary"][srv] = False
+            
             client = connect_to_network(srv, prt, sslf, channels_list[0], net_auth=net_info)
             if client:
                 logging.info(f"[{network_name}] Connection established, channels joined: {channels_list}")
+                # Only set to True after successful connection and channel join
                 with connection_lock:
                     connection_status["secondary"][srv] = True
                 for ch in channels_list:
-                    client.send(f"JOIN {ch}\r\n".encode("utf-8"))
-                    composite = f"{srv}|{ch}"
-                    irc_secondary[composite] = client
-                    logging.info(f"[{network_name}] Registered {composite} in irc_secondary")
+                    try:
+                        client.send(f"JOIN {ch}\r\n".encode("utf-8"))
+                        composite = f"{srv}|{ch}"
+                        irc_secondary[composite] = client
+                        logging.info(f"[{network_name}] Registered {composite} in irc_secondary")
+                    except Exception as join_error:
+                        logging.error(f"[{network_name}] Failed to join {ch}: {join_error}")
+                        with connection_lock:
+                            connection_status["secondary"][srv] = False
+                        break
                 parser_thread = threading.Thread(target=irc_command_parser, args=(client,), daemon=True)
                 parser_thread.start()
                 while not message_queue.empty():
