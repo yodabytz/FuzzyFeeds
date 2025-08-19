@@ -193,7 +193,11 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
 
     lower_message = message.lower()
     if integration == "irc":
-        key = migrate_plain_key_if_needed(target, integration)
+        # If target is already a composite key (contains |), use it directly
+        if "|" in target:
+            key = target
+        else:
+            key = migrate_plain_key_if_needed(target, integration)
     else:
         key = target
     actual_channel = get_actual_channel(target, integration)
@@ -394,8 +398,23 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         )
 
     elif lower_message.startswith("!listfeeds"):
+        # For IRC, try case-insensitive matching if exact key doesn't exist
+        found_feeds = None
         if key in feed.channel_feeds and feed.channel_feeds[key]:
-            lines = [f"{name}: {url}" for name, url in feed.channel_feeds[key].items()]
+            found_feeds = feed.channel_feeds[key]
+        elif integration == "irc" and "|" in key:
+            # Try case-insensitive matching for IRC channels
+            server_part, channel_part = key.split("|", 1)
+            for feed_key, feeds_dict in feed.channel_feeds.items():
+                if "|" in feed_key and feeds_dict:
+                    feed_server, feed_channel = feed_key.split("|", 1)
+                    if (server_part.lower() == feed_server.lower() and 
+                        channel_part.lower() == feed_channel.lower()):
+                        found_feeds = feeds_dict
+                        break
+        
+        if found_feeds:
+            lines = [f"{name}: {url}" for name, url in found_feeds.items()]
             multiline_send(send_multiline_message_fn, response_target(actual_channel, integration), "\n".join(lines))
         else:
             send_message_fn(response_target(actual_channel, integration), "No feeds found for this channel.")
@@ -935,6 +954,31 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         except Exception as e:
             send_message_fn(response_target(actual_channel, integration), f"Error reloading config: {e}")
 
+    elif lower_message.startswith("!ping"):
+        # Determine the network/server name based on integration and channel
+        if integration == "irc":
+            # Extract server name from composite target (server|channel)
+            if "|" in target:
+                network_name = target.split("|", 1)[0]
+            else:
+                network_name = get_network_for_channel(actual_channel)
+            pong_response = f"PONG: {network_name}"
+        elif integration == "matrix":
+            # For Matrix, extract the homeserver from the room ID or use a default
+            if actual_channel.startswith("!") and ":" in actual_channel:
+                homeserver = actual_channel.split(":")[-1]
+                pong_response = f"PONG: {homeserver}"
+            else:
+                pong_response = "PONG: matrix.org"
+        elif integration == "discord":
+            pong_response = "PONG: discord.com"
+        elif integration == "dashboard":
+            pong_response = "PONG: dashboard"
+        else:
+            pong_response = "PONG: unknown"
+        
+        send_message_fn(response_target(actual_channel, integration), pong_response)
+    
     elif lower_message.startswith("!help"):
         parts = message.split(" ", 1)
         if len(parts) == 1:

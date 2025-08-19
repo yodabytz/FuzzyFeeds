@@ -6,6 +6,12 @@ import logging
 import ssl
 import queue
 import base64
+try:
+    from proxy_utils import create_proxy_socket, wrap_socket_with_proxy, log_proxy_status
+    PROXY_AVAILABLE = True
+except ImportError:
+    logging.warning("Proxy support not available - proxy_utils module not found")
+    PROXY_AVAILABLE = False
 
 from config import (
     ops, server, port, botnick, use_ssl,
@@ -108,15 +114,22 @@ def connect_and_register():
         try:
             logging.info(f"Attempt {attempt+1} to connect to {server}:{port}")
             
-            # Create the socket
-            if use_ssl:
-                context = ssl.create_default_context()
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
-                raw_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                irc = context.wrap_socket(raw_socket, server_hostname=server)
+            # Create the socket with proxy support
+            if PROXY_AVAILABLE:
+                raw_socket = create_proxy_socket("irc")
             else:
-                irc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                raw_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            
+            if use_ssl:
+                if PROXY_AVAILABLE:
+                    irc = wrap_socket_with_proxy(raw_socket, server, "irc")
+                else:
+                    context = ssl.create_default_context()
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
+                    irc = context.wrap_socket(raw_socket, server_hostname=server)
+            else:
+                irc = raw_socket
 
             irc.connect((server, port))
             logging.info(f"Connected socket to {server}:{port}, now registering...")
@@ -211,15 +224,22 @@ def connect_to_network(server_name, port_number, use_ssl_flag, initial_channel, 
         try:
             logging.info(f"Attempt {attempt+1} to connect to {server_name}:{port_number} (SSL: {use_ssl_flag})")
 
-            # Create the socket
-            if use_ssl_flag:
-                context = ssl.create_default_context()
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
-                raw_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                irc = context.wrap_socket(raw_socket, server_hostname=server_name)
+            # Create the socket with proxy support
+            if PROXY_AVAILABLE:
+                raw_socket = create_proxy_socket("irc")
             else:
-                irc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                raw_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            
+            if use_ssl_flag:
+                if PROXY_AVAILABLE:
+                    irc = wrap_socket_with_proxy(raw_socket, server_name, "irc")
+                else:
+                    context = ssl.create_default_context()
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
+                    irc = context.wrap_socket(raw_socket, server_hostname=server_name)
+            else:
+                irc = raw_socket
 
             irc.connect((server_name, port_number))
             logging.debug(f"Connected socket to {server_name}:{port_number}")
@@ -353,13 +373,60 @@ def irc_command_parser(irc_conn):
                             message = pending_commands.pop(key) + " " + message
                         logging.info(f"[irc_parser] Command detected from {sender} in {target}: {message}")
                         is_op = sender.lower() in [op.lower() for op in ops]
+                        
+                        # Determine which server this connection belongs to by checking irc_secondary
+                        server_name = None
+                        try:
+                            from main import irc_secondary
+                            logging.info(f"[irc_parser] Looking up connection for target {target}")
+                            logging.info(f"[irc_parser] Available connections in irc_secondary: {list(irc_secondary.keys())}")
+                            
+                            # Look for a matching connection with case-insensitive channel comparison
+                            for composite_key, stored_conn in irc_secondary.items():
+                                logging.info(f"[irc_parser] Checking {composite_key}: conn_match={stored_conn == irc_conn}")
+                                if stored_conn == irc_conn and "|" in composite_key:
+                                    stored_server, stored_channel = composite_key.split("|", 1)
+                                    # IRC channel names are case-insensitive, so compare lowercase
+                                    logging.info(f"[irc_parser] Comparing {target.lower()} with {stored_channel.lower()}")
+                                    if target.lower() == stored_channel.lower():
+                                        server_name = stored_server
+                                        logging.info(f"[irc_parser] Found matching server: {server_name} for channel {target}")
+                                        break
+                        except Exception as e:
+                            logging.error(f"Could not determine server from irc_secondary: {e}")
+                        
+                        # If no live connection found, check if there are feeds configured for this channel on other networks
+                        if not server_name:
+                            try:
+                                import feed
+                                logging.info(f"[irc_parser] No live connection found, checking feed configuration for {target}")
+                                for feed_key in feed.channel_feeds.keys():
+                                    if "|" in feed_key:
+                                        check_server, check_channel = feed_key.split("|", 1)
+                                        if target.lower() == check_channel.lower():
+                                            server_name = check_server
+                                            logging.info(f"[irc_parser] Found server from feed config: {server_name} for channel {target}")
+                                            break
+                            except Exception as e:
+                                logging.error(f"Could not check feed configuration: {e}")
+                        
+                        # If we still couldn't find it, assume it's primary
+                        if not server_name:
+                            from config import server as primary_server
+                            server_name = primary_server
+                            logging.info(f"[irc_parser] No secondary match found, using primary server: {server_name}")
+                        
+                        # Use composite key for target: server|channel (preserve original case)
+                        composite_target = f"{server_name}|{target}"
+                        logging.info(f"[irc_parser] Final composite target: {composite_target}")
+                        
                         handle_centralized_command(
                             "irc",
                             lambda tgt, msg: send_message(irc_conn, tgt, msg),
                             lambda usr, msg: send_private_message(irc_conn, usr, msg),
                             lambda tgt, msg: send_multiline_message(irc_conn, tgt, msg),
                             sender,
-                            target,
+                            composite_target,
                             message,
                             is_op,
                             irc_conn

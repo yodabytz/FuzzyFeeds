@@ -144,13 +144,14 @@ def manage_secondary_network(network_name, net_info):
             
             client = connect_to_network(srv, prt, sslf, channels_list[0], net_auth=net_info)
             if client:
-                logging.info(f"[{network_name}] Connection established, channels joined: {channels_list}")
-                # Only set to True after successful connection and channel join
-                with connection_lock:
-                    connection_status["secondary"][srv] = True
+                # Register all channels in irc_secondary immediately after connection
                 for ch in channels_list:
                     try:
-                        client.send(f"JOIN {ch}\r\n".encode("utf-8"))
+                        # Only join if it's not the initial channel (already joined in connect_to_network)
+                        if ch != channels_list[0]:
+                            client.send(f"JOIN {ch}\r\n".encode("utf-8"))
+                            logging.info(f"[{network_name}] Joined additional channel {ch}")
+                        
                         composite = f"{srv}|{ch}"
                         irc_secondary[composite] = client
                         logging.info(f"[{network_name}] Registered {composite} in irc_secondary")
@@ -159,6 +160,12 @@ def manage_secondary_network(network_name, net_info):
                         with connection_lock:
                             connection_status["secondary"][srv] = False
                         break
+                
+                logging.info(f"[{network_name}] Connection established, channels joined: {channels_list}")
+                # Only set to True after successful connection and channel join
+                with connection_lock:
+                    connection_status["secondary"][srv] = True
+                
                 parser_thread = threading.Thread(target=irc_command_parser, args=(client,), daemon=True)
                 parser_thread.start()
                 while not message_queue.empty():
@@ -243,6 +250,20 @@ def start_polling_callbacks():
 
 if __name__ == "__main__":
     logging.info("Main script starting")
+    
+    # Log proxy configuration
+    try:
+        from proxy_utils import log_proxy_status, test_proxy_connection
+        log_proxy_status()
+        if hasattr(__import__('config'), 'enable_proxy') and __import__('config').enable_proxy:
+            logging.info("Testing proxy connection...")
+            if test_proxy_connection():
+                logging.info("Proxy test: PASSED")
+            else:
+                logging.warning("Proxy test: FAILED - continuing with direct connections")
+    except ImportError:
+        logging.info("Proxy support not available")
+    
     try:
         disable_matrix_feed_loop()
         logging.info("Disabled Matrix feed loop")

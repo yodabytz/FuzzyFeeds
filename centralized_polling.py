@@ -114,10 +114,11 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=
                         if net == server and irc_client:
                             irc_client.send_message(channel, title_msg)
                             irc_client.send_message(channel, link_msg)
-                        elif net in irc_secondary:
-                            client = irc_secondary[net]
-                            client.send_message(channel, title_msg)
-                            client.send_message(channel, link_msg)
+                        elif chan in irc_secondary:
+                            client = irc_secondary[chan]
+                            from irc_client import send_message
+                            send_message(client, channel, title_msg)
+                            send_message(client, channel, link_msg)
                     increment_startup_feeds_counter("IRC")
 
                 # ── Private subscriptions: send DMs on the appropriate network
