@@ -200,6 +200,38 @@ def connection_status_endpoint():
     """
     Real-time connection status endpoint
     """
+    # Check if main bot thread is running by checking if irc_secondary dict is accessible
+    bot_is_running = False
+    try:
+        from main import irc_secondary
+        bot_is_running = True
+    except ImportError:
+        # If we can't import from main, the bot might be down
+        bot_is_running = False
+    except Exception:
+        bot_is_running = False
+    
+    # If bot is not running, all connections should be red
+    if not bot_is_running:
+        # Get expected servers list for consistent display
+        irc_servers = {}
+        if config.server:
+            irc_servers[config.server] = "red"
+        
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        networks = load_json(os.path.join(BASE_DIR, "networks.json"), default={})
+        for net in networks.values():
+            srv = net.get("server", "")
+            if srv and srv not in irc_servers:
+                irc_servers[srv] = "red"
+        
+        return jsonify({
+            "irc_servers": irc_servers,
+            "matrix_status": "red",
+            "discord_status": "red"
+        })
+    
+    # Bot is running, check individual connection statuses
     try:
         from matrix_integration import matrix_bot_instance
         matrix_status = "green" if matrix_bot_instance else "red"
