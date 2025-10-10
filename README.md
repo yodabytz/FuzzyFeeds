@@ -2,6 +2,8 @@
 
 **Version 1.1.0**
 
+🌐 **Official Website:** [https://www.fuzzyfeeds.com](https://www.fuzzyfeeds.com)
+
 FuzzyFeeds is a multi-platform RSS aggregation bot that supports IRC, Matrix, Discord, and Telegram. It features a real-time web dashboard for monitoring feeds, connections, and errors.
 
 <img src="https://raw.githubusercontent.com/yodabytz/FuzzyFeeds/refs/heads/main/fuzzyfeeds-logo-lg.png" alt="FuzzyFeeds" width="200" height="200">
