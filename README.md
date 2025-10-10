@@ -1,10 +1,12 @@
 # FuzzyFeeds - Multi-Platform RSS Bot
 
-FuzzyFeeds is a multi-platform RSS aggregation bot that supports IRC, Matrix, and Discord. It features a real-time web dashboard for monitoring feeds, connections, and errors.
+**Version 1.1.0**
+
+FuzzyFeeds is a multi-platform RSS aggregation bot that supports IRC, Matrix, Discord, and Telegram. It features a real-time web dashboard for monitoring feeds, connections, and errors.
 
 <img src="https://raw.githubusercontent.com/yodabytz/FuzzyFeeds/refs/heads/main/fuzzyfeeds-logo-lg.png" alt="FuzzyFeeds" width="200" height="200">
 
-FuzzyFeeds is a comprehensive RSS aggregation bot that seamlessly integrates with IRC, Matrix, and Discord platforms. It features a modern, responsive web dashboard with real-time monitoring capabilities and dual theme support for optimal viewing in any environment.
+FuzzyFeeds is a comprehensive RSS aggregation bot that seamlessly integrates with IRC, Matrix, Discord, and Telegram platforms. It features a modern, responsive web dashboard with real-time monitoring capabilities and dual theme support for optimal viewing in any environment.
 
 ## ✨ Key Features
 
@@ -15,6 +17,9 @@ FuzzyFeeds is a comprehensive RSS aggregation bot that seamlessly integrates wit
   - **Composite Key System**: Unique identification for server|channel combinations
 - **Matrix Integration**: Native Matrix protocol support with room management
 - **Discord Bot**: Complete Discord bot integration with channel support
+- **Telegram Bot**: Full Telegram bot integration with channel and group support
+  - **HTML Entity Decoding**: Automatically converts HTML entities (e.g., &#8216; → ') for clean messages
+  - **Channel/Group Support**: Works with both public channels and private groups
 
 ### 📊 Real-time Web Dashboard
 - **🌙 Dark/Light Mode Toggle**: Seamlessly switch between dark and light themes with persistent preference storage
@@ -61,6 +66,7 @@ FuzzyFeeds is a comprehensive RSS aggregation bot that seamlessly integrates wit
    - Set your IRC server details
    - Add your Matrix credentials
    - Add your Discord bot token
+   - Add your Telegram bot token
    - Configure dashboard credentials
 
 4. Set up your channels and feeds in the JSON files:
@@ -89,13 +95,17 @@ server = "irc.example.com"
 sasl_username = "your_username"
 sasl_password = "your_password"
 
-# Matrix Configuration  
+# Matrix Configuration
 matrix_homeserver = "https://matrix.org"
 matrix_user = "@your_bot:matrix.org"
 matrix_password = "your_matrix_password"
 
 # Discord Configuration
 discord_token = "your_discord_bot_token"
+
+# Telegram Configuration
+telegram_token = "your_telegram_bot_token"
+enable_telegram = True
 
 # Dashboard Configuration
 dashboard_username = "admin"
@@ -109,9 +119,15 @@ Configure channels in `channels.json`:
 {
     "irc_channels": ["#main", "#news"],
     "matrix_channels": ["!room1:matrix.org"],
-    "discord_channels": ["123456789"]
+    "discord_channels": ["123456789"],
+    "telegram_channels": ["@yourchannel", "-1001234567890"]
 }
 ```
+
+**Note:** Telegram channels can be specified as:
+- Public channel usernames (e.g., `@yourchannel`)
+- Private channel/group IDs (e.g., `-1001234567890`)
+- User IDs for direct messages (e.g., `123456789`)
 
 ### Secondary IRC Networks
 Configure additional IRC servers in `networks.json`:
@@ -222,6 +238,23 @@ See `PROXY_README.md` for detailed proxy configuration instructions and use case
 
 ## Recent Updates & Fixes
 
+**Version 1.1.0 (October 10, 2025):**
+- ✅ **Telegram Integration**: Added full Telegram bot support
+  - Supports public channels, private groups, and direct messages
+  - HTML entity decoding for clean message display (e.g., &#8216; → ')
+  - Seamless integration with existing feed system
+- ✅ **Log Rotation**: Implemented automatic monthly log rotation with compression
+  - Rotates logs every 30 days
+  - Automatically compresses old logs into .tar.gz files
+  - Maintains maximum of 4 compressed backups
+- ✅ **HTML Entity Decoding**: Fixed RSS feed titles with special characters
+  - Automatically converts HTML entities in all feed titles
+  - Works across all platforms (IRC, Matrix, Discord, Telegram)
+- ✅ **FightPulse RSS Improvements**: Enhanced RSS feed image handling
+  - Now includes actual story images in RSS feed instead of logo
+  - Uses media:content and enclosure tags for better compatibility
+  - Automatic image fallback support
+
 **Latest Session (August 18, 2025):**
 - ✅ **Dashboard Status Indicators**: Fixed issue where all dots showed green even when bot was down
   - Smart detection: All connections show red when bot process is not running
@@ -251,12 +284,14 @@ See `PROXY_README.md` for detailed proxy configuration instructions and use case
 - `main.py` - Main bot orchestration
 - `dashboard.py` - Web dashboard with real-time features
 - `irc_client.py` - IRC integration
-- `matrix_integration.py` - Matrix integration  
+- `matrix_integration.py` - Matrix integration
 - `discord_integration.py` - Discord integration
+- `telegram_integration.py` - Telegram integration
 - `centralized_polling.py` - Centralized RSS feed polling
 - `feed.py` - Feed management and parsing
 - `commands.py` - Bot command handling
 - `config.py` - Configuration settings
+- `proxy_utils.py` - Proxy support and configuration
 
 ## Requirements
 
@@ -264,6 +299,7 @@ See `PROXY_README.md` for detailed proxy configuration instructions and use case
 - Flask
 - matrix-nio (for Matrix support)
 - discord.py (for Discord support)
+- python-telegram-bot (for Telegram support)
 - feedparser
 - requests
 - PySocks (for proxy support)

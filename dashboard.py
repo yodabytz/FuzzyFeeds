@@ -49,7 +49,7 @@ POSTED_LOG_FILE     = os.path.join(os.path.dirname(__file__), "posted_links.json
 STARTUP_FEEDS_FILE = os.path.join(os.path.dirname(__file__), "startup_feeds_count.json")
 
 # Initialize startup feeds counter to zero when dashboard starts
-startup_feeds_count = {"IRC": 0, "Matrix": 0, "Discord": 0, "startup_time": time.time()}
+startup_feeds_count = {"IRC": 0, "Matrix": 0, "Discord": 0, "Telegram": 0, "startup_time": time.time()}
 try:
     with open(STARTUP_FEEDS_FILE, 'w') as f:
         json.dump(startup_feeds_count, f)
@@ -162,7 +162,7 @@ def events():
                 yield f"data: {json.dumps(startup_counts)}\n\n"
             except Exception as e:
                 # Fallback to zero counts if file doesn't exist
-                startup_counts = {"IRC": 0, "Matrix": 0, "Discord": 0}
+                startup_counts = {"IRC": 0, "Matrix": 0, "Discord": 0, "Telegram": 0}
                 yield f"data: {json.dumps(startup_counts)}\n\n"
             time.sleep(1)
     return Response(generate(), mimetype='text/event-stream')
@@ -228,7 +228,8 @@ def connection_status_endpoint():
         return jsonify({
             "irc_servers": irc_servers,
             "matrix_status": "red",
-            "discord_status": "red"
+            "discord_status": "red",
+            "telegram_status": "red"
         })
     
     # Bot is running, check individual connection statuses
@@ -243,6 +244,12 @@ def connection_status_endpoint():
         discord_status = "green" if bot else "red"
     except:
         discord_status = "red"
+    
+    try:
+        from telegram_integration import telegram_bot_instance
+        telegram_status = "green" if telegram_bot_instance else "red"
+    except:
+        telegram_status = "red"
     
     # IRC status from connection_state
     irc_servers = {}
@@ -262,7 +269,8 @@ def connection_status_endpoint():
     return jsonify({
         "irc_servers": irc_servers,
         "matrix_status": matrix_status,
-        "discord_status": discord_status
+        "discord_status": discord_status,
+        "telegram_status": telegram_status
     })
 
 def build_feed_tree(networks):
@@ -280,6 +288,8 @@ def build_feed_tree(networks):
             server, channel = "Matrix", key
         elif key.isdigit():
             server, channel = "Discord", key
+        elif key.startswith("@") or (key.startswith("-") and key[1:].isdigit()):
+            server, channel = "Telegram", key
         else:
             # Skip unknown formats
             continue
@@ -292,8 +302,9 @@ def build_feed_tree(networks):
 def sort_feed_tree(feed_tree):
     def order_key(s):
         sl = s.lower()
-        if sl == "matrix":  return (2, sl)
-        if sl == "discord": return (3, sl)
+        if sl == "matrix":   return (2, sl)
+        if sl == "discord":  return (3, sl)
+        if sl == "telegram": return (4, sl)
         return (1, sl)
     return sorted(feed_tree.items(), key=lambda x: order_key(x[0]))
 
@@ -374,11 +385,26 @@ def build_discord_section_tree(tree):
             lines.append(subindent + conn2 + f'<span style="color:#9f7aea;">{f["feed_name"]}</span>: {f["link"]}')
     return "\n".join(lines)
 
+def build_telegram_section_tree(tree):
+    lines = [f'<span style="color:#d63384; font-weight:bold;">Telegram</span>']
+    channels = sorted(tree.keys())
+    for ci, ch in enumerate(channels):
+        last_c = (ci == len(channels)-1)
+        conn = dash("└── ") if last_c else dash("├── ")
+        lines.append(conn + f'<span style="color:#d63384; font-weight:bold;">{ch}</span>')
+        subindent = (dash("│")+"   " if not last_c else "    ")
+        for fi, f in enumerate(tree[ch]):
+            last_f = (fi == len(tree[ch])-1)
+            conn2 = dash("└── ") if last_f else dash("├── ")
+            lines.append(subindent + conn2 + f'<span style="color:#9f7aea;">{f["feed_name"]}</span>: {f["link"]}')
+    return "\n".join(lines)
+
 def build_unicode_tree(sorted_tree):
     parts = []
     irc_servers = {}
     matrix_rooms = {}
     discord_channels = {}
+    telegram_channels = {}
     
     # Separate the different types of networks
     for srv, chans in sorted_tree:
@@ -387,6 +413,8 @@ def build_unicode_tree(sorted_tree):
             matrix_rooms.update(chans)
         elif sl == "discord":
             discord_channels.update(chans)
+        elif sl == "telegram":
+            telegram_channels.update(chans)
         else:
             # This is an IRC server
             irc_servers[srv] = chans
@@ -403,6 +431,10 @@ def build_unicode_tree(sorted_tree):
     if discord_channels:
         parts.append(build_discord_section_tree(discord_channels))
     
+    # Add Telegram section
+    if telegram_channels:
+        parts.append(build_telegram_section_tree(telegram_channels))
+    
     return "\n".join(parts)
 
 DASHBOARD_TEMPLATE = r"""
@@ -410,6 +442,7 @@ DASHBOARD_TEMPLATE = r"""
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>FuzzyFeeds Dashboard</title>
   <link href="https://fonts.googleapis.com/css2?family=Passion+One&family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
@@ -599,12 +632,16 @@ DASHBOARD_TEMPLATE = r"""
             <div id="discord_status_container">
               <span class="status-dot {% if discord_status=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>Discord:</strong> {{ discord_server }}
             </div>
+            <div id="telegram_status_container">
+              <span class="status-dot {% if telegram_status=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>Telegram:</strong> telegram.org
+            </div>
             <hr>
             <div id="posted_counts">
               <strong>Feeds Posted:</strong><br>
               IRC: <span id="irc_posted">0</span><br>
               Matrix: <span id="matrix_posted">0</span><br>
-              Discord: <span id="discord_posted">0</span>
+              Discord: <span id="discord_posted">0</span><br>
+              Telegram: <span id="telegram_posted">0</span>
             </div>
           </div>
         </div>
@@ -621,7 +658,8 @@ DASHBOARD_TEMPLATE = r"""
             <div id="feed_totals">
               IRC: <span id="irc_feeds">{{ irc_feeds_count }}</span> feeds across <span id="irc_chans">{{ irc_chans_count }}</span> channels<br>
               Matrix: <span id="matrix_feeds">{{ matrix_feeds_count }}</span> feeds across <span id="matrix_chans">{{ matrix_chans_count }}</span> rooms<br>
-              Discord: <span id="discord_feeds">{{ discord_feeds_count }}</span> feeds across <span id="discord_chans">{{ discord_chans_count }}</span> channels
+              Discord: <span id="discord_feeds">{{ discord_feeds_count }}</span> feeds across <span id="discord_chans">{{ discord_chans_count }}</span> channels<br>
+              Telegram: <span id="telegram_feeds">{{ telegram_feeds_count }}</span> feeds across <span id="telegram_chans">{{ telegram_chans_count }}</span> chats
             </div>
           </div>
         </div>
@@ -839,6 +877,7 @@ DASHBOARD_TEMPLATE = r"""
       document.getElementById('irc_posted').innerText     = pc.IRC || 0;
       document.getElementById('matrix_posted').innerText  = pc.Matrix || 0;
       document.getElementById('discord_posted').innerText = pc.Discord || 0;
+      document.getElementById('telegram_posted').innerText = pc.Telegram || 0;
     };
     
     // Real-time connection status updates
@@ -869,6 +908,13 @@ DASHBOARD_TEMPLATE = r"""
           if (discordContainer) {
             const discordDotClass = data.discord_status === 'green' ? 'status-green' : 'status-red';
             discordContainer.innerHTML = `<span class="status-dot ${discordDotClass}"></span><strong>Discord:</strong> discord.com`;
+          }
+          
+          // Update Telegram status dot
+          const telegramContainer = document.getElementById('telegram_status_container');
+          if (telegramContainer) {
+            const telegramDotClass = data.telegram_status === 'green' ? 'status-green' : 'status-red';
+            telegramContainer.innerHTML = `<span class="status-dot ${telegramDotClass}"></span><strong>Telegram:</strong> telegram.org`;
           }
         })
         .catch(error => {
@@ -1011,6 +1057,12 @@ def index():
         discord_status = "green" if bot else "red"
     except:
         discord_status = "red"
+    
+    try:
+        from telegram_integration import telegram_bot_instance
+        telegram_status = "green" if telegram_bot_instance else "red"
+    except:
+        telegram_status = "red"
 
     # Core stats
     uptime_seconds = int(time.time() - start_time)
@@ -1050,6 +1102,7 @@ def index():
             matrix_rooms[display_name] = feeds_dict
     
     discord_channels = {k:v for k,v in feed.channel_feeds.items() if k.isdigit()}
+    telegram_channels = {k:v for k,v in feed.channel_feeds.items() if k.startswith("@") or (k.startswith("-") and k[1:].isdigit())}
 
     # Compute per-network feed/channel counts
     irc_feeds_count    = sum(len(v) for v in irc_channels.values())
@@ -1058,6 +1111,8 @@ def index():
     matrix_chans_count = len(matrix_rooms)
     discord_feeds_count = sum(len(v) for v in discord_channels.values())
     discord_chans_count = len(discord_channels)
+    telegram_feeds_count = sum(len(v) for v in telegram_channels.values())
+    telegram_chans_count = len(telegram_channels)
 
     return render_template_string(
         DASHBOARD_TEMPLATE,
@@ -1084,7 +1139,10 @@ def index():
         matrix_feeds_count=matrix_feeds_count,
         matrix_chans_count=matrix_chans_count,
         discord_feeds_count=discord_feeds_count,
-        discord_chans_count=discord_chans_count
+        discord_chans_count=discord_chans_count,
+        telegram_feeds_count=telegram_feeds_count,
+        telegram_chans_count=telegram_chans_count,
+        telegram_status=telegram_status
     )
 
 @app.route('/stats_data')
@@ -1138,6 +1196,7 @@ def stats_data():
             matrix_dict[display_name] = feeds_dict
     
     discord_dict     = {k:v for k,v in feed.channel_feeds.items() if k.isdigit()}
+    telegram_dict    = {k:v for k,v in feed.channel_feeds.items() if k.startswith("@") or (k.startswith("-") and k[1:].isdigit())}
 
     # Compute per-network feed/channel counts
     irc_feeds_count    = sum(len(v) for v in irc_dict.values())
@@ -1146,6 +1205,8 @@ def stats_data():
     matrix_chans_count = len(matrix_dict)
     discord_feeds_count = sum(len(v) for v in discord_dict.values())
     discord_chans_count = len(discord_dict)
+    telegram_feeds_count = sum(len(v) for v in telegram_dict.values())
+    telegram_chans_count = len(telegram_dict)
 
     return {
         "uptime":               uptime_str,
@@ -1161,6 +1222,8 @@ def stats_data():
         "matrix_chans_count":   matrix_chans_count,
         "discord_feeds_count":  discord_feeds_count,
         "discord_chans_count":  discord_chans_count,
+        "telegram_feeds_count": telegram_feeds_count,
+        "telegram_chans_count": telegram_chans_count,
         "feed_tree_html":       feed_tree_html,
         "errors":               errors_str,
         "current_year":         current_year,

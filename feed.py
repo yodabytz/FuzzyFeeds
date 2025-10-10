@@ -4,8 +4,15 @@ import time
 import logging
 import json
 import datetime
+import html
 from persistence import load_json, save_json
 import os, json, logging
+try:
+    from proxy_utils import create_proxy_opener
+    PROXY_AVAILABLE = True
+except ImportError:
+    logging.warning("Proxy support not available for HTTP requests")
+    PROXY_AVAILABLE = False
 
 feedparser.USER_AGENT = "FuzzyFeedsBot/1.0 (+https://github.com/YourUser/YourRepo)"
 
@@ -43,21 +50,67 @@ def parse_with_custom_user_agent(url):
         "User-Agent": "FuzzyFeedsBot/1.0 (+https://github.com/YourUser/YourRepo)"
     }
     try:
+        # Check if URL should bypass proxy (whitelisted)
+        if PROXY_AVAILABLE:
+            from proxy_utils import is_url_whitelisted
+            from config import enable_proxy, feeds_only_proxy, proxy_http, proxy_type, proxy_host, proxy_port, proxy_username, proxy_password
+            
+            use_proxy = False
+            if enable_proxy and (feeds_only_proxy or proxy_http):
+                if not is_url_whitelisted(url):
+                    use_proxy = True
+            
+            if use_proxy and proxy_type.lower().startswith("socks"):
+                # Use requests with SOCKS proxy for better control
+                if proxy_username and proxy_password:
+                    auth_string = f"{proxy_username}:{proxy_password}@"
+                else:
+                    auth_string = ""
+                
+                if proxy_type.lower() == "socks5":
+                    proxy_url = f"socks5://{auth_string}{proxy_host}:{proxy_port}"
+                else:
+                    proxy_url = f"socks4://{auth_string}{proxy_host}:{proxy_port}"
+                
+                proxies = {
+                    'http': proxy_url,
+                    'https': proxy_url
+                }
+                
+                logging.info(f"Using SOCKS proxy for {url}")
+                resp = requests.get(url, headers=headers, proxies=proxies, timeout=10)
+                if resp.status_code != 200:
+                    logging.error(f"[feed.py] Feed returned {resp.status_code}: {resp.text[:200]}")
+                    return feedparser.FeedParserDict()
+                return feedparser.parse(resp.text)
+            else:
+                # Direct connection (either no proxy or whitelisted)
+                if is_url_whitelisted(url):
+                    logging.info(f"Using direct connection for whitelisted URL: {url}")
+                resp = requests.get(url, headers=headers, timeout=10)
+                if resp.status_code != 200:
+                    logging.error(f"[feed.py] Feed returned {resp.status_code}: {resp.text[:200]}")
+                    return feedparser.FeedParserDict()
+                return feedparser.parse(resp.text)
+        else:
+            # Fallback to requests without proxy
+            pass
+        
+        # Use requests for all cases (with or without proxy)
         resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            logging.error(f"[feed.py] Feed returned {resp.status_code}: {resp.text[:200]}")
+            return feedparser.FeedParserDict()
+        return feedparser.parse(resp.text)
+        
     except Exception as e:
         logging.error(f"[feed.py] Error making HTTP request to {url}: {e}")
         return feedparser.FeedParserDict()
 
-    if resp.status_code != 200:
-        logging.error(f"[feed.py] Feed returned {resp.status_code}: {resp.text[:200]}")
-        return feedparser.FeedParserDict()
-
-    return feedparser.parse(resp.text)
-
 def load_feeds():
     global channels, channel_feeds, channel_intervals, last_check_times
-    channels_data = load_json(CHANNELS_FILE, default={"irc_channels": [], "discord_channels": [], "matrix_rooms": []})
-    channels = channels_data.get("irc_channels", []) + channels_data.get("discord_channels", []) + channels_data.get("matrix_rooms", [])
+    channels_data = load_json(CHANNELS_FILE, default={"irc_channels": [], "discord_channels": [], "matrix_rooms": [], "telegram_channels": []})
+    channels = channels_data.get("irc_channels", []) + channels_data.get("discord_channels", []) + channels_data.get("matrix_rooms", []) + channels_data.get("telegram_channels", [])
 
     networks = load_json(NETWORKS_FILE, default={})
     for network_name, net_info in networks.items():
@@ -208,7 +261,9 @@ def fetch_latest_article(url):
         d = parse_with_custom_user_agent(url)
         if d.entries:
             entry = d.entries[0]
-            title = entry.title.strip() if entry.get("title") else "No Title"
+            # Decode HTML entities in title (e.g., &#8216; -> ', &#8230; -> …)
+            raw_title = entry.title.strip() if entry.get("title") else "No Title"
+            title = html.unescape(raw_title)
             link = entry.link.strip() if entry.get("link") else ""
             # Attempt to get publication time from 'published_parsed' or 'updated_parsed'
             if entry.get("published_parsed"):

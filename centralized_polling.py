@@ -9,9 +9,11 @@ from feed import (
     load_feeds, channel_feeds, is_link_posted, mark_link_posted,
     fetch_latest_article  # now returns (title, link, pub_time)
 )
+from image_enhancement import enhance_mma_feed
 from status import irc_client, irc_secondary
 from matrix_integration import send_message as matrix_fallback
 from discord_integration import send_discord_message as discord_fallback
+from telegram_integration import send_telegram_message as telegram_fallback
 
 
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +28,7 @@ def increment_startup_feeds_counter(platform):
             with open(STARTUP_FEEDS_FILE, 'r') as f:
                 counts = json.load(f)
         else:
-            counts = {"IRC": 0, "Matrix": 0, "Discord": 0, "startup_time": time.time()}
+            counts = {"IRC": 0, "Matrix": 0, "Discord": 0, "Telegram": 0, "startup_time": time.time()}
         
         if platform in counts:
             counts[platform] += 1
@@ -38,7 +40,7 @@ def increment_startup_feeds_counter(platform):
     except Exception as e:
         logging.error(f"Error incrementing startup feeds counter for {platform}: {e}")
 
-def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=None):
+def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, telegram_send=None, private_send=None):
     logging.info("Polling feeds...")
 
     # Refresh feeds and clear stale entries
@@ -59,6 +61,9 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=
                     chan = raw_chan
                 elif raw_chan.isdigit():
                     chan_type = "discord"
+                    chan = raw_chan
+                elif raw_chan.startswith("@") or (raw_chan.startswith("-") and raw_chan[1:].isdigit()):
+                    chan_type = "telegram"
                     chan = raw_chan
                 elif "|" in raw_chan:
                     chan_type = "irc"
@@ -87,9 +92,14 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=
                 title_msg = f"{feed_name}: {title}"
                 link_msg  = f"Link: {link}"
 
+                # Image enhancement disabled - was generating fake URLs
+                image_msg = None
+
                 # Dispatch to Matrix
                 if chan_type == "matrix":
                     combined_msg = f"{title_msg}\n{link_msg}"
+                    if image_msg:
+                        combined_msg += f"\n{image_msg}"
                     if matrix_send:
                         matrix_send(chan, combined_msg)
                     else:
@@ -100,25 +110,45 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=
                     if discord_send:
                         discord_send(chan, title_msg)
                         discord_send(chan, link_msg)
+                        if image_msg:
+                            discord_send(chan, image_msg)
                     else:
                         discord_fallback(chan, title_msg)
                         discord_fallback(chan, link_msg)
+                        if image_msg:
+                            discord_fallback(chan, image_msg)
                     increment_startup_feeds_counter("Discord")
+                # Dispatch to Telegram
+                elif chan_type == "telegram":
+                    combined_msg = f"{title_msg}\n{link_msg}"
+                    if image_msg:
+                        combined_msg += f"\n{image_msg}"
+                    if telegram_send:
+                        telegram_send(chan, combined_msg)
+                    else:
+                        telegram_fallback(chan, combined_msg)
+                    increment_startup_feeds_counter("Telegram")
                 # Dispatch to IRC
                 elif chan_type == "irc":
                     if irc_send:
                         irc_send(chan, title_msg)
                         irc_send(chan, link_msg)
+                        if image_msg:
+                            irc_send(chan, image_msg)
                     else:
                         net, channel = chan.split("|", 1)
                         if net == server and irc_client:
                             irc_client.send_message(channel, title_msg)
                             irc_client.send_message(channel, link_msg)
+                            if image_msg:
+                                irc_client.send_message(channel, image_msg)
                         elif chan in irc_secondary:
                             client = irc_secondary[chan]
                             from irc_client import send_message
                             send_message(client, channel, title_msg)
                             send_message(client, channel, link_msg)
+                            if image_msg:
+                                send_message(client, channel, image_msg)
                     increment_startup_feeds_counter("IRC")
 
                 # ── Private subscriptions: send DMs on the appropriate network
@@ -145,6 +175,13 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=
                             else:
                                 discord_fallback(user, dm)
                             continue
+                        # Telegram users start with '@' or are negative numbers (groups)
+                        if user.startswith("@") or (user.startswith("-") and user[1:].isdigit()):
+                            if telegram_send:
+                                telegram_send(user, dm)
+                            else:
+                                telegram_fallback(user, dm)
+                            continue
                         # Otherwise assume plain IRC nick
                         if irc_send:
                             irc_send(f"{server}|{user}", dm)
@@ -163,8 +200,8 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, private_send=
         logging.info("No new feed entries found.")
 
 
-def start_polling(irc_send, matrix_send, discord_send, private_send, interval_override=None):
+def start_polling(irc_send, matrix_send, discord_send, telegram_send, private_send, interval_override=None):
     while True:
-        poll_feeds(irc_send, matrix_send, discord_send, private_send)
+        poll_feeds(irc_send, matrix_send, discord_send, telegram_send, private_send)
         time.sleep(interval_override or default_interval)
 

@@ -1,11 +1,81 @@
 #!/usr/bin/env python3
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import threading
 import time
 import asyncio
 from flask import Flask
+import os
+import tarfile
+import glob
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
+# Configure logging with monthly rotation
+log_dir = os.path.dirname(os.path.abspath(__file__))
+log_file = os.path.join(log_dir, 'main.log')
+
+# Remove any existing handlers
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
+
+# Create file handler with monthly rotation (every 30 days)
+file_handler = TimedRotatingFileHandler(
+    log_file,
+    when='midnight',
+    interval=30,
+    backupCount=4,
+    encoding='utf-8'
+)
+file_handler.suffix = "%Y-%m-%d"
+file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
+
+# Console handler for stdout
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
+
+# Configure root logger
+logging.basicConfig(
+    level=logging.INFO,
+    handlers=[file_handler, console_handler]
+)
+
+# Function to compress rotated logs
+def compress_old_logs(source_path):
+    """Compress rotated log files into tarballs and keep max 4"""
+    try:
+        log_dir = os.path.dirname(source_path)
+        base_name = os.path.basename(source_path)
+
+        # Find rotated logs (main.log.YYYY-MM-DD pattern)
+        rotated_logs = glob.glob(os.path.join(log_dir, f"{base_name}.*"))
+        rotated_logs = [f for f in rotated_logs if not f.endswith('.tar.gz') and f != source_path]
+
+        for log_file in rotated_logs:
+            tarball_name = f"{log_file}.tar.gz"
+            if not os.path.exists(tarball_name):
+                with tarfile.open(tarball_name, 'w:gz') as tar:
+                    tar.add(log_file, arcname=os.path.basename(log_file))
+                os.remove(log_file)
+                logging.info(f"Compressed: {log_file} -> {tarball_name}")
+
+        # Keep only 4 most recent tarballs
+        tarballs = sorted(glob.glob(os.path.join(log_dir, f"{base_name}.*.tar.gz")))
+        if len(tarballs) > 4:
+            for old_tarball in tarballs[:-4]:
+                os.remove(old_tarball)
+                logging.info(f"Removed old tarball: {old_tarball}")
+    except Exception as e:
+        logging.error(f"Error compressing logs: {e}")
+
+# Override rotation to add compression
+original_doRollover = file_handler.doRollover
+def custom_doRollover():
+    original_doRollover()
+    compress_old_logs(log_file)
+
+file_handler.doRollover = custom_doRollover
+
+# Compress any existing rotated logs on startup
+compress_old_logs(log_file)
 
 
 try:
@@ -43,9 +113,21 @@ except Exception as e:
     raise
 
 try:
+    from telegram_integration import (
+        start_telegram_bot,
+        disable_feed_loop as disable_telegram_feed_loop,
+        send_telegram_message
+    )
+    logging.info("Imported telegram_integration successfully")
+except Exception as e:
+    logging.error(f"Failed to import telegram_integration: {e}")
+    raise
+
+try:
     from config import (
         enable_matrix,
         enable_discord,
+        enable_telegram,
         admin,
         ops,
         admins,
@@ -218,6 +300,13 @@ def start_discord():
     else:
         logging.info("Discord integration disabled in config")
 
+def start_telegram():
+    if enable_telegram:
+        logging.info("Starting Telegram integration...")
+        start_telegram_bot()
+    else:
+        logging.info("Telegram integration disabled in config")
+
 def irc_send_callback(channel, message):
     logging.info(f"IRC send callback for {channel}: {message}")
     if "|" in channel:
@@ -242,10 +331,12 @@ def start_polling_callbacks():
         send_matrix_message(ch, msg)
     def discord_send(ch, msg):
         send_discord_message(ch, msg)
+    def telegram_send(ch, msg):
+        send_telegram_message(ch, msg)
     def private_send(user, msg):
         irc_send_callback(user, msg)
 
-    threading.Thread(target=lambda: centralized_polling.start_polling(irc_send, matrix_send, discord_send, private_send, 300),
+    threading.Thread(target=lambda: centralized_polling.start_polling(irc_send, matrix_send, discord_send, telegram_send, private_send, 900),
                      daemon=True).start()
 
 if __name__ == "__main__":
@@ -269,6 +360,8 @@ if __name__ == "__main__":
         logging.info("Disabled Matrix feed loop")
         disable_discord_feed_loop()
         logging.info("Disabled Discord feed loop")
+        disable_telegram_feed_loop()
+        logging.info("Disabled Telegram feed loop")
 
         threading.Thread(target=start_primary_irc, daemon=True).start()
         threading.Thread(target=start_secondary_irc_networks, daemon=True).start()
@@ -276,6 +369,8 @@ if __name__ == "__main__":
             threading.Thread(target=start_matrix, daemon=True).start()
         if enable_discord:
             threading.Thread(target=start_discord, daemon=True).start()
+        if enable_telegram:
+            threading.Thread(target=start_telegram, daemon=True).start()
         start_polling_callbacks()
         start_dashboard()
     except Exception as e:
