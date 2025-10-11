@@ -1,6 +1,6 @@
 # FuzzyFeeds - Multi-Platform RSS Bot
 
-**Version 1.1.0**
+**Version 1.2.0**
 
 🌐 **Official Website:** [https://www.fuzzyfeeds.com](https://www.fuzzyfeeds.com)
 
@@ -29,15 +29,25 @@ FuzzyFeeds is a comprehensive RSS aggregation bot that seamlessly integrates wit
   - **Smart Status Detection**: Automatically detects when bot is down and shows all connections as offline
   - **Per-Server Status**: Individual status indicators for each IRC server
 - **📰 Feed Statistics**: Track feed counts, posts, and activity across all platforms
+- **🎨 Colorized Channel Headers**: Visually distinct color-coded headers for IRC (blue), Matrix (green), and Discord (cyan) channels
 - **🌳 Feed Tree Visualization**: Hierarchical view of all configured feeds and channels
+- **🔍 Advanced Search**: Search feed history by titles, links, and feed names (case-insensitive)
 - **⚡ Server-Sent Events**: Real-time updates without page refreshes
 
 ### 🔧 Advanced Feed Management
 - **Centralized Control**: Manage RSS feeds across all platforms from a single interface
 - **👤 User Subscriptions**: Personal feed subscriptions with direct message delivery
 - **🔄 Smart Polling**: Intelligent feed polling with duplicate detection
+  - **Async Feed Processing**: Parallel feed fetching with configurable concurrency limits
+  - **SOCKS5 Proxy Support**: Proper aiohttp-socks integration for Tor/proxy compatibility
 - **📝 Error Tracking**: Real-time error logging and monitoring dashboard
 - **🔍 Intelligent Command Routing**: Commands automatically find the correct channel regardless of case sensitivity
+- **📊 SQLite Database Backend**: Persistent storage for feeds, history, analytics, and user preferences
+  - **Feed History Tracking**: Complete history of all posted items with search capabilities
+  - **Per-Feed Scheduling**: Custom check intervals and priority settings per feed
+  - **Feed Muting**: Temporary or permanent feed muting with expiration support
+  - **User Preferences**: Personalized settings for notifications and feed delivery
+  - **Analytics Dashboard**: Track feed performance, errors, and posting patterns
 
 ### 🛡️ Security & Administration
 - **🔐 Multi-user Authentication**: Secure dashboard access with multiple user support
@@ -191,12 +201,15 @@ Add RSS feeds in `feeds.json`:
    - `!setsetting <key> <value>` - Set a personal setting
    - `!getsetting <key>` - Get a personal setting
    - `!settings` - List all your personal settings
+   - `!mute <feed_name> [hours]` - Mute a feed temporarily (hours) or permanently (omit hours)
+   - `!unmute <feed_name>` - Unmute a previously muted feed
 
    **OP/Admin Commands:**
    - `!addfeed <name> <url>` - Add RSS feed to channel
    - `!delfeed <name>` - Remove RSS feed from channel
    - `!getadd <title_or_domain>` - Search and auto-add feed to channel
    - `!setinterval <minutes>` - Set feed check interval for channel
+   - `!schedule <feed_name> <minutes>` - Set custom check interval for a specific feed
 
    **Owner Commands:**
    - `!join <#channel> <adminname>` - Make bot join a channel
@@ -239,6 +252,33 @@ FuzzyFeeds includes comprehensive proxy support for bypassing IP blocks and enha
 See `PROXY_README.md` for detailed proxy configuration instructions and use cases.
 
 ## Recent Updates & Fixes
+
+**Version 1.2.0 (October 11, 2025):**
+- ✅ **SQLite Database Backend**: Complete database integration for persistent storage
+  - Feed history tracking with full search capabilities
+  - Analytics dashboard with feed statistics and error tracking
+  - Per-feed scheduling with custom intervals and priorities
+  - User preferences and settings management
+  - Feed muting system with temporary and permanent options
+- ✅ **Async Feed Processing**: Parallel feed fetching with aiohttp
+  - Configurable concurrency limits (max 10 concurrent fetches)
+  - Proper SOCKS5 proxy support via aiohttp-socks
+  - Separation of whitelisted (direct) and proxy feeds
+  - Significant performance improvements for large feed lists
+- ✅ **Enhanced Dashboard**:
+  - Colorized channel headers: IRC (blue), Matrix (green), Discord (cyan)
+  - Matrix room ID to display name conversion (#fightpulse:matrix.org)
+  - Fixed analytics displaying "undefined" errors
+  - Improved feed history search (searches titles, links, and feed names - case-insensitive)
+- ✅ **New IRC Commands**:
+  - `!schedule <feed_name> <minutes>` - Set custom check intervals per feed (Admin only)
+  - `!mute <feed_name> [hours]` - Mute feeds temporarily or permanently (All users)
+  - `!unmute <feed_name>` - Unmute feeds (All users)
+  - Updated help.json with complete command documentation
+- ✅ **Proxy Improvements**: Fixed SOCKS5 proxy errors with Tor
+  - Proper ProxyConnector implementation for aiohttp
+  - Eliminated "501, Tor is not an HTTP Proxy" errors
+  - Seamless switching between proxy and direct connections per feed
 
 **Version 1.1.0 (October 10, 2025):**
 - ✅ **Telegram Integration**: Added full Telegram bot support
@@ -285,15 +325,20 @@ See `PROXY_README.md` for detailed proxy configuration instructions and use case
 
 - `main.py` - Main bot orchestration
 - `dashboard.py` - Web dashboard with real-time features
+- `database.py` - SQLite database manager (NEW in v1.2.0)
+- `async_feed_processor.py` - Async feed fetching with proxy support (NEW in v1.2.0)
+- `centralized_polling_async.py` - Async centralized polling (NEW in v1.2.0)
 - `irc_client.py` - IRC integration
 - `matrix_integration.py` - Matrix integration
 - `discord_integration.py` - Discord integration
 - `telegram_integration.py` - Telegram integration
-- `centralized_polling.py` - Centralized RSS feed polling
+- `centralized_polling.py` - Centralized RSS feed polling (legacy)
 - `feed.py` - Feed management and parsing
 - `commands.py` - Bot command handling
 - `config.py` - Configuration settings
 - `proxy_utils.py` - Proxy support and configuration
+- `help.json` - Command documentation
+- `matrix_room_names.json` - Matrix room ID to display name mapping
 
 ## Requirements
 
@@ -304,6 +349,8 @@ See `PROXY_README.md` for detailed proxy configuration instructions and use case
 - python-telegram-bot (for Telegram support)
 - feedparser
 - requests
+- aiohttp (for async feed fetching)
+- aiohttp-socks (for SOCKS proxy support)
 - PySocks (for proxy support)
 
 ## Contributing

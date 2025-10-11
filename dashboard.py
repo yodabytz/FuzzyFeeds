@@ -681,11 +681,101 @@ DASHBOARD_TEMPLATE = r"""
       </div>
     </div>
 
+    <!-- Feed Analytics Section -->
+    <div class="row">
+      <div class="col-md-12">
+        <div class="card">
+          <div class="card-header bg-warning text-dark" style="cursor: pointer;" data-toggle="collapse" data-target="#analyticsCollapse">
+            <i class="fas fa-chart-line"></i> Feed Analytics (Last 30 Days)
+            <i class="fas fa-chevron-down float-right"></i>
+          </div>
+          <div id="analyticsCollapse" class="collapse">
+            <div class="card-body">
+            <div class="row">
+              <!-- Most Active Feeds -->
+              <div class="col-md-4">
+                <h6 class="text-primary">Top 10 Most Active Feeds</h6>
+                <div id="most_active_feeds" style="max-height: 300px; overflow-y: auto;">
+                  <p class="text-muted">Loading analytics...</p>
+                </div>
+              </div>
+
+              <!-- Broken Feeds -->
+              <div class="col-md-4">
+                <h6 class="text-danger">Broken Feeds (5+ errors)</h6>
+                <div id="broken_feeds" style="max-height: 300px; overflow-y: auto;">
+                  <p class="text-muted">Loading analytics...</p>
+                </div>
+              </div>
+
+              <!-- Stale Feeds -->
+              <div class="col-md-4">
+                <h6 class="text-warning">Stale Feeds (48+ hours)</h6>
+                <div id="stale_feeds" style="max-height: 300px; overflow-y: auto;">
+                  <p class="text-muted">Loading analytics...</p>
+                </div>
+              </div>
+            </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Feed History Search -->
+    <div class="row">
+      <div class="col-md-12">
+        <div class="card">
+          <div class="card-header bg-info text-white" style="cursor: pointer;" data-toggle="collapse" data-target="#historyCollapse">
+            <i class="fas fa-search"></i> Feed History Search
+            <i class="fas fa-chevron-down float-right"></i>
+          </div>
+          <div id="historyCollapse" class="collapse">
+            <div class="card-body">
+            <div class="row mb-3">
+              <div class="col-md-6">
+                <input type="text" class="form-control" id="searchQuery" placeholder="Search titles, links, feeds (case-insensitive)..." onkeypress="if(event.key==='Enter') searchHistory()">
+              </div>
+              <div class="col-md-3">
+                <select class="form-control" id="searchDays">
+                  <option value="7">Last 7 days</option>
+                  <option value="30" selected>Last 30 days</option>
+                  <option value="90">Last 90 days</option>
+                  <option value="">All time</option>
+                </select>
+              </div>
+              <div class="col-md-3">
+                <button class="btn btn-primary btn-block" onclick="searchHistory()">
+                  <i class="fas fa-search"></i> Search
+                </button>
+              </div>
+            </div>
+            <div id="searchResults" style="max-height: 400px; overflow-y: auto; display: none;">
+              <table class="table table-sm table-striped">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Feed</th>
+                    <th>Title</th>
+                    <th>Channel</th>
+                  </tr>
+                </thead>
+                <tbody id="searchResultsBody">
+                </tbody>
+              </table>
+            </div>
+            <div id="searchMessage" style="display: none;" class="alert alert-info"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- IRC / Matrix / Discord Tables -->
     <div class="row">
       <div class="col-lg-4 col-md-6 col-sm-12">
         <div class="card">
-          <div class="card-header bg-secondary text-white">IRC Channels</div>
+          <div class="card-header bg-primary text-white">IRC Channels</div>
           <div class="card-body">
             {% if irc_channels %}
             <div class="table-responsive">
@@ -709,7 +799,7 @@ DASHBOARD_TEMPLATE = r"""
 
       <div class="col-lg-4 col-md-6 col-sm-12">
         <div class="card">
-          <div class="card-header bg-secondary text-white">Matrix Rooms</div>
+          <div class="card-header bg-success text-white">Matrix Rooms</div>
           <div class="card-body">
             {% if matrix_rooms %}
             <div class="table-responsive">
@@ -736,7 +826,7 @@ DASHBOARD_TEMPLATE = r"""
 
       <div class="col-lg-4 col-md-6 col-sm-12">
         <div class="card">
-          <div class="card-header bg-secondary text-white">Discord Channels</div>
+          <div class="card-header bg-info text-white">Discord Channels</div>
           <div class="card-body">
             {% if discord_channels %}
             <div class="table-responsive">
@@ -754,6 +844,173 @@ DASHBOARD_TEMPLATE = r"""
             {% else %}
               <p>No Discord channels configured.</p>
             {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Feed Scheduling Management -->
+    <div class="row">
+      <div class="col-md-12">
+        <div class="card">
+          <div class="card-header bg-success text-white" style="cursor: pointer;" data-toggle="collapse" data-target="#schedulingCollapse">
+            <i class="fas fa-clock"></i> Feed Scheduling Management
+            <i class="fas fa-chevron-down float-right"></i>
+          </div>
+          <div id="schedulingCollapse" class="collapse">
+            <div class="card-body">
+            <p class="text-muted">Configure check intervals, priorities, and quiet hours for each feed.</p>
+
+            <!-- Filter controls -->
+            <div class="row mb-3">
+              <div class="col-md-4">
+                <input type="text" class="form-control" id="scheduleFilter" placeholder="Filter feeds..." onkeyup="filterSchedules()">
+              </div>
+              <div class="col-md-3">
+                <select class="form-control" id="platformFilter" onchange="filterSchedules()">
+                  <option value="">All Platforms</option>
+                  <option value="irc">IRC</option>
+                  <option value="matrix">Matrix</option>
+                  <option value="discord">Discord</option>
+                  <option value="telegram">Telegram</option>
+                </select>
+              </div>
+              <div class="col-md-3">
+                <button class="btn btn-primary" onclick="loadSchedules()">
+                  <i class="fas fa-sync"></i> Refresh
+                </button>
+                <button class="btn btn-success" onclick="saveAllSchedules()">
+                  <i class="fas fa-save"></i> Save All
+                </button>
+              </div>
+            </div>
+
+            <!-- Schedules table -->
+            <div style="max-height: 500px; overflow-y: auto;">
+              <table class="table table-sm table-striped" id="schedulesTable">
+                <thead style="position: sticky; top: 0; background-color: var(--card-bg); z-index: 10;">
+                  <tr>
+                    <th>Feed</th>
+                    <th>Platform/Channel</th>
+                    <th style="width: 120px;">Interval (min)</th>
+                    <th style="width: 100px;">Priority</th>
+                    <th style="width: 100px;">Quiet Start</th>
+                    <th style="width: 100px;">Quiet End</th>
+                    <th style="width: 80px;">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="schedulesTableBody">
+                  <tr><td colspan="7" class="text-center">Loading schedules...</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div id="scheduleMessage" style="display: none; margin-top: 10px;" class="alert"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- User Preferences Management -->
+    <div class="row">
+      <div class="col-md-12">
+        <div class="card">
+          <div class="card-header bg-info text-white" style="cursor: pointer;" data-toggle="collapse" data-target="#preferencesCollapse">
+            <i class="fas fa-user-cog"></i> User Preferences Management
+            <i class="fas fa-chevron-down float-right"></i>
+          </div>
+          <div id="preferencesCollapse" class="collapse">
+            <div class="card-body">
+            <p class="text-muted">Configure notification preferences and muted feeds for each user.</p>
+
+            <div class="row">
+              <!-- User Preferences -->
+              <div class="col-md-6">
+                <h6 class="text-primary">User Notification Settings</h6>
+                <div id="userPreferences" style="max-height: 400px; overflow-y: auto;">
+                  <p class="text-muted">Loading user preferences...</p>
+                </div>
+              </div>
+
+              <!-- Muted Feeds -->
+              <div class="col-md-6">
+                <h6 class="text-warning">Muted Feeds</h6>
+                <div class="form-group">
+                  <select class="form-control" id="userSelect" onchange="loadMutedFeeds()">
+                    <option value="">Select a user...</option>
+                  </select>
+                </div>
+                <div id="mutedFeedsContainer" style="max-height: 350px; overflow-y: auto;">
+                  <p class="text-muted">Select a user to manage muted feeds</p>
+                </div>
+              </div>
+            </div>
+
+            <div id="preferencesMessage" style="display: none; margin-top: 10px;" class="alert"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Feed Templates Management -->
+    <div class="row">
+      <div class="col-md-12">
+        <div class="card">
+          <div class="card-header bg-warning text-dark" style="cursor: pointer;" data-toggle="collapse" data-target="#templatesCollapse">
+            <i class="fas fa-palette"></i> Feed Templates Management
+            <i class="fas fa-chevron-down float-right"></i>
+          </div>
+          <div id="templatesCollapse" class="collapse">
+            <div class="card-body">
+            <p class="text-muted">Customize how feed items are formatted for each platform. Available variables: <code>{feed_name}</code>, <code>{title}</code>, <code>{link}</code>, <code>{published_date}</code></p>
+
+            <!-- Filter controls -->
+            <div class="row mb-3">
+              <div class="col-md-4">
+                <input type="text" class="form-control" id="templateFilter" placeholder="Filter feeds..." onkeyup="filterTemplates()">
+              </div>
+              <div class="col-md-3">
+                <select class="form-control" id="templatePlatformFilter" onchange="filterTemplates()">
+                  <option value="">All Platforms</option>
+                  <option value="irc">IRC</option>
+                  <option value="matrix">Matrix</option>
+                  <option value="discord">Discord</option>
+                  <option value="telegram">Telegram</option>
+                </select>
+              </div>
+              <div class="col-md-3">
+                <button class="btn btn-primary" onclick="loadTemplates()">
+                  <i class="fas fa-sync"></i> Refresh
+                </button>
+                <button class="btn btn-success" onclick="saveAllTemplates()">
+                  <i class="fas fa-save"></i> Save All
+                </button>
+              </div>
+            </div>
+
+            <!-- Templates table -->
+            <div style="max-height: 500px; overflow-y: auto;">
+              <table class="table table-sm table-striped" id="templatesTable">
+                <thead style="position: sticky; top: 0; background-color: var(--card-bg); z-index: 10;">
+                  <tr>
+                    <th>Feed</th>
+                    <th>Platform</th>
+                    <th>Title Format</th>
+                    <th>Link Format</th>
+                    <th style="width: 100px;">Include Image</th>
+                    <th style="width: 80px;">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="templatesTableBody">
+                  <tr><td colspan="6" class="text-center">Loading templates...</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div id="templateMessage" style="display: none; margin-top: 10px;" class="alert"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -952,6 +1209,731 @@ DASHBOARD_TEMPLATE = r"""
     setInterval(updateStats, 30000);
     updateStats();
 
+    // Load analytics data
+    function loadAnalytics() {
+      fetch('/analytics_data')
+        .then(response => response.json())
+        .then(data => {
+          // Most active feeds
+          const mostActiveDiv = document.getElementById('most_active_feeds');
+          if (data.feed_stats && data.feed_stats.length > 0) {
+            let html = '<ul class="list-group list-group-flush">';
+            data.feed_stats.forEach(feed => {
+              html += `<li class="list-group-item d-flex justify-content-between align-items-center" style="background-color: var(--card-bg); color: var(--text-color); border-color: var(--card-border);">
+                <span style="font-size: 0.9em;">${feed.feed_name}</span>
+                <span class="badge badge-primary badge-pill">${feed.posts_count} posts</span>
+              </li>`;
+            });
+            html += '</ul>';
+            mostActiveDiv.innerHTML = html;
+          } else {
+            mostActiveDiv.innerHTML = '<p class="text-muted">No active feeds in the last 30 days</p>';
+          }
+
+          // Broken feeds
+          const brokenDiv = document.getElementById('broken_feeds');
+          if (data.broken_feeds && data.broken_feeds.length > 0) {
+            let html = '<ul class="list-group list-group-flush">';
+            data.broken_feeds.forEach(feed => {
+              html += `<li class="list-group-item d-flex justify-content-between align-items-center" style="background-color: var(--card-bg); color: var(--text-color); border-color: var(--card-border);">
+                <span style="font-size: 0.9em;">${feed.feed_name}</span>
+                <span class="badge badge-danger badge-pill">${feed.errors_count} errors</span>
+              </li>`;
+            });
+            html += '</ul>';
+            brokenDiv.innerHTML = html;
+          } else {
+            brokenDiv.innerHTML = '<p class="text-muted">No broken feeds detected</p>';
+          }
+
+          // Stale feeds
+          const staleDiv = document.getElementById('stale_feeds');
+          if (data.stale_feeds && data.stale_feeds.length > 0) {
+            let html = '<ul class="list-group list-group-flush">';
+            data.stale_feeds.forEach(feed => {
+              const hoursSince = Math.round((Date.now() - new Date(feed.last_checked).getTime()) / 3600000);
+              html += `<li class="list-group-item d-flex justify-content-between align-items-center" style="background-color: var(--card-bg); color: var(--text-color); border-color: var(--card-border);">
+                <span style="font-size: 0.9em;">${feed.feed_name}</span>
+                <span class="badge badge-warning badge-pill">${hoursSince}h ago</span>
+              </li>`;
+            });
+            html += '</ul>';
+            staleDiv.innerHTML = html;
+          } else {
+            staleDiv.innerHTML = '<p class="text-muted">No stale feeds detected</p>';
+          }
+        })
+        .catch(error => {
+          console.error('Analytics loading error:', error);
+          document.getElementById('most_active_feeds').innerHTML = '<p class="text-danger">Error loading analytics</p>';
+          document.getElementById('broken_feeds').innerHTML = '<p class="text-danger">Error loading analytics</p>';
+          document.getElementById('stale_feeds').innerHTML = '<p class="text-danger">Error loading analytics</p>';
+        });
+    }
+
+    // Search history functionality
+    function searchHistory() {
+      const query = document.getElementById('searchQuery').value.trim();
+      const days = document.getElementById('searchDays').value;
+      const resultsDiv = document.getElementById('searchResults');
+      const resultsBody = document.getElementById('searchResultsBody');
+      const messageDiv = document.getElementById('searchMessage');
+
+      if (!query) {
+        messageDiv.textContent = 'Please enter a search query';
+        messageDiv.className = 'alert alert-warning';
+        messageDiv.style.display = 'block';
+        resultsDiv.style.display = 'none';
+        return;
+      }
+
+      // Show loading state
+      messageDiv.textContent = 'Searching...';
+      messageDiv.className = 'alert alert-info';
+      messageDiv.style.display = 'block';
+      resultsDiv.style.display = 'none';
+
+      fetch('/search_history', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query: query, days: days ? parseInt(days) : null })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success && data.results && data.results.length > 0) {
+          resultsBody.innerHTML = '';
+          data.results.forEach(result => {
+            const row = document.createElement('tr');
+            const date = new Date(result.posted_at).toLocaleString();
+            row.innerHTML = `
+              <td style="white-space: nowrap;">${date}</td>
+              <td>${result.feed_name || 'Unknown'}</td>
+              <td><a href="${result.link}" target="_blank" style="color: var(--text-color);">${result.title}</a></td>
+              <td>${result.channel}</td>
+            `;
+            resultsBody.appendChild(row);
+          });
+          messageDiv.style.display = 'none';
+          resultsDiv.style.display = 'block';
+        } else {
+          messageDiv.textContent = 'No results found';
+          messageDiv.className = 'alert alert-warning';
+          messageDiv.style.display = 'block';
+          resultsDiv.style.display = 'none';
+        }
+      })
+      .catch(error => {
+        messageDiv.textContent = 'Search error: ' + error.message;
+        messageDiv.className = 'alert alert-danger';
+        messageDiv.style.display = 'block';
+        resultsDiv.style.display = 'none';
+      });
+    }
+
+    // Load analytics on page load and refresh every 60 seconds
+    loadAnalytics();
+    setInterval(loadAnalytics, 60000);
+
+    // Feed scheduling management
+    let allSchedules = [];
+
+    function loadSchedules() {
+      fetch('/get_feed_schedules')
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            allSchedules = data.schedules;
+            displaySchedules(allSchedules);
+          } else {
+            showScheduleMessage('Error loading schedules: ' + data.error, 'danger');
+          }
+        })
+        .catch(error => {
+          showScheduleMessage('Error loading schedules: ' + error.message, 'danger');
+        });
+    }
+
+    function displaySchedules(schedules) {
+      const tbody = document.getElementById('schedulesTableBody');
+
+      if (schedules.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center">No schedules found</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = '';
+      schedules.forEach(schedule => {
+        const row = document.createElement('tr');
+        row.setAttribute('data-feed-id', schedule.feed_id);
+        row.setAttribute('data-platform', schedule.platform);
+
+        row.innerHTML = `
+          <td>${schedule.feed_name}</td>
+          <td><span class="badge badge-${getPlatformBadgeColor(schedule.platform)}">${schedule.platform}</span> ${schedule.channel}</td>
+          <td>
+            <input type="number" class="form-control form-control-sm" value="${schedule.interval_minutes}"
+                   min="5" max="1440" data-field="interval" data-feed-id="${schedule.feed_id}">
+          </td>
+          <td>
+            <input type="number" class="form-control form-control-sm" value="${schedule.priority}"
+                   min="0" max="10" data-field="priority" data-feed-id="${schedule.feed_id}">
+          </td>
+          <td>
+            <input type="time" class="form-control form-control-sm" value="${schedule.quiet_start || ''}"
+                   data-field="quiet_start" data-feed-id="${schedule.feed_id}">
+          </td>
+          <td>
+            <input type="time" class="form-control form-control-sm" value="${schedule.quiet_end || ''}"
+                   data-field="quiet_end" data-feed-id="${schedule.feed_id}">
+          </td>
+          <td>
+            <button class="btn btn-sm btn-primary" onclick="saveSingleSchedule(${schedule.feed_id})">
+              <i class="fas fa-save"></i>
+            </button>
+          </td>
+        `;
+
+        tbody.appendChild(row);
+      });
+    }
+
+    function getPlatformBadgeColor(platform) {
+      const colors = {
+        'irc': 'primary',
+        'matrix': 'info',
+        'discord': 'secondary',
+        'telegram': 'success'
+      };
+      return colors[platform] || 'secondary';
+    }
+
+    function filterSchedules() {
+      const filterText = document.getElementById('scheduleFilter').value.toLowerCase();
+      const platformFilter = document.getElementById('platformFilter').value.toLowerCase();
+
+      const filtered = allSchedules.filter(schedule => {
+        const matchesText = schedule.feed_name.toLowerCase().includes(filterText) ||
+                           schedule.channel.toLowerCase().includes(filterText);
+        const matchesPlatform = !platformFilter || schedule.platform.toLowerCase() === platformFilter;
+        return matchesText && matchesPlatform;
+      });
+
+      displaySchedules(filtered);
+    }
+
+    function getScheduleFromRow(feedId) {
+      const inputs = document.querySelectorAll(`[data-feed-id="${feedId}"]`);
+      const schedule = { feed_id: feedId };
+
+      inputs.forEach(input => {
+        const field = input.getAttribute('data-field');
+        let value = input.value;
+
+        if (field === 'interval') {
+          schedule.interval_minutes = parseInt(value) || 15;
+        } else if (field === 'priority') {
+          schedule.priority = parseInt(value) || 0;
+        } else if (field === 'quiet_start') {
+          schedule.quiet_start = value || null;
+        } else if (field === 'quiet_end') {
+          schedule.quiet_end = value || null;
+        }
+      });
+
+      return schedule;
+    }
+
+    function saveSingleSchedule(feedId) {
+      const schedule = getScheduleFromRow(feedId);
+
+      fetch('/update_feed_schedule', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(schedule)
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          showScheduleMessage('Schedule saved successfully', 'success');
+          setTimeout(() => hideScheduleMessage(), 3000);
+        } else {
+          showScheduleMessage('Error saving schedule: ' + data.error, 'danger');
+        }
+      })
+      .catch(error => {
+        showScheduleMessage('Error saving schedule: ' + error.message, 'danger');
+      });
+    }
+
+    function saveAllSchedules() {
+      const feedIds = Array.from(document.querySelectorAll('[data-feed-id]'))
+        .map(el => el.getAttribute('data-feed-id'))
+        .filter((value, index, self) => self.indexOf(value) === index);
+
+      let savedCount = 0;
+      let errorCount = 0;
+
+      showScheduleMessage('Saving all schedules...', 'info');
+
+      const promises = feedIds.map(feedId => {
+        const schedule = getScheduleFromRow(feedId);
+
+        return fetch('/update_feed_schedule', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(schedule)
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            savedCount++;
+          } else {
+            errorCount++;
+          }
+        })
+        .catch(error => {
+          errorCount++;
+        });
+      });
+
+      Promise.all(promises).then(() => {
+        if (errorCount === 0) {
+          showScheduleMessage(`All ${savedCount} schedules saved successfully!`, 'success');
+        } else {
+          showScheduleMessage(`Saved ${savedCount} schedules, ${errorCount} errors`, 'warning');
+        }
+        setTimeout(() => hideScheduleMessage(), 5000);
+      });
+    }
+
+    function showScheduleMessage(message, type) {
+      const msgDiv = document.getElementById('scheduleMessage');
+      msgDiv.textContent = message;
+      msgDiv.className = `alert alert-${type}`;
+      msgDiv.style.display = 'block';
+    }
+
+    function hideScheduleMessage() {
+      const msgDiv = document.getElementById('scheduleMessage');
+      msgDiv.style.display = 'none';
+    }
+
+    // Load schedules on page load
+    loadSchedules();
+
+    // User Preferences Management
+    let allUsers = [];
+    let allFeeds = [];
+    let mutedFeedsData = [];
+
+    function loadUserPreferences() {
+      fetch('/get_users')
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            allUsers = data.users;
+            displayUserPreferences(allUsers);
+            populateUserSelect(allUsers);
+          } else {
+            showPreferencesMessage('Error loading users: ' + data.error, 'danger');
+          }
+        })
+        .catch(error => {
+          showPreferencesMessage('Error loading users: ' + error.message, 'danger');
+        });
+    }
+
+    function displayUserPreferences(users) {
+      const container = document.getElementById('userPreferences');
+
+      if (users.length === 0) {
+        container.innerHTML = '<p class="text-muted">No users found</p>';
+        return;
+      }
+
+      let html = '';
+      users.forEach(user => {
+        const notificationsEnabled = user.preferences.notifications_enabled !== 'false';
+        const digestMode = user.preferences.digest_mode === 'true';
+        const digestInterval = user.preferences.digest_interval_minutes || 60;
+
+        html += `
+          <div class="card mb-2" style="background-color: var(--card-bg); border-color: var(--card-border);">
+            <div class="card-body">
+              <h6 class="card-title">
+                <span class="badge badge-${getPlatformBadgeColor(user.platform)}">${user.platform}</span>
+                ${user.username}
+              </h6>
+
+              <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox"
+                       id="notify_${user.id}"
+                       ${notificationsEnabled ? 'checked' : ''}
+                       onchange="updatePreference(${user.id}, 'notifications_enabled', this.checked)">
+                <label class="form-check-label" for="notify_${user.id}">
+                  Enable Notifications
+                </label>
+              </div>
+
+              <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox"
+                       id="digest_${user.id}"
+                       ${digestMode ? 'checked' : ''}
+                       onchange="updatePreference(${user.id}, 'digest_mode', this.checked); toggleDigestInterval(${user.id}, this.checked)">
+                <label class="form-check-label" for="digest_${user.id}">
+                  Digest Mode (batch notifications)
+                </label>
+              </div>
+
+              <div id="digest_interval_${user.id}" style="display: ${digestMode ? 'block' : 'none'};">
+                <label for="interval_${user.id}" style="font-size: 0.9em;">Digest Interval (minutes):</label>
+                <input type="number" class="form-control form-control-sm"
+                       id="interval_${user.id}"
+                       value="${digestInterval}"
+                       min="15" max="1440"
+                       onchange="updatePreference(${user.id}, 'digest_interval_minutes', this.value)">
+              </div>
+            </div>
+          </div>
+        `;
+      });
+
+      container.innerHTML = html;
+    }
+
+    function toggleDigestInterval(userId, show) {
+      const div = document.getElementById(`digest_interval_${userId}`);
+      if (div) {
+        div.style.display = show ? 'block' : 'none';
+      }
+    }
+
+    function updatePreference(userId, key, value) {
+      fetch('/update_user_preference', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_db_id: userId,
+          key: key,
+          value: String(value)
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          showPreferencesMessage('Preference updated successfully', 'success');
+          setTimeout(() => hidePreferencesMessage(), 2000);
+        } else {
+          showPreferencesMessage('Error updating preference: ' + data.error, 'danger');
+        }
+      })
+      .catch(error => {
+        showPreferencesMessage('Error updating preference: ' + error.message, 'danger');
+      });
+    }
+
+    function populateUserSelect(users) {
+      const select = document.getElementById('userSelect');
+      select.innerHTML = '<option value="">Select a user...</option>';
+
+      users.forEach(user => {
+        const option = document.createElement('option');
+        option.value = user.id;
+        option.textContent = `${user.platform}: ${user.username}`;
+        select.appendChild(option);
+      });
+    }
+
+    function loadMutedFeeds() {
+      const userId = document.getElementById('userSelect').value;
+
+      if (!userId) {
+        document.getElementById('mutedFeedsContainer').innerHTML = '<p class="text-muted">Select a user to manage muted feeds</p>';
+        return;
+      }
+
+      fetch('/get_muted_feeds')
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            allFeeds = data.feeds;
+            mutedFeedsData = data.users;
+            displayMutedFeeds(parseInt(userId));
+          } else {
+            showPreferencesMessage('Error loading muted feeds: ' + data.error, 'danger');
+          }
+        })
+        .catch(error => {
+          showPreferencesMessage('Error loading muted feeds: ' + error.message, 'danger');
+        });
+    }
+
+    function displayMutedFeeds(userId) {
+      const container = document.getElementById('mutedFeedsContainer');
+      const userData = mutedFeedsData.find(u => u.user_id === userId);
+
+      if (!userData || allFeeds.length === 0) {
+        container.innerHTML = '<p class="text-muted">No feeds available</p>';
+        return;
+      }
+
+      const mutedFeedIds = userData.muted_feed_ids || [];
+
+      let html = '<div class="list-group">';
+      allFeeds.forEach(feed => {
+        const isMuted = mutedFeedIds.includes(feed.id);
+        html += `
+          <div class="list-group-item" style="background-color: var(--card-bg); border-color: var(--card-border); padding: 8px;">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox"
+                     id="mute_${feed.id}"
+                     ${isMuted ? 'checked' : ''}
+                     onchange="toggleMuteFeed(${userId}, ${feed.id}, this.checked)">
+              <label class="form-check-label" for="mute_${feed.id}" style="font-size: 0.9em;">
+                ${feed.name} <span class="badge badge-sm badge-${getPlatformBadgeColor(feed.platform)}">${feed.platform}</span>
+              </label>
+            </div>
+          </div>
+        `;
+      });
+      html += '</div>';
+
+      container.innerHTML = html;
+    }
+
+    function toggleMuteFeed(userId, feedId, mute) {
+      fetch('/toggle_muted_feed', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_db_id: userId,
+          feed_id: feedId,
+          mute: mute
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          showPreferencesMessage(data.message, 'success');
+          setTimeout(() => hidePreferencesMessage(), 2000);
+          // Reload muted feeds to update the display
+          loadMutedFeeds();
+        } else {
+          showPreferencesMessage('Error: ' + data.error, 'danger');
+          // Revert checkbox on error
+          document.getElementById(`mute_${feedId}`).checked = !mute;
+        }
+      })
+      .catch(error => {
+        showPreferencesMessage('Error: ' + error.message, 'danger');
+        // Revert checkbox on error
+        document.getElementById(`mute_${feedId}`).checked = !mute;
+      });
+    }
+
+    function showPreferencesMessage(message, type) {
+      const msgDiv = document.getElementById('preferencesMessage');
+      msgDiv.textContent = message;
+      msgDiv.className = `alert alert-${type}`;
+      msgDiv.style.display = 'block';
+    }
+
+    function hidePreferencesMessage() {
+      const msgDiv = document.getElementById('preferencesMessage');
+      msgDiv.style.display = 'none';
+    }
+
+    // Load user preferences on page load
+    loadUserPreferences();
+
+    // Feed Templates Management
+    let allTemplates = [];
+
+    function loadTemplates() {
+      fetch('/get_feed_templates')
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            allTemplates = data.templates;
+            displayTemplates(allTemplates);
+          } else {
+            showTemplateMessage('Error loading templates: ' + data.error, 'danger');
+          }
+        })
+        .catch(error => {
+          showTemplateMessage('Error loading templates: ' + error.message, 'danger');
+        });
+    }
+
+    function displayTemplates(templates) {
+      const tbody = document.getElementById('templatesTableBody');
+
+      if (templates.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center">No templates found</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = '';
+      templates.forEach(template => {
+        const row = document.createElement('tr');
+        row.setAttribute('data-feed-id', template.feed_id);
+        row.setAttribute('data-platform', template.platform);
+
+        row.innerHTML = `
+          <td style="max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"
+              title="${template.feed_name}">${template.feed_name}</td>
+          <td><span class="badge badge-${getPlatformBadgeColor(template.platform)}">${template.platform}</span></td>
+          <td>
+            <input type="text" class="form-control form-control-sm"
+                   value="${template.title_format}"
+                   data-field="title_format" data-feed-id="${template.feed_id}"
+                   placeholder="{feed_name}: {title}">
+          </td>
+          <td>
+            <input type="text" class="form-control form-control-sm"
+                   value="${template.link_format}"
+                   data-field="link_format" data-feed-id="${template.feed_id}"
+                   placeholder="Link: {link}">
+          </td>
+          <td class="text-center">
+            <input type="checkbox" class="form-check-input"
+                   ${template.include_image ? 'checked' : ''}
+                   data-field="include_image" data-feed-id="${template.feed_id}">
+          </td>
+          <td>
+            <button class="btn btn-sm btn-primary" onclick="saveSingleTemplate(${template.feed_id}, '${template.platform}')">
+              <i class="fas fa-save"></i>
+            </button>
+          </td>
+        `;
+
+        tbody.appendChild(row);
+      });
+    }
+
+    function filterTemplates() {
+      const filterText = document.getElementById('templateFilter').value.toLowerCase();
+      const platformFilter = document.getElementById('templatePlatformFilter').value.toLowerCase();
+
+      const filtered = allTemplates.filter(template => {
+        const matchesText = template.feed_name.toLowerCase().includes(filterText);
+        const matchesPlatform = !platformFilter || template.platform.toLowerCase() === platformFilter;
+        return matchesText && matchesPlatform;
+      });
+
+      displayTemplates(filtered);
+    }
+
+    function getTemplateFromRow(feedId, platform) {
+      const inputs = document.querySelectorAll(`[data-feed-id="${feedId}"]`);
+      const template = {
+        feed_id: feedId,
+        platform: platform
+      };
+
+      inputs.forEach(input => {
+        const field = input.getAttribute('data-field');
+
+        if (field === 'title_format') {
+          template.title_format = input.value || '{feed_name}: {title}';
+        } else if (field === 'link_format') {
+          template.link_format = input.value || 'Link: {link}';
+        } else if (field === 'include_image') {
+          template.include_image = input.checked;
+        }
+      });
+
+      return template;
+    }
+
+    function saveSingleTemplate(feedId, platform) {
+      const template = getTemplateFromRow(feedId, platform);
+
+      fetch('/update_feed_template', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(template)
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          showTemplateMessage('Template saved successfully', 'success');
+          setTimeout(() => hideTemplateMessage(), 3000);
+        } else {
+          showTemplateMessage('Error saving template: ' + data.error, 'danger');
+        }
+      })
+      .catch(error => {
+        showTemplateMessage('Error saving template: ' + error.message, 'danger');
+      });
+    }
+
+    function saveAllTemplates() {
+      let savedCount = 0;
+      let errorCount = 0;
+
+      showTemplateMessage('Saving all templates...', 'info');
+
+      const promises = allTemplates.map(template => {
+        const updatedTemplate = getTemplateFromRow(template.feed_id, template.platform);
+
+        return fetch('/update_feed_template', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(updatedTemplate)
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            savedCount++;
+          } else {
+            errorCount++;
+          }
+        })
+        .catch(error => {
+          errorCount++;
+        });
+      });
+
+      Promise.all(promises).then(() => {
+        if (errorCount === 0) {
+          showTemplateMessage(`All ${savedCount} templates saved successfully!`, 'success');
+        } else {
+          showTemplateMessage(`Saved ${savedCount} templates, ${errorCount} errors`, 'warning');
+        }
+        setTimeout(() => hideTemplateMessage(), 5000);
+      });
+    }
+
+    function showTemplateMessage(message, type) {
+      const msgDiv = document.getElementById('templateMessage');
+      msgDiv.textContent = message;
+      msgDiv.className = `alert alert-${type}`;
+      msgDiv.style.display = 'block';
+    }
+
+    function hideTemplateMessage() {
+      const msgDiv = document.getElementById('templateMessage');
+      msgDiv.style.display = 'none';
+    }
+
+    // Load templates on page load
+    loadTemplates();
+
     // Command execution functionality
     function executeCommand() {
       const commandInput = document.getElementById('commandInput');
@@ -996,6 +1978,17 @@ DASHBOARD_TEMPLATE = r"""
   </script>
   <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    // Rotate chevron icons when collapsible sections are toggled
+    $(document).ready(function() {
+      $('.collapse').on('show.bs.collapse', function() {
+        $(this).prev('.card-header').find('.fa-chevron-down').removeClass('fa-chevron-down').addClass('fa-chevron-up');
+      });
+      $('.collapse').on('hide.bs.collapse', function() {
+        $(this).prev('.card-header').find('.fa-chevron-up').removeClass('fa-chevron-up').addClass('fa-chevron-down');
+      });
+    });
+  </script>
 </body>
 </html>
 """
@@ -1145,6 +2138,76 @@ def index():
         telegram_status=telegram_status
     )
 
+@app.route('/analytics_data')
+@requires_auth
+def analytics_data():
+    """Get feed analytics data from database"""
+    try:
+        from database import get_db
+        db = get_db()
+
+        # Get analytics for last 30 days
+        feed_stats = db.get_feed_stats(days=30)
+        broken_feeds = db.get_broken_feeds(error_threshold=5)
+        stale_feeds = db.get_stale_feeds(hours=48)
+
+        # Convert Matrix room IDs to display names
+        for feed in feed_stats:
+            if feed['channel'].startswith('!'):
+                feed['channel'] = matrix_room_names.get(feed['channel'], feed['channel'])
+
+        for feed in broken_feeds:
+            if feed['channel'].startswith('!'):
+                feed['channel'] = matrix_room_names.get(feed['channel'], feed['channel'])
+
+        for feed in stale_feeds:
+            if feed['channel'].startswith('!'):
+                feed['channel'] = matrix_room_names.get(feed['channel'], feed['channel'])
+
+        return jsonify({
+            "feed_stats": feed_stats[:10],  # Top 10 most active
+            "broken_feeds": broken_feeds,
+            "stale_feeds": stale_feeds
+        })
+    except Exception as e:
+        logging.error(f"Analytics data error: {e}")
+        return jsonify({
+            "feed_stats": [],
+            "broken_feeds": [],
+            "stale_feeds": []
+        })
+
+@app.route('/search_history', methods=['POST'])
+@requires_auth
+def search_history():
+    """Search feed history"""
+    try:
+        from database import get_db
+        db = get_db()
+
+        data = request.get_json()
+        query = data.get('query', '')
+        channel = data.get('channel', None)
+        days = data.get('days', 30)
+
+        results = db.search_history(query, channel, days)
+
+        # Convert Matrix room IDs to display names
+        for result in results:
+            if result['channel'].startswith('!'):
+                result['channel'] = matrix_room_names.get(result['channel'], result['channel'])
+
+        return jsonify({
+            "success": True,
+            "results": results
+        })
+    except Exception as e:
+        logging.error(f"Search history error: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        })
+
 @app.route('/stats_data')
 @requires_auth
 def stats_data():
@@ -1230,6 +2293,268 @@ def stats_data():
         "matrix_room_names":    matrix_room_names,
         "subscriptions":        feed.subscriptions
     }
+
+@app.route('/get_feed_schedules', methods=['GET'])
+@requires_auth
+def get_feed_schedules():
+    """Get all feed schedules"""
+    try:
+        from database import get_db
+        db = get_db()
+
+        feeds = db.get_feeds(active_only=True)
+        schedules = []
+
+        for feed in feeds:
+            schedule = db.get_feed_schedule(feed['id'])
+            schedules.append({
+                'feed_id': feed['id'],
+                'feed_name': feed['name'],
+                'channel': feed['channel'],
+                'platform': feed['platform'],
+                'interval_minutes': schedule['interval_seconds'] // 60 if schedule else 15,
+                'priority': schedule['priority'] if schedule else 0,
+                'quiet_start': schedule['quiet_hours_start'] if schedule else None,
+                'quiet_end': schedule['quiet_hours_end'] if schedule else None
+            })
+
+        return jsonify({
+            'success': True,
+            'schedules': schedules
+        })
+    except Exception as e:
+        logging.error(f"Error getting feed schedules: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+@app.route('/update_feed_schedule', methods=['POST'])
+@requires_auth
+def update_feed_schedule():
+    """Update a feed's schedule"""
+    try:
+        from database import get_db
+        db = get_db()
+
+        data = request.get_json()
+        feed_id = data.get('feed_id')
+        interval_minutes = data.get('interval_minutes', 15)
+        priority = data.get('priority', 0)
+        quiet_start = data.get('quiet_start', None)
+        quiet_end = data.get('quiet_end', None)
+
+        # Convert minutes to seconds
+        interval_seconds = interval_minutes * 60
+
+        db.set_feed_schedule(
+            feed_id=feed_id,
+            interval_seconds=interval_seconds,
+            priority=priority,
+            quiet_start=quiet_start,
+            quiet_end=quiet_end
+        )
+
+        return jsonify({
+            'success': True,
+            'message': 'Schedule updated successfully'
+        })
+    except Exception as e:
+        logging.error(f"Error updating feed schedule: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+@app.route('/get_users', methods=['GET'])
+@requires_auth
+def get_users():
+    """Get all users with their preferences"""
+    try:
+        from database import get_db
+        db = get_db()
+
+        users = db.get_users()
+        result = []
+
+        for user in users:
+            preferences = db.get_user_preferences(user['id'])
+            result.append({
+                'id': user['id'],
+                'username': user['username'],
+                'platform': user['platform'],
+                'user_id': user['user_id'],
+                'preferences': preferences
+            })
+
+        return jsonify({
+            'success': True,
+            'users': result
+        })
+    except Exception as e:
+        logging.error(f"Error getting users: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+@app.route('/update_user_preference', methods=['POST'])
+@requires_auth
+def update_user_preference():
+    """Update a user preference"""
+    try:
+        from database import get_db
+        db = get_db()
+
+        data = request.get_json()
+        user_db_id = data.get('user_db_id')
+        key = data.get('key')
+        value = data.get('value')
+
+        db.set_user_preference(user_db_id, key, value)
+
+        return jsonify({
+            'success': True,
+            'message': 'Preference updated successfully'
+        })
+    except Exception as e:
+        logging.error(f"Error updating user preference: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+@app.route('/get_muted_feeds', methods=['GET'])
+@requires_auth
+def get_muted_feeds():
+    """Get all muted feeds for all users"""
+    try:
+        from database import get_db
+        db = get_db()
+
+        users = db.get_users()
+        feeds = db.get_feeds(active_only=True)
+
+        result = []
+        for user in users:
+            muted = db.get_muted_feeds(user['id'])
+            result.append({
+                'user_id': user['id'],
+                'username': user['username'],
+                'platform': user['platform'],
+                'muted_feed_ids': [m['feed_id'] for m in muted]
+            })
+
+        return jsonify({
+            'success': True,
+            'users': result,
+            'feeds': feeds
+        })
+    except Exception as e:
+        logging.error(f"Error getting muted feeds: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+@app.route('/toggle_muted_feed', methods=['POST'])
+@requires_auth
+def toggle_muted_feed():
+    """Mute or unmute a feed for a user"""
+    try:
+        from database import get_db
+        db = get_db()
+
+        data = request.get_json()
+        user_db_id = data.get('user_db_id')
+        feed_id = data.get('feed_id')
+        mute = data.get('mute', True)
+
+        if mute:
+            db.mute_feed(user_db_id, feed_id)
+            message = 'Feed muted successfully'
+        else:
+            db.unmute_feed(user_db_id, feed_id)
+            message = 'Feed unmuted successfully'
+
+        return jsonify({
+            'success': True,
+            'message': message
+        })
+    except Exception as e:
+        logging.error(f"Error toggling muted feed: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+@app.route('/get_feed_templates', methods=['GET'])
+@requires_auth
+def get_feed_templates():
+    """Get all feed templates"""
+    try:
+        from database import get_db
+        db = get_db()
+
+        feeds = db.get_feeds(active_only=True)
+        templates = []
+
+        for feed in feeds:
+            template = db.get_feed_template(feed['id'], feed['platform'])
+            templates.append({
+                'feed_id': feed['id'],
+                'feed_name': feed['name'],
+                'platform': feed['platform'],
+                'channel': feed['channel'],
+                'title_format': template['title_format'] if template else '{feed_name}: {title}',
+                'link_format': template['link_format'] if template else 'Link: {link}',
+                'include_image': template['include_image'] if template else True
+            })
+
+        return jsonify({
+            'success': True,
+            'templates': templates
+        })
+    except Exception as e:
+        logging.error(f"Error getting feed templates: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+@app.route('/update_feed_template', methods=['POST'])
+@requires_auth
+def update_feed_template():
+    """Update a feed template"""
+    try:
+        from database import get_db
+        db = get_db()
+
+        data = request.get_json()
+        feed_id = data.get('feed_id')
+        platform = data.get('platform')
+        title_format = data.get('title_format')
+        link_format = data.get('link_format')
+        include_image = data.get('include_image', True)
+
+        db.set_feed_template(
+            feed_id=feed_id,
+            platform=platform,
+            title_format=title_format,
+            link_format=link_format,
+            include_image=include_image
+        )
+
+        return jsonify({
+            'success': True,
+            'message': 'Template updated successfully'
+        })
+    except Exception as e:
+        logging.error(f"Error updating feed template: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
 
 @app.route('/execute_command', methods=['POST'])
 @requires_auth

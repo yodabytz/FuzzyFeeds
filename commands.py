@@ -689,6 +689,96 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         lines = [f"{title} {url}" for title, url in results]
         multiline_send(send_multiline_message_fn, response_target(actual_channel, integration), "\n".join(lines))
 
+    # ------------------ ADVANCED FEED MANAGEMENT (Database) ------------------
+    elif lower_message.startswith("!schedule"):
+        if not is_authorized:
+            send_private_message_fn(user, "Not authorized. You must be the bot owner, global admin, or channel admin.")
+            return
+        try:
+            from database import get_db
+            db = get_db()
+            args = parse_quoted_args(message)
+            if len(args) < 3:
+                send_message_fn(response_target(actual_channel, integration), "Usage: !schedule <feedname> <minutes>")
+                return
+            pattern = args[1]
+            minutes = int(args[2])
+            feeds_for_chan = feed.channel_feeds.get(key, {})
+            matched = match_feed(feeds_for_chan, pattern)
+            if not matched or isinstance(matched, list):
+                send_message_fn(response_target(actual_channel, integration), f"Could not uniquely match feed '{pattern}'")
+                return
+            # Find feed in database
+            all_feeds = db.get_feeds(channel=key, active_only=False)
+            feed_id = next((f['id'] for f in all_feeds if f['name'] == matched), None)
+            if not feed_id:
+                send_message_fn(response_target(actual_channel, integration), f"Feed '{matched}' not found in database")
+                return
+            db.set_feed_schedule(feed_id, interval_seconds=minutes*60)
+            send_message_fn(response_target(actual_channel, integration), f"Schedule set: '{matched}' will be checked every {minutes} minutes")
+            logging.info(f"User {user_key} set schedule for feed '{matched}' (ID {feed_id}) to {minutes} minutes")
+        except Exception as e:
+            send_message_fn(response_target(actual_channel, integration), f"Error: {e}")
+            logging.error(f"!schedule error: {e}")
+
+    elif lower_message.startswith("!mute"):
+        try:
+            from database import get_db
+            db = get_db()
+            args = parse_quoted_args(message)
+            if len(args) < 2:
+                send_private_message_fn(user, "Usage: !mute <feedname> [hours]")
+                return
+            pattern = args[1]
+            hours = int(args[2]) if len(args) >= 3 else None
+            feeds_for_chan = feed.channel_feeds.get(key, {})
+            matched = match_feed(feeds_for_chan, pattern)
+            if not matched or isinstance(matched, list):
+                send_private_message_fn(user, f"Could not uniquely match feed '{pattern}'")
+                return
+            # Get or create user in database
+            user_db_id = db.add_user(user_key, integration, user_key)
+            # Find feed
+            all_feeds = db.get_feeds(channel=key, active_only=False)
+            feed_id = next((f['id'] for f in all_feeds if f['name'] == matched), None)
+            if not feed_id:
+                send_private_message_fn(user, f"Feed '{matched}' not found")
+                return
+            db.mute_feed(user_db_id, feed_id, hours, f"Muted by user command")
+            duration_msg = f" for {hours} hours" if hours else " permanently"
+            send_private_message_fn(user, f"Muted '{matched}'{duration_msg}")
+            logging.info(f"User {user_key} muted feed '{matched}' (ID {feed_id}){duration_msg}")
+        except Exception as e:
+            send_private_message_fn(user, f"Error: {e}")
+            logging.error(f"!mute error: {e}")
+
+    elif lower_message.startswith("!unmute"):
+        try:
+            from database import get_db
+            db = get_db()
+            args = parse_quoted_args(message)
+            if len(args) < 2:
+                send_private_message_fn(user, "Usage: !unmute <feedname>")
+                return
+            pattern = args[1]
+            feeds_for_chan = feed.channel_feeds.get(key, {})
+            matched = match_feed(feeds_for_chan, pattern)
+            if not matched or isinstance(matched, list):
+                send_private_message_fn(user, f"Could not uniquely match feed '{pattern}'")
+                return
+            user_db_id = db.add_user(user_key, integration, user_key)
+            all_feeds = db.get_feeds(channel=key, active_only=False)
+            feed_id = next((f['id'] for f in all_feeds if f['name'] == matched), None)
+            if not feed_id:
+                send_private_message_fn(user, f"Feed '{matched}' not found")
+                return
+            db.unmute_feed(user_db_id, feed_id)
+            send_private_message_fn(user, f"Unmuted '{matched}'")
+            logging.info(f"User {user_key} unmuted feed '{matched}' (ID {feed_id})")
+        except Exception as e:
+            send_private_message_fn(user, f"Error: {e}")
+            logging.error(f"!unmute error: {e}")
+
     # ------------------ OWNER COMMANDS ------------------
     elif lower_message.startswith("!network"):
         # only the bot owner may manage networks
