@@ -444,6 +444,7 @@ DASHBOARD_TEMPLATE = r"""
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>FuzzyFeeds Dashboard</title>
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
   <link href="https://fonts.googleapis.com/css2?family=Passion+One&family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
   <style>
@@ -591,6 +592,19 @@ DASHBOARD_TEMPLATE = r"""
     #errors {
       color: var(--text-color);
       background-color: var(--tree-bg);
+    }
+
+    /* Footer styling */
+    .footer {
+      text-align: center;
+      padding: 20px 0;
+      margin-top: 40px;
+      border-top: 1px solid var(--card-border);
+      color: var(--text-color);
+    }
+    .footer p {
+      margin: 0;
+      font-size: 0.9rem;
     }
   </style>
 </head>
