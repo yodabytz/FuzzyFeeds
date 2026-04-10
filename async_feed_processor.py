@@ -256,6 +256,18 @@ class AsyncFeedProcessor:
 
         return all_results
 
+    def _get_backoff_multiplier(self, error_count: int) -> int:
+        """Calculate backoff multiplier based on consecutive errors.
+        Doubles interval each 3 errors, caps at 8x."""
+        if error_count < 3:
+            return 1
+        elif error_count < 6:
+            return 2
+        elif error_count < 12:
+            return 4
+        else:
+            return 8
+
     def get_feeds_to_check(self) -> List[Dict]:
         """
         Get feeds that need to be checked based on their schedules
@@ -276,6 +288,13 @@ class AsyncFeedProcessor:
             schedule = self.db.get_feed_schedule(feed['id'])
             if schedule:
                 interval = schedule['interval_seconds']
+
+                # Apply backoff for feeds with consecutive errors
+                error_count = feed.get('error_count', 0)
+                backoff = self._get_backoff_multiplier(error_count)
+                if backoff > 1:
+                    interval = interval * backoff
+                    logging.debug(f"Feed {feed['name']} backoff {backoff}x ({error_count} errors), interval now {interval}s")
 
                 # Check if enough time has passed since last check
                 if feed['last_checked']:

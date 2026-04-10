@@ -313,14 +313,15 @@ class MatrixBot:
                 link = line[len("Link:"):].strip()
                 break
         if link and not bypass_posted_check:
-            if room_id not in self.posted_articles:
-                self.posted_articles[room_id] = set()
-            if link in self.posted_articles[room_id]:
-                logging.info(f"Link already posted in {room_id}: {link}")
-                return
-            else:
-                self.posted_articles[room_id].add(link)
-                save_posted_articles(self.posted_articles)
+            # Use database for dedup instead of JSON files
+            try:
+                from database import get_db
+                db = get_db()
+                if db.is_link_posted_to_channel(link, room_id):
+                    logging.info(f"Link already posted in {room_id}: {link}")
+                    return
+            except Exception as e:
+                logging.debug(f"DB dedup check failed, proceeding: {e}")
         try:
             await self.client.room_send(
                 room_id,

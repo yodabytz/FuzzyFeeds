@@ -115,17 +115,17 @@ async def send_telegram_message_async(chat_id, message, bypass_posted_check=Fals
         if line.startswith("Link:"):
             link = line[len("Link:"):].strip()
             break
-    
+
     if link and not bypass_posted_check:
-        chat_key = str(chat_id)
-        if chat_key not in posted_articles:
-            posted_articles[chat_key] = set()
-        if link in posted_articles[chat_key]:
-            logging.info(f"Link already posted in Telegram chat {chat_id}: {link}")
-            return
-        else:
-            posted_articles[chat_key].add(link)
-            save_posted_articles(posted_articles)
+        # Use database for dedup instead of JSON files
+        try:
+            from database import get_db
+            db = get_db()
+            if db.is_link_posted_to_channel(link, str(chat_id)):
+                logging.info(f"Link already posted in Telegram chat {chat_id}: {link}")
+                return
+        except Exception as e:
+            logging.debug(f"DB dedup check failed, proceeding: {e}")
     
     try:
         await telegram_bot_instance.send_message(chat_id=chat_id, text=message, parse_mode=None)

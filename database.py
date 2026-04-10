@@ -280,6 +280,13 @@ class Database:
         cursor.execute('SELECT 1 FROM feed_history WHERE feed_id = ? AND link = ?', (feed_id, link))
         return cursor.fetchone() is not None
 
+    def is_link_posted_to_channel(self, link: str, channel: str) -> bool:
+        """Check if a link has already been posted to a specific channel"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT 1 FROM feed_history WHERE link = ? AND channel = ?', (link, channel))
+        return cursor.fetchone() is not None
+
     def search_history(self, query: str, channel: str = None, days: int = None) -> List[Dict]:
         """Search feed history by title/link/feed name (case-insensitive)"""
         conn = self.get_connection()

@@ -1,6 +1,6 @@
 # FuzzyFeeds - Multi-Platform RSS Bot
 
-**Version 1.2.0**
+**Version 1.2.1**
 
 🌐 **Official Website:** [https://www.fuzzyfeeds.com](https://www.fuzzyfeeds.com)
 

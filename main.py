@@ -362,7 +362,7 @@ def start_polling_callbacks():
     def private_send(user, msg):
         irc_send_callback(user, msg)
 
-    threading.Thread(target=lambda: centralized_polling.start_polling(irc_send, matrix_send, discord_send, telegram_send, private_send, 900),
+    threading.Thread(target=lambda: centralized_polling.start_polling(irc_send, matrix_send, discord_send, telegram_send, private_send, 300),
                      daemon=True).start()
 
 if __name__ == "__main__":

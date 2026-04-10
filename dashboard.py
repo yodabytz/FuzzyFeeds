@@ -787,6 +787,96 @@ DASHBOARD_TEMPLATE = r"""
       </div>
     </div>
 
+    <!-- Feed Health Monitor -->
+    <div class="row">
+      <div class="col-md-12">
+        <div class="card">
+          <div class="card-header bg-danger text-white" style="cursor: pointer;" data-toggle="collapse" data-target="#healthCollapse">
+            <i class="fas fa-heartbeat"></i> Feed Health Monitor
+            <i class="fas fa-chevron-down float-right"></i>
+          </div>
+          <div id="healthCollapse" class="collapse">
+            <div class="card-body">
+              <div class="row mb-3">
+                <div class="col-md-4">
+                  <input type="text" class="form-control" id="healthFilter" placeholder="Filter feeds..." oninput="filterHealth()">
+                </div>
+                <div class="col-md-3">
+                  <select class="form-control" id="healthStatusFilter" onchange="filterHealth()">
+                    <option value="">All Status</option>
+                    <option value="healthy">Healthy</option>
+                    <option value="degraded">Degraded</option>
+                    <option value="dead">Dead</option>
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <select class="form-control" id="healthPlatformFilter" onchange="filterHealth()">
+                    <option value="">All Platforms</option>
+                    <option value="irc">IRC</option>
+                    <option value="matrix">Matrix</option>
+                    <option value="discord">Discord</option>
+                    <option value="telegram">Telegram</option>
+                  </select>
+                </div>
+                <div class="col-md-2">
+                  <button class="btn btn-primary btn-block" onclick="loadFeedHealth()"><i class="fas fa-sync"></i> Refresh</button>
+                </div>
+              </div>
+              <div id="healthSummary" class="mb-3"></div>
+              <div style="max-height: 400px; overflow-y: auto;">
+                <table class="table table-sm table-striped">
+                  <thead><tr><th>Status</th><th>Feed</th><th>Channel</th><th>Platform</th><th>Errors</th><th>Last Error</th><th>Last Checked</th><th>Action</th></tr></thead>
+                  <tbody id="healthBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Feed Management -->
+    <div class="row">
+      <div class="col-md-12">
+        <div class="card">
+          <div class="card-header bg-success text-white" style="cursor: pointer;" data-toggle="collapse" data-target="#feedMgmtCollapse">
+            <i class="fas fa-rss"></i> Feed Management
+            <i class="fas fa-chevron-down float-right"></i>
+          </div>
+          <div id="feedMgmtCollapse" class="collapse">
+            <div class="card-body">
+              <h6 class="text-primary">Add New Feed</h6>
+              <div class="row mb-3">
+                <div class="col-md-3">
+                  <input type="text" class="form-control" id="newFeedName" placeholder="Feed Name">
+                </div>
+                <div class="col-md-4">
+                  <input type="text" class="form-control" id="newFeedUrl" placeholder="RSS Feed URL">
+                </div>
+                <div class="col-md-3">
+                  <input type="text" class="form-control" id="newFeedChannel" placeholder="Channel (e.g. cloaknet.local|#main)">
+                </div>
+                <div class="col-md-2">
+                  <select class="form-control" id="newFeedPlatform">
+                    <option value="irc">IRC</option>
+                    <option value="matrix">Matrix</option>
+                    <option value="discord">Discord</option>
+                    <option value="telegram">Telegram</option>
+                  </select>
+                </div>
+              </div>
+              <div class="row mb-3">
+                <div class="col-md-12">
+                  <button class="btn btn-success" onclick="addFeed()"><i class="fas fa-plus"></i> Add Feed</button>
+                  <span id="feedMgmtMessage" class="ml-3"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- IRC / Matrix / Discord Tables -->
     <div class="row">
       <div class="col-lg-4 col-md-6 col-sm-12">
@@ -1233,6 +1323,154 @@ DASHBOARD_TEMPLATE = r"""
     updateStats();
 
     // Load analytics data
+    // ── Feed Health Monitor ──
+    let allFeedHealth = [];
+
+    function loadFeedHealth() {
+      fetch('/feed_health')
+        .then(r => r.json())
+        .then(data => {
+          if (data.success) {
+            allFeedHealth = data.feeds;
+            filterHealth();
+          }
+        }).catch(e => console.error('Feed health error:', e));
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function filterHealth() {
+      const text = (document.getElementById('healthFilter').value || '').toLowerCase();
+      const status = document.getElementById('healthStatusFilter').value;
+      const platform = document.getElementById('healthPlatformFilter').value;
+
+      const filtered = allFeedHealth.filter(f => {
+        const matchText = !text || f.name.toLowerCase().includes(text) || f.channel.toLowerCase().includes(text);
+        const matchStatus = !status || f.status === status;
+        const matchPlatform = !platform || f.platform === platform;
+        return matchText && matchStatus && matchPlatform;
+      });
+
+      const healthy = allFeedHealth.filter(f => f.status === 'healthy').length;
+      const degraded = allFeedHealth.filter(f => f.status === 'degraded').length;
+      const dead = allFeedHealth.filter(f => f.status === 'dead').length;
+      const summary = document.getElementById('healthSummary');
+      summary.textContent = '';
+      [['success', healthy + ' Healthy'], ['warning', degraded + ' Degraded'],
+       ['danger', dead + ' Dead'], ['secondary', allFeedHealth.length + ' Total']].forEach(([cls, txt]) => {
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-' + cls;
+        badge.textContent = txt;
+        summary.appendChild(badge);
+        summary.appendChild(document.createTextNode(' '));
+      });
+
+      const tbody = document.getElementById('healthBody');
+      tbody.textContent = '';
+      filtered.forEach(f => {
+        const row = document.createElement('tr');
+        const statusBadge = f.status === 'healthy' ? 'success' : f.status === 'degraded' ? 'warning' : 'danger';
+        const statusLabel = f.status === 'healthy' ? 'OK' : f.status === 'degraded' ? 'Degraded' : 'Dead';
+        const lastError = f.last_error ? f.last_error.substring(0, 40) : '-';
+        const lastChecked = f.last_checked ? new Date(f.last_checked).toLocaleString() : 'Never';
+
+        const cells = [
+          {html: true, cls: 'badge badge-' + statusBadge, text: statusLabel},
+          {text: f.name},
+          {text: f.channel, style: 'font-size:0.85em'},
+          {html: true, cls: 'badge badge-' + getPlatformBadgeColor(f.platform), text: f.platform},
+          {text: String(f.error_count)},
+          {text: lastError, style: 'font-size:0.8em', title: f.last_error || ''},
+          {text: lastChecked, style: 'font-size:0.8em'},
+        ];
+
+        cells.forEach(c => {
+          const td = document.createElement('td');
+          if (c.style) td.style.cssText = c.style;
+          if (c.title) td.title = c.title;
+          if (c.html) {
+            const span = document.createElement('span');
+            span.className = c.cls;
+            span.textContent = c.text;
+            td.appendChild(span);
+          } else {
+            td.textContent = c.text;
+          }
+          row.appendChild(td);
+        });
+
+        const actionTd = document.createElement('td');
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn btn-sm btn-danger';
+        delBtn.title = 'Delete feed';
+        const icon = document.createElement('i');
+        icon.className = 'fas fa-trash';
+        delBtn.appendChild(icon);
+        delBtn.addEventListener('click', function() { deleteFeed(f.id, f.name, f.channel); });
+        actionTd.appendChild(delBtn);
+        row.appendChild(actionTd);
+
+        tbody.appendChild(row);
+      });
+    }
+
+    // Load health on panel open
+    document.querySelector('[data-target="#healthCollapse"]').addEventListener('click', function() {
+      if (allFeedHealth.length === 0) loadFeedHealth();
+    });
+
+    // ── Feed Management ──
+    function addFeed() {
+      const name = document.getElementById('newFeedName').value.trim();
+      const url = document.getElementById('newFeedUrl').value.trim();
+      const channel = document.getElementById('newFeedChannel').value.trim();
+      const platform = document.getElementById('newFeedPlatform').value;
+      const msgEl = document.getElementById('feedMgmtMessage');
+
+      if (!name || !url || !channel) {
+        msgEl.textContent = 'All fields required';
+        msgEl.className = 'ml-3 text-danger';
+        return;
+      }
+
+      fetch('/add_feed', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name, url, channel, platform})
+      }).then(r => r.json()).then(data => {
+        if (data.success) {
+          msgEl.textContent = data.message;
+          msgEl.className = 'ml-3 text-success';
+          document.getElementById('newFeedName').value = '';
+          document.getElementById('newFeedUrl').value = '';
+          document.getElementById('newFeedChannel').value = '';
+          loadFeedHealth();
+        } else {
+          msgEl.textContent = data.error;
+          msgEl.className = 'ml-3 text-danger';
+        }
+      }).catch(e => { msgEl.textContent = e.message; msgEl.className = 'ml-3 text-danger'; });
+    }
+
+    function deleteFeed(feedId, name, channel) {
+      if (!confirm('Delete feed "' + name + '" from ' + channel + '?')) return;
+      fetch('/delete_feed', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({feed_id: feedId, name: name, channel: channel})
+      }).then(r => r.json()).then(data => {
+        if (data.success) {
+          loadFeedHealth();
+        } else {
+          alert('Error: ' + data.error);
+        }
+      }).catch(e => alert('Error: ' + e.message));
+    }
+
     function loadAnalytics() {
       fetch('/analytics_data')
         .then(response => response.json())
@@ -2624,6 +2862,118 @@ def execute_command():
     except Exception as e:
         logging.error(f"Dashboard command execution error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/feed_health', methods=['GET'])
+@requires_auth
+def feed_health():
+    """Get health status of all feeds"""
+    try:
+        from database import get_db
+        db = get_db()
+        feeds = db.get_feeds(active_only=False)
+        health = []
+        for f in feeds:
+            error_count = f.get('error_count', 0)
+            if error_count == 0:
+                status = 'healthy'
+            elif error_count < 5:
+                status = 'degraded'
+            else:
+                status = 'dead'
+            health.append({
+                'id': f['id'],
+                'name': f['name'],
+                'url': f['url'],
+                'channel': f['channel'],
+                'platform': f['platform'],
+                'active': f.get('active', 1),
+                'status': status,
+                'error_count': error_count,
+                'last_error': f.get('last_error', ''),
+                'last_checked': f.get('last_checked', '')
+            })
+        return jsonify({'success': True, 'feeds': health})
+    except Exception as e:
+        logging.error(f"Error getting feed health: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/add_feed', methods=['POST'])
+@requires_auth
+def add_feed():
+    """Add a new feed via dashboard"""
+    try:
+        from database import get_db
+        import json
+        db = get_db()
+        data = request.get_json()
+        name = data.get('name', '').strip()
+        url = data.get('url', '').strip()
+        channel = data.get('channel', '').strip()
+        platform = data.get('platform', '').strip()
+
+        if not all([name, url, channel, platform]):
+            return jsonify({'success': False, 'error': 'All fields are required'})
+
+        feed_id = db.add_feed(name, url, channel, platform)
+        if feed_id is None:
+            return jsonify({'success': False, 'error': f'Feed {name} already exists in {channel}'})
+
+        # Also add to feeds.json for compatibility
+        feeds_file = os.path.join(os.path.dirname(__file__), 'feeds.json')
+        if os.path.exists(feeds_file):
+            with open(feeds_file, 'r') as f:
+                feeds = json.load(f)
+            if channel not in feeds:
+                feeds[channel] = {}
+            feeds[channel][name] = url
+            with open(feeds_file, 'w') as f:
+                json.dump(feeds, f, indent=4)
+
+        return jsonify({'success': True, 'feed_id': feed_id, 'message': f'Feed {name} added to {channel}'})
+    except Exception as e:
+        logging.error(f"Error adding feed: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/delete_feed', methods=['POST'])
+@requires_auth
+def delete_feed():
+    """Delete a feed via dashboard"""
+    try:
+        from database import get_db
+        import json
+        db = get_db()
+        data = request.get_json()
+        feed_id = data.get('feed_id')
+        name = data.get('name', '').strip()
+        channel = data.get('channel', '').strip()
+
+        if feed_id:
+            feed = db.get_feed_by_id(feed_id)
+            if feed:
+                name = feed['name']
+                channel = feed['channel']
+
+        if not name or not channel:
+            return jsonify({'success': False, 'error': 'Feed name and channel required'})
+
+        removed = db.remove_feed(name, channel)
+        if not removed:
+            return jsonify({'success': False, 'error': f'Feed {name} not found in {channel}'})
+
+        # Also remove from feeds.json for compatibility
+        feeds_file = os.path.join(os.path.dirname(__file__), 'feeds.json')
+        if os.path.exists(feeds_file):
+            with open(feeds_file, 'r') as f:
+                feeds = json.load(f)
+            if channel in feeds and name in feeds[channel]:
+                del feeds[channel][name]
+                with open(feeds_file, 'w') as f:
+                    json.dump(feeds, f, indent=4)
+
+        return jsonify({'success': True, 'message': f'Feed {name} removed from {channel}'})
+    except Exception as e:
+        logging.error(f"Error deleting feed: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.errorhandler(400)
 def handle_bad_request(error):
