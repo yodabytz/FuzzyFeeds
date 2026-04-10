@@ -871,6 +871,31 @@ DASHBOARD_TEMPLATE = r"""
                   <span id="feedMgmtMessage" class="ml-3"></span>
                 </div>
               </div>
+              <hr>
+              <h6 class="text-danger">Current Feeds</h6>
+              <div class="row mb-2">
+                <div class="col-md-4">
+                  <input type="text" class="form-control" id="mgmtFeedFilter" placeholder="Filter feeds..." oninput="filterMgmtFeeds()">
+                </div>
+                <div class="col-md-3">
+                  <select class="form-control" id="mgmtPlatformFilter" onchange="filterMgmtFeeds()">
+                    <option value="">All Platforms</option>
+                    <option value="irc">IRC</option>
+                    <option value="matrix">Matrix</option>
+                    <option value="discord">Discord</option>
+                    <option value="telegram">Telegram</option>
+                  </select>
+                </div>
+                <div class="col-md-2">
+                  <button class="btn btn-primary btn-block" onclick="loadMgmtFeeds()"><i class="fas fa-sync"></i> Refresh</button>
+                </div>
+              </div>
+              <div style="max-height: 400px; overflow-y: auto;">
+                <table class="table table-sm table-striped">
+                  <thead><tr><th>Feed Name</th><th>URL</th><th>Channel</th><th>Platform</th><th>Action</th></tr></thead>
+                  <tbody id="mgmtFeedBody"></tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>
@@ -1448,6 +1473,86 @@ DASHBOARD_TEMPLATE = r"""
     });
 
     // ── Feed Management ──
+    let allMgmtFeeds = [];
+
+    function loadMgmtFeeds() {
+      fetch('/feed_health')
+        .then(r => r.json())
+        .then(data => {
+          if (data.success) {
+            allMgmtFeeds = data.feeds;
+            filterMgmtFeeds();
+          }
+        }).catch(e => console.error('Feed list error:', e));
+    }
+
+    function filterMgmtFeeds() {
+      const text = (document.getElementById('mgmtFeedFilter').value || '').toLowerCase();
+      const platform = document.getElementById('mgmtPlatformFilter').value;
+      const filtered = allMgmtFeeds.filter(f => {
+        const matchText = !text || f.name.toLowerCase().includes(text) || f.channel.toLowerCase().includes(text);
+        const matchPlatform = !platform || f.platform === platform;
+        return matchText && matchPlatform;
+      });
+      const tbody = document.getElementById('mgmtFeedBody');
+      tbody.textContent = '';
+      filtered.forEach(f => {
+        const row = document.createElement('tr');
+        const nameTd = document.createElement('td');
+        nameTd.textContent = f.name;
+        const urlTd = document.createElement('td');
+        urlTd.style.cssText = 'font-size:0.8em; max-width:250px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+        urlTd.title = f.url;
+        urlTd.textContent = f.url;
+        const chanTd = document.createElement('td');
+        chanTd.style.cssText = 'font-size:0.85em';
+        chanTd.textContent = f.channel;
+        const platTd = document.createElement('td');
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-' + getPlatformBadgeColor(f.platform);
+        badge.textContent = f.platform;
+        platTd.appendChild(badge);
+        const actionTd = document.createElement('td');
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn btn-sm btn-danger';
+        delBtn.title = 'Delete feed';
+        const icon = document.createElement('i');
+        icon.className = 'fas fa-trash';
+        delBtn.appendChild(icon);
+        delBtn.addEventListener('click', function() {
+          deleteFeedFromMgmt(f.id, f.name, f.channel);
+        });
+        actionTd.appendChild(delBtn);
+        row.appendChild(nameTd);
+        row.appendChild(urlTd);
+        row.appendChild(chanTd);
+        row.appendChild(platTd);
+        row.appendChild(actionTd);
+        tbody.appendChild(row);
+      });
+    }
+
+    function deleteFeedFromMgmt(feedId, name, channel) {
+      if (!confirm('Delete feed "' + name + '" from ' + channel + '?')) return;
+      fetch('/delete_feed', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({feed_id: feedId, name: name, channel: channel})
+      }).then(r => r.json()).then(data => {
+        if (data.success) {
+          loadMgmtFeeds();
+          if (allFeedHealth.length > 0) loadFeedHealth();
+        } else {
+          alert('Error: ' + data.error);
+        }
+      }).catch(e => alert('Error: ' + e.message));
+    }
+
+    // Load feed list when panel opens
+    document.querySelector('[data-target="#feedMgmtCollapse"]').addEventListener('click', function() {
+      if (allMgmtFeeds.length === 0) loadMgmtFeeds();
+    });
+
     function addFeed() {
       const name = document.getElementById('newFeedName').value.trim();
       const url = document.getElementById('newFeedUrl').value.trim();
@@ -1472,7 +1577,8 @@ DASHBOARD_TEMPLATE = r"""
           document.getElementById('newFeedName').value = '';
           document.getElementById('newFeedUrl').value = '';
           document.getElementById('newFeedChannel').value = '';
-          loadFeedHealth();
+          loadMgmtFeeds();
+          if (allFeedHealth.length > 0) loadFeedHealth();
         } else {
           msgEl.textContent = data.error;
           msgEl.className = 'ml-3 text-danger';
