@@ -1083,6 +1083,13 @@ DASHBOARD_TEMPLATE = r"""
   <div class="footer"><p>© FuzzyFeeds <span id="current_year">{{ current_year }}</span></p></div>
 
   <script>
+    // Ensure all fetch requests include Basic Auth credentials
+    const _originalFetch = window.fetch;
+    window.fetch = function(url, options = {}) {
+      options.credentials = options.credentials || 'same-origin';
+      return _originalFetch.call(this, url, options);
+    };
+
     // Dark mode functionality
     const themeSwitch = document.getElementById('theme-switch');
     const currentTheme = localStorage.getItem('theme');
