@@ -10,7 +10,9 @@ import tarfile
 import glob
 
 # Configure logging with monthly rotation
-log_dir = os.path.dirname(os.path.abspath(__file__))
+log_dir = '/var/log/fuzzyfeeds'
+if not os.path.isdir(log_dir):
+    log_dir = os.path.dirname(os.path.abspath(__file__))
 log_file = os.path.join(log_dir, 'main.log')
 
 # Remove any existing handlers
