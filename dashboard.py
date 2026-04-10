@@ -2258,10 +2258,15 @@ DASHBOARD_TEMPLATE = r"""
 @requires_auth
 def uptime_route():
     uptime_seconds = int(time.time() - start_time)
-    hours   = uptime_seconds // 3600
+    days    = uptime_seconds // 86400
+    hours   = (uptime_seconds % 86400) // 3600
     minutes = (uptime_seconds % 3600) // 60
     seconds = uptime_seconds % 60
-    return jsonify({"uptime": f"{hours}h {minutes}m {seconds}s", "uptime_seconds": uptime_seconds})
+    if days > 0:
+        uptime_str = f"{days}D {hours}H {minutes}m {seconds}s"
+    else:
+        uptime_str = f"{hours}H {minutes}m {seconds}s"
+    return jsonify({"uptime": uptime_str, "uptime_seconds": uptime_seconds})
 
 @app.route('/')
 @requires_auth
@@ -2320,7 +2325,11 @@ def index():
 
     # Core stats
     uptime_seconds = int(time.time() - start_time)
-    uptime_str     = str(datetime.timedelta(seconds=uptime_seconds))
+    days = uptime_seconds // 86400
+    hours = (uptime_seconds % 86400) // 3600
+    minutes = (uptime_seconds % 3600) // 60
+    secs = uptime_seconds % 60
+    uptime_str = f"{days}D {hours}H {minutes}m {secs}s" if days > 0 else f"{hours}H {minutes}m {secs}s"
     total_feeds    = sum(len(v) for v in feed.channel_feeds.values())
     total_channels = len(feed.channel_feeds)
     total_subs     = sum(len(v) for v in feed.subscriptions.values())
