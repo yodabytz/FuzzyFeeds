@@ -22,7 +22,7 @@ for handler in logging.root.handlers[:]:
 # Create file handler with monthly rotation (every 30 days)
 file_handler = TimedRotatingFileHandler(
     log_file,
-    when='midnight',
+    when='D',
     interval=30,
     backupCount=4,
     encoding='utf-8'
