@@ -2263,9 +2263,9 @@ def uptime_route():
     minutes = (uptime_seconds % 3600) // 60
     seconds = uptime_seconds % 60
     if days > 0:
-        uptime_str = f"{days}D {hours}H {minutes}m {seconds}s"
+        uptime_str = f"{days}D {hours}h {minutes}m {seconds}s"
     else:
-        uptime_str = f"{hours}H {minutes}m {seconds}s"
+        uptime_str = f"{hours}h {minutes}m {seconds}s"
     return jsonify({"uptime": uptime_str, "uptime_seconds": uptime_seconds})
 
 @app.route('/')
