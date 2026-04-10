@@ -107,11 +107,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(mes
 from functools import wraps
 
 def check_auth(username, password):
-    # Define valid dashboard users
+    # Define valid dashboard users from config
     valid_users = {
-        config.dashboard_username: config.dashboard_password,  # yodabytz
-        "fuzzytail": "c4rn3x99"
+        config.dashboard_username: config.dashboard_password,
     }
+    # Support additional users if defined in config
+    if hasattr(config, 'dashboard_users') and isinstance(config.dashboard_users, dict):
+        valid_users.update(config.dashboard_users)
     return username in valid_users and valid_users[username] == password
 
 def authenticate():

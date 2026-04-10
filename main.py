@@ -309,6 +309,26 @@ def start_telegram():
 
 def irc_send_callback(channel, message):
     logging.info(f"IRC send callback for {channel}: {message}")
+
+    # Handle private subscription messages (user_ prefix from database)
+    target = channel
+    if "|" in target:
+        parts = target.split("|", 1)
+        if parts[1].startswith("user_"):
+            target = parts[1]
+    if target.startswith("user_"):
+        nick = target[5:]  # Strip "user_" prefix to get actual nick
+        # Find primary IRC connection to send PRIVMSG
+        primary_key = next((k for k in irc_secondary if k.startswith(f"{default_irc_server}|")), None)
+        conn = irc_secondary.get(primary_key) if primary_key else None
+        if conn:
+            for line in message.split('\n'):
+                send_message(conn, nick, line)
+        else:
+            logging.error(f"No primary IRC connection to send DM to {nick}, queuing message")
+            message_queue.put((nick, message))
+        return
+
     if "|" in channel:
         composite = channel
     else:
@@ -328,6 +348,12 @@ def start_polling_callbacks():
     def irc_send(ch, msg):
         irc_send_callback(ch, msg)
     def matrix_send(ch, msg):
+        # Handle user subscriptions stored as user_@userid:server
+        if ch.startswith("user_@"):
+            from matrix_integration import send_matrix_dm
+            user_id = ch[5:]  # Strip "user_" prefix to get @userid:server
+            send_matrix_dm(user_id, msg)
+            return
         send_matrix_message(ch, msg)
     def discord_send(ch, msg):
         send_discord_message(ch, msg)

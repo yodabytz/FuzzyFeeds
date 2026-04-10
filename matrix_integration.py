@@ -41,7 +41,14 @@ def load_posted_articles():
 
 def save_posted_articles(posted_dict):
     try:
-        serializable = {room: list(links) for room, links in posted_dict.items()}
+        # Keep only the most recent 500 links per room to prevent unbounded growth
+        MAX_LINKS_PER_ROOM = 500
+        serializable = {}
+        for room, links in posted_dict.items():
+            link_list = list(links)
+            if len(link_list) > MAX_LINKS_PER_ROOM:
+                link_list = link_list[-MAX_LINKS_PER_ROOM:]
+            serializable[room] = link_list
         with open(POSTED_FILE, "w") as f:
             json.dump(serializable, f, indent=4)
     except Exception as e:

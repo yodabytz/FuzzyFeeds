@@ -48,7 +48,14 @@ def load_posted_articles():
 
 def save_posted_articles(posted_dict):
     try:
-        serializable = {chat: list(links) for chat, links in posted_dict.items()}
+        # Keep only the most recent 500 links per chat to prevent unbounded growth
+        MAX_LINKS_PER_CHAT = 500
+        serializable = {}
+        for chat, links in posted_dict.items():
+            link_list = list(links)
+            if len(link_list) > MAX_LINKS_PER_CHAT:
+                link_list = link_list[-MAX_LINKS_PER_CHAT:]
+            serializable[chat] = link_list
         with open(POSTED_FILE, "w") as f:
             json.dump(serializable, f, indent=4)
     except Exception as e:

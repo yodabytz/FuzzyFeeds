@@ -34,11 +34,11 @@ default_interval = 900  # 15 minutes in seconds
 # --- Integration Configuration ---
 
 # Dashboard configuration
-# In config.py
-start_time = time.time()
 dashboard_port = 1039
 dashboard_username = "admin"  # Replace with your dashboard username
 dashboard_password = "your_secure_password"  # Replace with your dashboard password
+# Additional dashboard users (optional) - add users here to avoid hardcoding in dashboard.py
+# dashboard_users = {"username": "password"}
 
 # Slack configuration (optional)
 slack_token = "xoxb-your-slack-bot-token"  # Replace with your Slack bot token
