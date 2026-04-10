@@ -2329,7 +2329,7 @@ def index():
     hours = (uptime_seconds % 86400) // 3600
     minutes = (uptime_seconds % 3600) // 60
     secs = uptime_seconds % 60
-    uptime_str = f"{days}D {hours}H {minutes}m {secs}s" if days > 0 else f"{hours}H {minutes}m {secs}s"
+    uptime_str = f"{days}D {hours}h {minutes}m {secs}s" if days > 0 else f"{hours}h {minutes}m {secs}s"
     total_feeds    = sum(len(v) for v in feed.channel_feeds.values())
     total_channels = len(feed.channel_feeds)
     total_subs     = sum(len(v) for v in feed.subscriptions.values())
