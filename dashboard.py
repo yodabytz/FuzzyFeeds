@@ -877,9 +877,9 @@ DASHBOARD_TEMPLATE = r"""
       </div>
     </div>
 
-    <!-- IRC / Matrix / Discord Tables -->
+    <!-- IRC / Matrix / Discord / Telegram Tables -->
     <div class="row">
-      <div class="col-lg-4 col-md-6 col-sm-12">
+      <div class="col-lg-3 col-md-6 col-sm-12">
         <div class="card">
           <div class="card-header bg-primary text-white">IRC Channels</div>
           <div class="card-body">
@@ -903,7 +903,7 @@ DASHBOARD_TEMPLATE = r"""
         </div>
       </div>
 
-      <div class="col-lg-4 col-md-6 col-sm-12">
+      <div class="col-lg-3 col-md-6 col-sm-12">
         <div class="card">
           <div class="card-header bg-success text-white">Matrix Rooms</div>
           <div class="card-body">
@@ -930,7 +930,7 @@ DASHBOARD_TEMPLATE = r"""
         </div>
       </div>
 
-      <div class="col-lg-4 col-md-6 col-sm-12">
+      <div class="col-lg-3 col-md-6 col-sm-12">
         <div class="card">
           <div class="card-header bg-info text-white">Discord Channels</div>
           <div class="card-body">
@@ -949,6 +949,30 @@ DASHBOARD_TEMPLATE = r"""
             </div>
             {% else %}
               <p>No Discord channels configured.</p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-3 col-md-6 col-sm-12">
+        <div class="card">
+          <div class="card-header bg-warning text-dark">Telegram Chats</div>
+          <div class="card-body">
+            {% if telegram_chats %}
+            <div class="table-responsive">
+              <table class="table table-sm table-bordered">
+                <thead>
+                  <tr><th>Chat</th><th style="width:60px;">#</th></tr>
+                </thead>
+                <tbody id="telegram_table_body">
+                  {% for chat, feeds in telegram_chats.items() %}
+                    <tr><td>{{ chat }}</td><td class="text-center">{{ feeds|length }}</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% else %}
+              <p>No Telegram chats configured.</p>
             {% endif %}
           </div>
         </div>
@@ -2364,8 +2388,8 @@ def index():
             display_name = matrix_room_names.get(room_id, room_id)
             matrix_rooms[display_name] = feeds_dict
     
-    discord_channels = {k:v for k,v in feed.channel_feeds.items() if k.isdigit()}
-    telegram_channels = {k:v for k,v in feed.channel_feeds.items() if k.startswith("@") or (k.startswith("-") and k[1:].isdigit())}
+    discord_channels = {k:v for k,v in feed.channel_feeds.items() if k.isdigit() and len(k) > 15}
+    telegram_channels = {k:v for k,v in feed.channel_feeds.items() if k.startswith("@") or (k.startswith("-") and k[1:].isdigit()) or (k.isdigit() and len(k) <= 15)}
 
     # Compute per-network feed/channel counts
     irc_feeds_count    = sum(len(v) for v in irc_channels.values())
@@ -2405,7 +2429,8 @@ def index():
         discord_chans_count=discord_chans_count,
         telegram_feeds_count=telegram_feeds_count,
         telegram_chans_count=telegram_chans_count,
-        telegram_status=telegram_status
+        telegram_status=telegram_status,
+        telegram_chats=telegram_channels
     )
 
 @app.route('/analytics_data')
@@ -2528,8 +2553,8 @@ def stats_data():
             display_name = matrix_room_names.get(room_id, room_id)
             matrix_dict[display_name] = feeds_dict
     
-    discord_dict     = {k:v for k,v in feed.channel_feeds.items() if k.isdigit()}
-    telegram_dict    = {k:v for k,v in feed.channel_feeds.items() if k.startswith("@") or (k.startswith("-") and k[1:].isdigit())}
+    discord_dict     = {k:v for k,v in feed.channel_feeds.items() if k.isdigit() and len(k) > 15}
+    telegram_dict    = {k:v for k,v in feed.channel_feeds.items() if k.startswith("@") or (k.startswith("-") and k[1:].isdigit()) or (k.isdigit() and len(k) <= 15)}
 
     # Compute per-network feed/channel counts
     irc_feeds_count    = sum(len(v) for v in irc_dict.values())
