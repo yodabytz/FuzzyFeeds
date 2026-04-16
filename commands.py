@@ -522,7 +522,10 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         if args[1].startswith(('@', '#')) and len(args) >= 3:
             target_channel = args[1]
             pattern = " ".join(args[2:])
-            channel_key = target_channel
+            # IRC stores feeds under composite key "server|#channel"
+            channel_key = composite_key(target_channel, integration) if integration == "irc" else target_channel
+            if channel_key not in feed.channel_feeds and target_channel in feed.channel_feeds:
+                channel_key = target_channel
         else:
             # Use current channel
             target_channel = key
@@ -668,13 +671,16 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             return
         try:
             minutes = int(parts[1].strip())
-            if key not in feed.channel_intervals:
-                feed.channel_intervals[key] = 0
-            feed.channel_intervals[key] = minutes * 60
-            send_message_fn(response_target(actual_channel, integration), f"Feed check interval set to {minutes} minutes for {target}.")
-            logging.info(f"User {user_key} set interval to {minutes} minutes for {key}")
         except ValueError:
             send_message_fn(response_target(actual_channel, integration), "Invalid number of minutes.")
+            return
+        feed.channel_intervals[key] = minutes * 60
+        try:
+            persistence.save_json("intervals.json", feed.channel_intervals)
+        except Exception as e:
+            logging.error(f"Failed to persist intervals.json: {e}")
+        send_message_fn(response_target(actual_channel, integration), f"Feed check interval set to {minutes} minutes for {actual_channel}.")
+        logging.info(f"User {user_key} set interval to {minutes} minutes for {key}")
 
     elif lower_message.startswith("!search"):
         parts = message.split(" ", 1)
@@ -702,7 +708,11 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                 send_message_fn(response_target(actual_channel, integration), "Usage: !schedule <feedname> <minutes>")
                 return
             pattern = args[1]
-            minutes = int(args[2])
+            try:
+                minutes = int(args[2])
+            except ValueError:
+                send_message_fn(response_target(actual_channel, integration), f"Invalid minutes value: '{args[2]}'")
+                return
             feeds_for_chan = feed.channel_feeds.get(key, {})
             matched = match_feed(feeds_for_chan, pattern)
             if not matched or isinstance(matched, list):
@@ -730,7 +740,14 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
                 send_private_message_fn(user, "Usage: !mute <feedname> [hours]")
                 return
             pattern = args[1]
-            hours = int(args[2]) if len(args) >= 3 else None
+            if len(args) >= 3:
+                try:
+                    hours = int(args[2])
+                except ValueError:
+                    send_private_message_fn(user, f"Invalid hours value: '{args[2]}'")
+                    return
+            else:
+                hours = None
             feeds_for_chan = feed.channel_feeds.get(key, {})
             matched = match_feed(feeds_for_chan, pattern)
             if not matched or isinstance(matched, list):
@@ -998,6 +1015,105 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
         else:
             send_message_fn(response_target(actual_channel, integration),
                             "Unknown subcommand. Use add, set, connect or del.")
+
+    # ------------------ WEBHOOK MANAGEMENT (owner only) ------------------
+    elif lower_message.startswith("!webhook"):
+        if not is_super_admin:
+            send_private_message_fn(user, "Only the bot owner can use !webhook commands.")
+            return
+
+        try:
+            args = shlex.split(message)
+        except Exception as e:
+            send_message_fn(response_target(actual_channel, integration),
+                            f"Error parsing command: {e}")
+            return
+
+        from webhook_integration import load_webhooks, WEBHOOKS_FILE, SUPPORTED_FORMATS
+        webhooks = load_webhooks()
+        # Drop comment keys (e.g. "_comment") so we don't list/operate on them
+        webhooks = {k: v for k, v in webhooks.items() if not k.startswith("_")}
+
+        def save_webhooks(data):
+            try:
+                with open(WEBHOOKS_FILE, "w") as f:
+                    json.dump(data, f, indent=4)
+                return True
+            except Exception as e:
+                logging.error(f"Failed to write {WEBHOOKS_FILE}: {e}")
+                send_message_fn(response_target(actual_channel, integration),
+                                f"Error saving webhooks: {e}")
+                return False
+
+        action = args[1].lower() if len(args) >= 2 else "list"
+        target = response_target(actual_channel, integration)
+
+        if action == "list":
+            if not webhooks:
+                send_message_fn(target, "No webhooks configured.")
+            else:
+                for name, cfg in webhooks.items():
+                    state = "on" if cfg.get("enabled", True) else "off"
+                    send_message_fn(target,
+                                    f"{name} [{cfg.get('format','json')}] {state} -> {cfg.get('url','')}")
+
+        elif action == "add":
+            # !webhook add <name> <url> [format]
+            if len(args) < 4:
+                send_message_fn(target,
+                                f"Usage: !webhook add <name> <url> [format]  (formats: {', '.join(sorted(SUPPORTED_FORMATS))})")
+                return
+            name = args[2]
+            url = args[3]
+            fmt = (args[4].lower() if len(args) >= 5 else "json")
+            if fmt not in SUPPORTED_FORMATS:
+                send_message_fn(target, f"Unknown format '{fmt}'. Supported: {', '.join(sorted(SUPPORTED_FORMATS))}")
+                return
+            if name in webhooks:
+                send_message_fn(target, f"Webhook '{name}' already exists. Use !webhook del first or !webhook set.")
+                return
+            webhooks[name] = {"url": url, "format": fmt, "enabled": True}
+            save_webhooks(webhooks)
+            send_message_fn(target, f"Webhook '{name}' added [{fmt}].")
+
+        elif action == "del" or action == "delete":
+            if len(args) < 3:
+                send_message_fn(target, "Usage: !webhook del <name>")
+                return
+            name = args[2]
+            if name not in webhooks:
+                send_message_fn(target, f"Webhook '{name}' not found.")
+                return
+            del webhooks[name]
+            save_webhooks(webhooks)
+            send_message_fn(target, f"Webhook '{name}' deleted.")
+
+        elif action == "enable" or action == "disable":
+            if len(args) < 3:
+                send_message_fn(target, f"Usage: !webhook {action} <name>")
+                return
+            name = args[2]
+            if name not in webhooks:
+                send_message_fn(target, f"Webhook '{name}' not found.")
+                return
+            webhooks[name]["enabled"] = (action == "enable")
+            save_webhooks(webhooks)
+            send_message_fn(target, f"Webhook '{name}' {action}d.")
+
+        elif action == "test":
+            if len(args) < 3:
+                send_message_fn(target, "Usage: !webhook test <name>")
+                return
+            name = args[2]
+            from webhook_integration import send_webhook_message
+            ok = send_webhook_message(name,
+                                       "FuzzyFeeds: Webhook test message\nLink: https://www.fuzzyfeeds.com",
+                                       bypass_posted_check=True)
+            send_message_fn(target, f"Test {'sent' if ok else 'FAILED'} for '{name}'.")
+
+        else:
+            send_message_fn(target,
+                            "Usage: !webhook <list|add|del|enable|disable|test> ...")
 
     # ------------------ SETTINGS AND ADMIN COMMANDS ------------------
     elif lower_message.startswith("!setsetting"):

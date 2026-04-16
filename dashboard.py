@@ -1015,39 +1015,63 @@ DASHBOARD_TEMPLATE = r"""
           </div>
           <div id="webhooksCollapse" class="collapse">
             <div class="card-body">
-              {% if webhooks %}
-              <div class="table-responsive">
-                <table class="table table-sm table-bordered">
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th style="width:120px;">Format</th>
-                      <th style="width:90px;">Enabled</th>
-                      <th style="width:80px;">Feeds</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {% for name, info in webhooks.items() %}
+              <form id="addWebhookForm" class="form-inline mb-3" onsubmit="return addWebhook(event);">
+                <input type="text" class="form-control form-control-sm mr-2 mb-1" id="wh_name" placeholder="name" required>
+                <input type="url" class="form-control form-control-sm mr-2 mb-1" id="wh_url" placeholder="https://..." style="min-width:280px;" required>
+                <select class="form-control form-control-sm mr-2 mb-1" id="wh_format">
+                  <option value="json">json</option>
+                  <option value="discord">discord</option>
+                  <option value="slack">slack</option>
+                  <option value="ntfy">ntfy</option>
+                  <option value="gotify">gotify</option>
+                  <option value="mattermost">mattermost</option>
+                  <option value="text">text</option>
+                </select>
+                <div class="form-check mr-2 mb-1">
+                  <input class="form-check-input" type="checkbox" id="wh_enabled" checked>
+                  <label class="form-check-label" for="wh_enabled">enabled</label>
+                </div>
+                <button type="submit" class="btn btn-sm btn-primary mb-1">Add Webhook</button>
+              </form>
+              <div id="webhooksTableContainer">
+                {% if webhooks %}
+                <div class="table-responsive">
+                  <table class="table table-sm table-bordered">
+                    <thead>
                       <tr>
-                        <td><code>webhook|{{ name }}</code></td>
-                        <td>{{ info.format }}</td>
-                        <td>
-                          {% if info.enabled %}
-                            <span class="badge badge-success">on</span>
-                          {% else %}
-                            <span class="badge badge-secondary">off</span>
-                          {% endif %}
-                        </td>
-                        <td class="text-center">{{ info.feed_count }}</td>
+                        <th>Name</th>
+                        <th style="width:120px;">Format</th>
+                        <th style="width:90px;">Enabled</th>
+                        <th style="width:80px;">Feeds</th>
+                        <th style="width:90px;"></th>
                       </tr>
-                    {% endfor %}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody id="webhooksTableBody">
+                      {% for name, info in webhooks.items() %}
+                        <tr>
+                          <td><code>webhook|{{ name }}</code></td>
+                          <td>{{ info.format }}</td>
+                          <td>
+                            {% if info.enabled %}
+                              <span class="badge badge-success">on</span>
+                            {% else %}
+                              <span class="badge badge-secondary">off</span>
+                            {% endif %}
+                          </td>
+                          <td class="text-center">{{ info.feed_count }}</td>
+                          <td class="text-center">
+                            <button class="btn btn-sm btn-danger" onclick="deleteWebhook('{{ name }}')">Delete</button>
+                          </td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+                {% else %}
+                  <p class="text-muted mb-0">No webhooks configured yet. Add one above or edit <code>webhooks.json</code> directly.</p>
+                {% endif %}
               </div>
-              <p class="text-muted small mb-0">Endpoints are defined in <code>webhooks.json</code>. Reference one from <code>feeds.json</code> with the channel key <code>webhook|&lt;name&gt;</code>.</p>
-              {% else %}
-                <p class="text-muted mb-0">No webhooks configured. Create <code>webhooks.json</code> (see <code>webhooks.json.example</code>) to add outbound endpoints.</p>
-              {% endif %}
+              <p class="text-muted small mb-0 mt-2">Reference an endpoint from <code>feeds.json</code> using the channel key <code>webhook|&lt;name&gt;</code>.</p>
             </div>
           </div>
         </div>
@@ -1648,6 +1672,37 @@ DASHBOARD_TEMPLATE = r"""
         } else {
           alert('Error: ' + data.error);
         }
+      }).catch(e => alert('Error: ' + e.message));
+    }
+
+    function addWebhook(ev) {
+      ev.preventDefault();
+      const payload = {
+        name: document.getElementById('wh_name').value.trim(),
+        url: document.getElementById('wh_url').value.trim(),
+        format: document.getElementById('wh_format').value,
+        enabled: document.getElementById('wh_enabled').checked
+      };
+      fetch('/add_webhook', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      }).then(r => r.json()).then(data => {
+        if (data.success) { window.location.reload(); }
+        else { alert('Error: ' + data.error); }
+      }).catch(e => alert('Error: ' + e.message));
+      return false;
+    }
+
+    function deleteWebhook(name) {
+      if (!confirm('Delete webhook "' + name + '"?')) return;
+      fetch('/delete_webhook', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name: name})
+      }).then(r => r.json()).then(data => {
+        if (data.success) { window.location.reload(); }
+        else { alert('Error: ' + data.error); }
       }).catch(e => alert('Error: ' + e.message));
     }
 
@@ -2964,6 +3019,53 @@ def toggle_muted_feed():
             'success': False,
             'error': str(e)
         })
+
+@app.route('/add_webhook', methods=['POST'])
+@requires_auth
+def add_webhook():
+    """Add or update a webhook entry in webhooks.json"""
+    try:
+        from webhook_integration import load_webhooks, WEBHOOKS_FILE, SUPPORTED_FORMATS
+        import json as _json
+        data = request.get_json() or {}
+        name = (data.get("name") or "").strip()
+        url = (data.get("url") or "").strip()
+        fmt = (data.get("format") or "json").strip().lower()
+        enabled = bool(data.get("enabled", True))
+        if not name or not url:
+            return jsonify({"success": False, "error": "name and url are required"}), 400
+        if fmt not in SUPPORTED_FORMATS:
+            return jsonify({"success": False, "error": f"unsupported format '{fmt}'"}), 400
+        webhooks = load_webhooks()
+        webhooks[name] = {"url": url, "format": fmt, "enabled": enabled}
+        with open(WEBHOOKS_FILE, "w") as f:
+            _json.dump(webhooks, f, indent=4)
+        return jsonify({"success": True, "message": f"Webhook '{name}' saved"})
+    except Exception as e:
+        logging.error(f"Error adding webhook: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/delete_webhook', methods=['POST'])
+@requires_auth
+def delete_webhook():
+    """Delete a webhook entry from webhooks.json"""
+    try:
+        from webhook_integration import load_webhooks, WEBHOOKS_FILE
+        import json as _json
+        data = request.get_json() or {}
+        name = (data.get("name") or "").strip()
+        if not name:
+            return jsonify({"success": False, "error": "name is required"}), 400
+        webhooks = load_webhooks()
+        if name not in webhooks:
+            return jsonify({"success": False, "error": f"webhook '{name}' not found"}), 404
+        del webhooks[name]
+        with open(WEBHOOKS_FILE, "w") as f:
+            _json.dump(webhooks, f, indent=4)
+        return jsonify({"success": True, "message": f"Webhook '{name}' deleted"})
+    except Exception as e:
+        logging.error(f"Error deleting webhook: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/get_feed_templates', methods=['GET'])
 @requires_auth
