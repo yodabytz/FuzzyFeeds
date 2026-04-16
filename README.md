@@ -1,10 +1,10 @@
 # FuzzyFeeds - Multi-Platform RSS Bot
 
-**Version 1.2.1**
+**Version 1.2.2**
 
 🌐 **Official Website:** [https://www.fuzzyfeeds.com](https://www.fuzzyfeeds.com)
 
-FuzzyFeeds is a multi-platform RSS aggregation bot that supports IRC, Matrix, Discord, and Telegram. It features a real-time web dashboard for monitoring feeds, connections, and errors.
+FuzzyFeeds is a multi-platform RSS aggregation bot that supports IRC, Matrix, Discord, Telegram, and outbound webhooks. It features a real-time web dashboard for monitoring feeds, connections, and errors.
 
 <img src="https://raw.githubusercontent.com/yodabytz/FuzzyFeeds/refs/heads/main/fuzzyfeeds-logo-lg.png" alt="FuzzyFeeds" width="200" height="200">
 
@@ -22,6 +22,11 @@ FuzzyFeeds is a comprehensive RSS aggregation bot that seamlessly integrates wit
 - **Telegram Bot**: Full Telegram bot integration with channel and group support
   - **HTML Entity Decoding**: Automatically converts HTML entities (e.g., &#8216; → ') for clean messages
   - **Channel/Group Support**: Works with both public channels and private groups
+- **Outbound Webhooks** *(new in v1.2.2)*: Push feed items to any HTTP endpoint
+  - **Format Adapters**: Built-in support for `discord`, `slack`, `ntfy`, `gotify`, `mattermost`, generic `json`, and plain `text`
+  - **No Bot Account Needed**: Drop in a webhook URL — no server invite, gateway connection, or auth required
+  - **Per-Endpoint Config**: Define endpoints in `webhooks.json`, reference from feeds via `webhook|<name>` keys
+  - **Database-Backed Dedup**: Same per-channel duplicate suppression as the other integrations
 
 ### 📊 Real-time Web Dashboard
 - **🌙 Dark/Light Mode Toggle**: Seamlessly switch between dark and light themes with persistent preference storage
@@ -253,6 +258,14 @@ See `PROXY_README.md` for detailed proxy configuration instructions and use case
 
 ## Recent Updates & Fixes
 
+**Version 1.2.2 (April 15, 2026):**
+- ✅ **Outbound Webhook Integration**: Push feed items to any HTTP endpoint
+  - Supported formats: `discord`, `slack`, `ntfy`, `gotify`, `mattermost`, `json`, `text`
+  - Endpoints defined in `webhooks.json`; feeds reference them via `webhook|<name>` channel keys
+  - No bot account, gateway connection, or server invite required — paste a URL and go
+  - Database-backed deduplication consistent with Matrix/Telegram integrations
+- ✅ **Feed Template Save Fix**: Saving a feed template from the dashboard no longer errors with `unexpected keyword argument 'include_image'`; also fixed a latent bug where the underlying `ON CONFLICT(id)` upsert was inserting duplicate rows on every save instead of updating.
+
 **Version 1.2.0 (October 11, 2025):**
 - ✅ **SQLite Database Backend**: Complete database integration for persistent storage
   - Feed history tracking with full search capabilities
@@ -332,6 +345,7 @@ See `PROXY_README.md` for detailed proxy configuration instructions and use case
 - `matrix_integration.py` - Matrix integration
 - `discord_integration.py` - Discord integration
 - `telegram_integration.py` - Telegram integration
+- `webhook_integration.py` - Outbound webhook integration (NEW in v1.2.2)
 - `centralized_polling.py` - Centralized RSS feed polling (legacy)
 - `feed.py` - Feed management and parsing
 - `commands.py` - Bot command handling
