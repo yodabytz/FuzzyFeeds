@@ -49,7 +49,7 @@ POSTED_LOG_FILE     = os.path.join(os.path.dirname(__file__), "posted_links.json
 STARTUP_FEEDS_FILE = os.path.join(os.path.dirname(__file__), "startup_feeds_count.json")
 
 # Initialize startup feeds counter to zero when dashboard starts
-startup_feeds_count = {"IRC": 0, "Matrix": 0, "Discord": 0, "Telegram": 0, "Webhook": 0, "startup_time": time.time()}
+startup_feeds_count = {"IRC": 0, "Matrix": 0, "Discord": 0, "Telegram": 0, "Webhook": 0, "Mastodon": 0, "Bluesky": 0, "startup_time": time.time()}
 try:
     with open(STARTUP_FEEDS_FILE, 'w') as f:
         json.dump(startup_feeds_count, f)
@@ -164,7 +164,7 @@ def events():
                 yield f"data: {json.dumps(startup_counts)}\n\n"
             except Exception as e:
                 # Fallback to zero counts if file doesn't exist
-                startup_counts = {"IRC": 0, "Matrix": 0, "Discord": 0, "Telegram": 0, "Webhook": 0}
+                startup_counts = {"IRC": 0, "Matrix": 0, "Discord": 0, "Telegram": 0, "Webhook": 0, "Mastodon": 0, "Bluesky": 0}
                 yield f"data: {json.dumps(startup_counts)}\n\n"
             time.sleep(1)
     return Response(generate(), mimetype='text/event-stream')
