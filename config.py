@@ -69,6 +69,10 @@ mastodon_token = ""                             # Access token from Settings -> 
 mastodon_visibility = "public"                  # public, unlisted, private, direct
 mastodon_max_chars = 500                        # Most instances cap at 500
 enable_mastodon = False
+# Hashtags appended to every Mastodon post (for Explore/tag-search discovery).
+# Use plain words without the leading '#'. Example:
+#   mastodon_hashtags = ["linux", "opensource", "tech"]
+mastodon_hashtags = []
 
 # Bluesky configuration (optional, single-account v1)
 bluesky_handle = ""           # e.g. "yourname.bsky.social"

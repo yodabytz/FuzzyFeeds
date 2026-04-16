@@ -29,6 +29,11 @@ try:
 except ImportError:
     mastodon_max_chars = 500
 
+try:
+    from config import mastodon_hashtags
+except ImportError:
+    mastodon_hashtags = []
+
 feed_loop_enabled = False
 
 
@@ -37,28 +42,45 @@ def disable_feed_loop():
     feed_loop_enabled = False
 
 
+def _normalize_tags():
+    out = []
+    for t in (mastodon_hashtags or []):
+        if not t:
+            continue
+        t = t.strip().lstrip("#")
+        if t:
+            out.append(t)
+    return out
+
+
 def _build_status(message):
-    """Trim status to fit instance char limit, preserving the link."""
+    """Trim status to fit instance char limit, preserving the link, then append hashtags."""
     link = ""
-    title = message
     for line in message.splitlines():
         if line.startswith("Link:"):
             link = line[len("Link:"):].strip()
             break
-    # First non-Link line is the title; fallback to whole message
     title_line = next((l for l in message.splitlines() if not l.startswith("Link:")), message).strip()
 
-    if not link:
-        return message[:mastodon_max_chars]
+    tags = _normalize_tags()
+    tag_block = " ".join(f"#{t}" for t in tags)
+    tag_overhead = (len(tag_block) + 1) if tag_block else 0
 
-    # Reserve room for "\n" + link
-    overhead = len(link) + 1
+    if not link:
+        budget = mastodon_max_chars - tag_overhead
+        head = message[:budget] if budget > 0 else message[:mastodon_max_chars]
+        return f"{head}\n{tag_block}" if tag_block else head
+
+    overhead = len(link) + 1 + tag_overhead
     max_title = mastodon_max_chars - overhead
     if max_title <= 0:
         return link[:mastodon_max_chars]
     if len(title_line) > max_title:
         title_line = title_line[: max_title - 1].rstrip() + "…"
-    return f"{title_line}\n{link}"
+    text = f"{title_line}\n{link}"
+    if tag_block:
+        text += f"\n{tag_block}"
+    return text
 
 
 def _is_duplicate(link):
