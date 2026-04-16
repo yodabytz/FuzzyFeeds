@@ -1,0 +1,38 @@
+{
+    "_comment": "Each entry is a webhook target. Reference one in feeds.json with the channel key 'webhook|<name>'. Supported formats: discord, slack, ntfy, gotify, mattermost, json, text.",
+
+    "my-discord-channel": {
+        "url": "https://discord.com/api/webhooks/XXXXXXXX/YYYYYYYY",
+        "format": "discord",
+        "username": "FuzzyFeeds",
+        "enabled": true
+    },
+
+    "team-slack": {
+        "url": "https://hooks.slack.com/services/T000/B000/XXXX",
+        "format": "slack",
+        "username": "FuzzyFeeds",
+        "enabled": true
+    },
+
+    "phone-alerts": {
+        "url": "https://ntfy.sh/my-private-topic",
+        "format": "ntfy",
+        "headers": {"Priority": "default", "Tags": "rss"},
+        "enabled": true
+    },
+
+    "gotify-server": {
+        "url": "https://gotify.example.com/message?token=XXXXXXXX",
+        "format": "gotify",
+        "priority": 5,
+        "enabled": true
+    },
+
+    "n8n-flow": {
+        "url": "https://n8n.example.com/webhook/feed-handler",
+        "format": "json",
+        "username": "FuzzyFeeds",
+        "enabled": true
+    }
+}

@@ -126,6 +126,16 @@ except Exception as e:
     raise
 
 try:
+    from webhook_integration import (
+        send_webhook_message,
+        disable_feed_loop as disable_webhook_feed_loop,
+    )
+    logging.info("Imported webhook_integration successfully")
+except Exception as e:
+    logging.error(f"Failed to import webhook_integration: {e}")
+    raise
+
+try:
     from config import (
         enable_matrix,
         enable_discord,
@@ -361,10 +371,12 @@ def start_polling_callbacks():
         send_discord_message(ch, msg)
     def telegram_send(ch, msg):
         send_telegram_message(ch, msg)
+    def webhook_send(name, msg):
+        send_webhook_message(name, msg)
     def private_send(user, msg):
         irc_send_callback(user, msg)
 
-    threading.Thread(target=lambda: centralized_polling.start_polling(irc_send, matrix_send, discord_send, telegram_send, private_send, 300),
+    threading.Thread(target=lambda: centralized_polling.start_polling(irc_send, matrix_send, discord_send, telegram_send, private_send, 300, webhook_send=webhook_send),
                      daemon=True).start()
 
 if __name__ == "__main__":
@@ -390,6 +402,8 @@ if __name__ == "__main__":
         logging.info("Disabled Discord feed loop")
         disable_telegram_feed_loop()
         logging.info("Disabled Telegram feed loop")
+        disable_webhook_feed_loop()
+        logging.info("Disabled Webhook feed loop")
 
         threading.Thread(target=start_primary_irc, daemon=True).start()
         threading.Thread(target=start_secondary_irc_networks, daemon=True).start()

@@ -63,6 +63,12 @@ telegram_chat_id = "@yourchannel"  # Can be channel username, chat ID, or user I
 telegram_channels = ["@yourchannel"]  # List of channels/chats for feeds
 enable_telegram = False  # Set to True to enable Telegram integration
 
+# Webhook configuration (optional)
+# Outbound-only HTTP POST integration. Define endpoints in webhooks.json,
+# then reference them in feeds.json under the channel key "webhook|<name>".
+# See webhooks.json.example for the schema.
+enable_webhooks = False
+
 # Proxy configuration (optional)
 # Set enable_proxy to True to route all connections through proxy
 # Set feeds_only_proxy to True to ONLY route RSS/HTTP requests through proxy

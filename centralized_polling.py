@@ -14,6 +14,7 @@ from status import irc_client, irc_secondary
 from matrix_integration import send_message as matrix_fallback
 from discord_integration import send_discord_message as discord_fallback
 from telegram_integration import send_telegram_message as telegram_fallback
+from webhook_integration import send_webhook_message as webhook_fallback
 
 
 logging.basicConfig(level=logging.INFO)
@@ -28,7 +29,7 @@ def increment_startup_feeds_counter(platform):
             with open(STARTUP_FEEDS_FILE, 'r') as f:
                 counts = json.load(f)
         else:
-            counts = {"IRC": 0, "Matrix": 0, "Discord": 0, "Telegram": 0, "startup_time": time.time()}
+            counts = {"IRC": 0, "Matrix": 0, "Discord": 0, "Telegram": 0, "Webhook": 0, "startup_time": time.time()}
         
         if platform in counts:
             counts[platform] += 1
@@ -40,7 +41,7 @@ def increment_startup_feeds_counter(platform):
     except Exception as e:
         logging.error(f"Error incrementing startup feeds counter for {platform}: {e}")
 
-def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, telegram_send=None, private_send=None):
+def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, telegram_send=None, private_send=None, webhook_send=None):
     logging.info("Polling feeds...")
 
     # Refresh feeds and clear stale entries
@@ -56,7 +57,10 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, telegram_send
                     continue
 
                 # Determine platform and normalized channel key
-                if raw_chan.startswith("!"):
+                if raw_chan.startswith("webhook|"):
+                    chan_type = "webhook"
+                    chan = raw_chan.split("|", 1)[1]
+                elif raw_chan.startswith("!"):
                     chan_type = "matrix"
                     chan = raw_chan
                 elif raw_chan.isdigit():
@@ -95,8 +99,16 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, telegram_send
                 # Image enhancement disabled - was generating fake URLs
                 image_msg = None
 
+                # Dispatch to Webhook
+                if chan_type == "webhook":
+                    combined_msg = f"{title_msg}\n{link_msg}"
+                    if webhook_send:
+                        webhook_send(chan, combined_msg)
+                    else:
+                        webhook_fallback(chan, combined_msg)
+                    increment_startup_feeds_counter("Webhook")
                 # Dispatch to Matrix
-                if chan_type == "matrix":
+                elif chan_type == "matrix":
                     combined_msg = f"{title_msg}\n{link_msg}"
                     if image_msg:
                         combined_msg += f"\n{image_msg}"
@@ -200,8 +212,8 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, telegram_send
         logging.info("No new feed entries found.")
 
 
-def start_polling(irc_send, matrix_send, discord_send, telegram_send, private_send, interval_override=None):
+def start_polling(irc_send, matrix_send, discord_send, telegram_send, private_send, interval_override=None, webhook_send=None):
     while True:
-        poll_feeds(irc_send, matrix_send, discord_send, telegram_send, private_send)
+        poll_feeds(irc_send, matrix_send, discord_send, telegram_send, private_send, webhook_send)
         time.sleep(interval_override or default_interval)
 
