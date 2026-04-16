@@ -136,6 +136,26 @@ except Exception as e:
     raise
 
 try:
+    from mastodon_integration import (
+        send_mastodon_message,
+        disable_feed_loop as disable_mastodon_feed_loop,
+    )
+    logging.info("Imported mastodon_integration successfully")
+except Exception as e:
+    logging.error(f"Failed to import mastodon_integration: {e}")
+    raise
+
+try:
+    from bluesky_integration import (
+        send_bluesky_message,
+        disable_feed_loop as disable_bluesky_feed_loop,
+    )
+    logging.info("Imported bluesky_integration successfully")
+except Exception as e:
+    logging.error(f"Failed to import bluesky_integration: {e}")
+    raise
+
+try:
     from config import (
         enable_matrix,
         enable_discord,
@@ -373,10 +393,14 @@ def start_polling_callbacks():
         send_telegram_message(ch, msg)
     def webhook_send(name, msg):
         send_webhook_message(name, msg)
+    def mastodon_send(ch, msg):
+        send_mastodon_message(ch, msg)
+    def bluesky_send(ch, msg):
+        send_bluesky_message(ch, msg)
     def private_send(user, msg):
         irc_send_callback(user, msg)
 
-    threading.Thread(target=lambda: centralized_polling.start_polling(irc_send, matrix_send, discord_send, telegram_send, private_send, 300, webhook_send=webhook_send),
+    threading.Thread(target=lambda: centralized_polling.start_polling(irc_send, matrix_send, discord_send, telegram_send, private_send, 300, webhook_send=webhook_send, mastodon_send=mastodon_send, bluesky_send=bluesky_send),
                      daemon=True).start()
 
 if __name__ == "__main__":
@@ -404,6 +428,10 @@ if __name__ == "__main__":
         logging.info("Disabled Telegram feed loop")
         disable_webhook_feed_loop()
         logging.info("Disabled Webhook feed loop")
+        disable_mastodon_feed_loop()
+        logging.info("Disabled Mastodon feed loop")
+        disable_bluesky_feed_loop()
+        logging.info("Disabled Bluesky feed loop")
 
         threading.Thread(target=start_primary_irc, daemon=True).start()
         threading.Thread(target=start_secondary_irc_networks, daemon=True).start()

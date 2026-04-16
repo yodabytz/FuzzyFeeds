@@ -15,6 +15,8 @@ from matrix_integration import send_message as matrix_fallback
 from discord_integration import send_discord_message as discord_fallback
 from telegram_integration import send_telegram_message as telegram_fallback
 from webhook_integration import send_webhook_message as webhook_fallback
+from mastodon_integration import send_mastodon_message as mastodon_fallback
+from bluesky_integration import send_bluesky_message as bluesky_fallback
 
 
 logging.basicConfig(level=logging.INFO)
@@ -29,7 +31,7 @@ def increment_startup_feeds_counter(platform):
             with open(STARTUP_FEEDS_FILE, 'r') as f:
                 counts = json.load(f)
         else:
-            counts = {"IRC": 0, "Matrix": 0, "Discord": 0, "Telegram": 0, "Webhook": 0, "startup_time": time.time()}
+            counts = {"IRC": 0, "Matrix": 0, "Discord": 0, "Telegram": 0, "Webhook": 0, "Mastodon": 0, "Bluesky": 0, "startup_time": time.time()}
         
         if platform in counts:
             counts[platform] += 1
@@ -41,7 +43,7 @@ def increment_startup_feeds_counter(platform):
     except Exception as e:
         logging.error(f"Error incrementing startup feeds counter for {platform}: {e}")
 
-def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, telegram_send=None, private_send=None, webhook_send=None):
+def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, telegram_send=None, private_send=None, webhook_send=None, mastodon_send=None, bluesky_send=None):
     logging.info("Polling feeds...")
 
     # Refresh feeds and clear stale entries
@@ -57,7 +59,13 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, telegram_send
                     continue
 
                 # Determine platform and normalized channel key
-                if raw_chan.startswith("webhook|"):
+                if raw_chan == "mastodon":
+                    chan_type = "mastodon"
+                    chan = raw_chan
+                elif raw_chan == "bluesky":
+                    chan_type = "bluesky"
+                    chan = raw_chan
+                elif raw_chan.startswith("webhook|"):
                     chan_type = "webhook"
                     chan = raw_chan.split("|", 1)[1]
                 elif raw_chan.startswith("!"):
@@ -99,8 +107,24 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, telegram_send
                 # Image enhancement disabled - was generating fake URLs
                 image_msg = None
 
+                # Dispatch to Mastodon
+                if chan_type == "mastodon":
+                    combined_msg = f"{title_msg}\n{link_msg}"
+                    if mastodon_send:
+                        mastodon_send(chan, combined_msg)
+                    else:
+                        mastodon_fallback(chan, combined_msg)
+                    increment_startup_feeds_counter("Mastodon")
+                # Dispatch to Bluesky
+                elif chan_type == "bluesky":
+                    combined_msg = f"{title_msg}\n{link_msg}"
+                    if bluesky_send:
+                        bluesky_send(chan, combined_msg)
+                    else:
+                        bluesky_fallback(chan, combined_msg)
+                    increment_startup_feeds_counter("Bluesky")
                 # Dispatch to Webhook
-                if chan_type == "webhook":
+                elif chan_type == "webhook":
                     combined_msg = f"{title_msg}\n{link_msg}"
                     if webhook_send:
                         webhook_send(chan, combined_msg)
@@ -212,8 +236,8 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, telegram_send
         logging.info("No new feed entries found.")
 
 
-def start_polling(irc_send, matrix_send, discord_send, telegram_send, private_send, interval_override=None, webhook_send=None):
+def start_polling(irc_send, matrix_send, discord_send, telegram_send, private_send, interval_override=None, webhook_send=None, mastodon_send=None, bluesky_send=None):
     while True:
-        poll_feeds(irc_send, matrix_send, discord_send, telegram_send, private_send, webhook_send)
+        poll_feeds(irc_send, matrix_send, discord_send, telegram_send, private_send, webhook_send, mastodon_send, bluesky_send)
         time.sleep(interval_override or default_interval)
 

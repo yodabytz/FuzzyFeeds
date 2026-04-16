@@ -23,7 +23,7 @@ def increment_startup_feeds_counter(platform):
             with open(STARTUP_FEEDS_FILE, 'r') as f:
                 counts = json.load(f)
         else:
-            counts = {"IRC": 0, "Matrix": 0, "Discord": 0, "Telegram": 0, "Webhook": 0, "startup_time": time.time()}
+            counts = {"IRC": 0, "Matrix": 0, "Discord": 0, "Telegram": 0, "Webhook": 0, "Mastodon": 0, "Bluesky": 0, "startup_time": time.time()}
 
         if platform in counts:
             counts[platform] += 1
@@ -35,7 +35,7 @@ def increment_startup_feeds_counter(platform):
     except Exception as e:
         logging.error(f"Error incrementing startup feeds counter for {platform}: {e}")
 
-async def async_poll_feeds(irc_send=None, matrix_send=None, discord_send=None, telegram_send=None, private_send=None, webhook_send=None):
+async def async_poll_feeds(irc_send=None, matrix_send=None, discord_send=None, telegram_send=None, private_send=None, webhook_send=None, mastodon_send=None, bluesky_send=None):
     """
     Async feed polling using parallel fetch from async_feed_processor
     """
@@ -75,7 +75,19 @@ async def async_poll_feeds(irc_send=None, matrix_send=None, discord_send=None, t
                 link_msg = f"Link: {link}"
 
                 # Dispatch to appropriate platform
-                if platform == 'webhook':
+                if platform == 'mastodon':
+                    combined_msg = f"{title_msg}\n{link_msg}"
+                    if mastodon_send:
+                        mastodon_send(channel, combined_msg)
+                    increment_startup_feeds_counter("Mastodon")
+
+                elif platform == 'bluesky':
+                    combined_msg = f"{title_msg}\n{link_msg}"
+                    if bluesky_send:
+                        bluesky_send(channel, combined_msg)
+                    increment_startup_feeds_counter("Bluesky")
+
+                elif platform == 'webhook':
                     combined_msg = f"{title_msg}\n{link_msg}"
                     if webhook_send:
                         # Channel may be stored as "webhook|<name>" or just "<name>"
@@ -129,7 +141,7 @@ async def async_poll_feeds(irc_send=None, matrix_send=None, discord_send=None, t
         import traceback
         traceback.print_exc()
 
-def poll_feeds_sync(irc_send=None, matrix_send=None, discord_send=None, telegram_send=None, private_send=None, webhook_send=None):
+def poll_feeds_sync(irc_send=None, matrix_send=None, discord_send=None, telegram_send=None, private_send=None, webhook_send=None, mastodon_send=None, bluesky_send=None):
     """
     Synchronous wrapper for async polling
     """
@@ -146,7 +158,7 @@ def poll_feeds_sync(irc_send=None, matrix_send=None, discord_send=None, telegram
 
         # Run async polling
         loop.run_until_complete(
-            async_poll_feeds(irc_send, matrix_send, discord_send, telegram_send, private_send, webhook_send)
+            async_poll_feeds(irc_send, matrix_send, discord_send, telegram_send, private_send, webhook_send, mastodon_send, bluesky_send)
         )
 
     except Exception as e:
@@ -158,7 +170,7 @@ def poll_feeds_sync(irc_send=None, matrix_send=None, discord_send=None, telegram
         except Exception as fallback_error:
             logging.error(f"Fallback polling also failed: {fallback_error}")
 
-def start_polling(irc_send, matrix_send, discord_send, telegram_send, private_send, interval_override=None, webhook_send=None):
+def start_polling(irc_send, matrix_send, discord_send, telegram_send, private_send, interval_override=None, webhook_send=None, mastodon_send=None, bluesky_send=None):
     """
     Start async polling loop
     Drop-in replacement for centralized_polling.start_polling()
@@ -167,7 +179,7 @@ def start_polling(irc_send, matrix_send, discord_send, telegram_send, private_se
 
     while True:
         try:
-            poll_feeds_sync(irc_send, matrix_send, discord_send, telegram_send, private_send, webhook_send)
+            poll_feeds_sync(irc_send, matrix_send, discord_send, telegram_send, private_send, webhook_send, mastodon_send, bluesky_send)
         except Exception as e:
             logging.error(f"Polling iteration error: {e}")
             import traceback

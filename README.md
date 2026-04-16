@@ -1,10 +1,10 @@
 # FuzzyFeeds - Multi-Platform RSS Bot
 
-**Version 1.2.2**
+**Version 1.2.3**
 
 🌐 **Official Website:** [https://www.fuzzyfeeds.com](https://www.fuzzyfeeds.com)
 
-FuzzyFeeds is a multi-platform RSS aggregation bot that supports IRC, Matrix, Discord, Telegram, and outbound webhooks. It features a real-time web dashboard for monitoring feeds, connections, and errors.
+FuzzyFeeds is a multi-platform RSS aggregation bot that supports IRC, Matrix, Discord, Telegram, Mastodon, Bluesky, and outbound webhooks. It features a real-time web dashboard for monitoring feeds, connections, and errors.
 
 <img src="https://raw.githubusercontent.com/yodabytz/FuzzyFeeds/refs/heads/main/fuzzyfeeds-logo-lg.png" alt="FuzzyFeeds" width="200" height="200">
 
@@ -27,6 +27,13 @@ FuzzyFeeds is a comprehensive RSS aggregation bot that seamlessly integrates wit
   - **No Bot Account Needed**: Drop in a webhook URL — no server invite, gateway connection, or auth required
   - **Per-Endpoint Config**: Define endpoints in `webhooks.json`, reference from feeds via `webhook|<name>` keys
   - **Database-Backed Dedup**: Same per-channel duplicate suppression as the other integrations
+- **Mastodon** *(new in v1.2.3)*: Post feed items to a Mastodon timeline using an instance access token
+  - **Configurable Visibility**: `public`, `unlisted`, `private`, or `direct`
+  - **Char-Limit Aware**: Title truncation preserves the link within the instance's status length
+- **Bluesky** *(new in v1.2.3)*: Post feed items to a Bluesky account via the AT Protocol app-password flow
+  - **Auto Session Refresh**: Acquires and refreshes JWT sessions transparently
+  - **Rich Facets**: Renders the link as a clickable URL and applies hashtag facets so posts appear in tag search and custom feeds
+  - **Discovery Hashtags**: Optional `bluesky_hashtags` config appends searchable tags (e.g., `#news`, `#rss`) to every post
 
 ### 📊 Real-time Web Dashboard
 - **🌙 Dark/Light Mode Toggle**: Seamlessly switch between dark and light themes with persistent preference storage
@@ -258,6 +265,19 @@ See `PROXY_README.md` for detailed proxy configuration instructions and use case
 
 ## Recent Updates & Fixes
 
+**Version 1.2.3 (April 16, 2026):**
+- ✅ **Mastodon Integration**: Outbound posts to a Mastodon account using an instance access token
+  - Configurable visibility (`public`, `unlisted`, `private`, `direct`)
+  - Char-limit aware: truncates title to fit while preserving the link
+  - Channel key in `feeds.json` is the literal string `mastodon`
+- ✅ **Bluesky Integration**: Outbound posts via the AT Protocol app-password flow
+  - Automatic JWT session acquisition and refresh
+  - Rich-text facets so the URL renders as a clickable link
+  - Optional `bluesky_hashtags` config appends searchable hashtag facets to every post for discoverability
+  - Channel key in `feeds.json` is the literal string `bluesky`
+- ✅ **Help & Command Audit**: Added missing `!help` and `!webhook` entries to `help.json`, removed stale OWNER entries (`set`, `connect`, `addnetwork`, `delnetwork`) that were never standalone commands. Fixed `!latest <#channel>` IRC composite-key lookup, `!setinterval` persistence to `intervals.json`, and explicit `int()` parse errors in `!schedule` / `!mute`.
+- ✅ **Webhook Management**: New `!webhook` IRC/Matrix/Discord/Telegram command (owner only) for `list`, `add`, `del`, `enable`, `disable`, `test`. Dashboard gains an inline add form and per-row delete buttons in the Webhooks panel.
+
 **Version 1.2.2 (April 15, 2026):**
 - ✅ **Outbound Webhook Integration**: Push feed items to any HTTP endpoint
   - Supported formats: `discord`, `slack`, `ntfy`, `gotify`, `mattermost`, `json`, `text`
@@ -346,6 +366,8 @@ See `PROXY_README.md` for detailed proxy configuration instructions and use case
 - `discord_integration.py` - Discord integration
 - `telegram_integration.py` - Telegram integration
 - `webhook_integration.py` - Outbound webhook integration (NEW in v1.2.2)
+- `mastodon_integration.py` - Mastodon outbound integration (NEW in v1.2.3)
+- `bluesky_integration.py` - Bluesky (AT Protocol) outbound integration (NEW in v1.2.3)
 - `centralized_polling.py` - Centralized RSS feed polling (legacy)
 - `feed.py` - Feed management and parsing
 - `commands.py` - Bot command handling

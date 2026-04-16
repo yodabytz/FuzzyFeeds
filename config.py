@@ -63,6 +63,23 @@ telegram_chat_id = "@yourchannel"  # Can be channel username, chat ID, or user I
 telegram_channels = ["@yourchannel"]  # List of channels/chats for feeds
 enable_telegram = False  # Set to True to enable Telegram integration
 
+# Mastodon configuration (optional, single-account v1)
+mastodon_instance = "https://mastodon.social"  # Your instance URL
+mastodon_token = ""                             # Access token from Settings -> Applications
+mastodon_visibility = "public"                  # public, unlisted, private, direct
+mastodon_max_chars = 500                        # Most instances cap at 500
+enable_mastodon = False
+
+# Bluesky configuration (optional, single-account v1)
+bluesky_handle = ""           # e.g. "yourname.bsky.social"
+bluesky_app_password = ""     # Created in Bluesky Settings -> App Passwords
+bluesky_pds = "https://bsky.social"
+enable_bluesky = False
+# Hashtags appended to every Bluesky post (for discovery via tag search and
+# custom feeds). Use plain words without the leading '#'. Example:
+#   bluesky_hashtags = ["news", "rss", "fuzzyfeeds"]
+bluesky_hashtags = []
+
 # Webhook configuration (optional)
 # Outbound-only HTTP POST integration. Define endpoints in webhooks.json,
 # then reference them in feeds.json under the channel key "webhook|<name>".
