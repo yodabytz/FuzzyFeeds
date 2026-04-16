@@ -49,7 +49,7 @@ POSTED_LOG_FILE     = os.path.join(os.path.dirname(__file__), "posted_links.json
 STARTUP_FEEDS_FILE = os.path.join(os.path.dirname(__file__), "startup_feeds_count.json")
 
 # Initialize startup feeds counter to zero when dashboard starts
-startup_feeds_count = {"IRC": 0, "Matrix": 0, "Discord": 0, "Telegram": 0, "startup_time": time.time()}
+startup_feeds_count = {"IRC": 0, "Matrix": 0, "Discord": 0, "Telegram": 0, "Webhook": 0, "startup_time": time.time()}
 try:
     with open(STARTUP_FEEDS_FILE, 'w') as f:
         json.dump(startup_feeds_count, f)
@@ -164,7 +164,7 @@ def events():
                 yield f"data: {json.dumps(startup_counts)}\n\n"
             except Exception as e:
                 # Fallback to zero counts if file doesn't exist
-                startup_counts = {"IRC": 0, "Matrix": 0, "Discord": 0, "Telegram": 0}
+                startup_counts = {"IRC": 0, "Matrix": 0, "Discord": 0, "Telegram": 0, "Webhook": 0}
                 yield f"data: {json.dumps(startup_counts)}\n\n"
             time.sleep(1)
     return Response(generate(), mimetype='text/event-stream')
@@ -999,6 +999,56 @@ DASHBOARD_TEMPLATE = r"""
             {% else %}
               <p>No Telegram chats configured.</p>
             {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Webhooks (collapsible) -->
+    <div class="row">
+      <div class="col-md-12">
+        <div class="card">
+          <div class="card-header bg-secondary text-white" style="cursor: pointer;" data-toggle="collapse" data-target="#webhooksCollapse">
+            <i class="fas fa-plug"></i> Webhooks
+            <span class="badge badge-light ml-2">{{ webhooks|length }} endpoint{% if webhooks|length != 1 %}s{% endif %} &middot; {{ webhook_feeds_total }} feed{% if webhook_feeds_total != 1 %}s{% endif %}</span>
+            <i class="fas fa-chevron-down float-right"></i>
+          </div>
+          <div id="webhooksCollapse" class="collapse">
+            <div class="card-body">
+              {% if webhooks %}
+              <div class="table-responsive">
+                <table class="table table-sm table-bordered">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th style="width:120px;">Format</th>
+                      <th style="width:90px;">Enabled</th>
+                      <th style="width:80px;">Feeds</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for name, info in webhooks.items() %}
+                      <tr>
+                        <td><code>webhook|{{ name }}</code></td>
+                        <td>{{ info.format }}</td>
+                        <td>
+                          {% if info.enabled %}
+                            <span class="badge badge-success">on</span>
+                          {% else %}
+                            <span class="badge badge-secondary">off</span>
+                          {% endif %}
+                        </td>
+                        <td class="text-center">{{ info.feed_count }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+              <p class="text-muted small mb-0">Endpoints are defined in <code>webhooks.json</code>. Reference one from <code>feeds.json</code> with the channel key <code>webhook|&lt;name&gt;</code>.</p>
+              {% else %}
+                <p class="text-muted mb-0">No webhooks configured. Create <code>webhooks.json</code> (see <code>webhooks.json.example</code>) to add outbound endpoints.</p>
+              {% endif %}
+            </div>
           </div>
         </div>
       </div>
@@ -2507,6 +2557,30 @@ def index():
     telegram_feeds_count = sum(len(v) for v in telegram_channels.values())
     telegram_chans_count = len(telegram_channels)
 
+    # Webhooks
+    try:
+        from webhook_integration import load_webhooks
+        webhooks_cfg = {k: v for k, v in load_webhooks().items() if not k.startswith("_")}
+    except Exception:
+        webhooks_cfg = {}
+    webhook_feed_counts = {}
+    for k, feeds_dict in feed.channel_feeds.items():
+        if k.startswith("webhook|"):
+            name = k.split("|", 1)[1]
+            webhook_feed_counts[name] = len(feeds_dict)
+    webhooks_view = {}
+    for name, cfg in webhooks_cfg.items():
+        webhooks_view[name] = {
+            "format": cfg.get("format", "json"),
+            "enabled": bool(cfg.get("enabled", True)),
+            "feed_count": webhook_feed_counts.get(name, 0),
+        }
+    # Include any orphan webhook keys present in feeds.json but missing from webhooks.json
+    for name, count in webhook_feed_counts.items():
+        if name not in webhooks_view:
+            webhooks_view[name] = {"format": "(missing)", "enabled": False, "feed_count": count}
+    webhook_feeds_total = sum(v["feed_count"] for v in webhooks_view.values())
+
     return render_template_string(
         DASHBOARD_TEMPLATE,
         uptime=uptime_str,
@@ -2536,7 +2610,9 @@ def index():
         telegram_feeds_count=telegram_feeds_count,
         telegram_chans_count=telegram_chans_count,
         telegram_status=telegram_status,
-        telegram_chats=telegram_channels
+        telegram_chats=telegram_channels,
+        webhooks=webhooks_view,
+        webhook_feeds_total=webhook_feeds_total
     )
 
 @app.route('/analytics_data')
