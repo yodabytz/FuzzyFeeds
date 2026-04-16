@@ -125,8 +125,10 @@ class Database:
                 custom_format TEXT,
                 use_embeds INTEGER DEFAULT 0,
                 embed_color TEXT,
+                include_image INTEGER DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (feed_id) REFERENCES feeds(id)
+                FOREIGN KEY (feed_id) REFERENCES feeds(id),
+                UNIQUE(feed_id, platform)
             )
         ''')
 
@@ -165,6 +167,15 @@ class Database:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_feeds_channel ON feeds(channel)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_feeds_active ON feeds(active)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_analytics_date ON feed_analytics(date)')
+
+        # Migration: add include_image to feed_templates if missing
+        cursor.execute("PRAGMA table_info(feed_templates)")
+        cols = [r[1] for r in cursor.fetchall()]
+        if 'include_image' not in cols:
+            try:
+                cursor.execute('ALTER TABLE feed_templates ADD COLUMN include_image INTEGER DEFAULT 1')
+            except sqlite3.OperationalError:
+                pass
 
         conn.commit()
         logging.info("Database initialized successfully")
@@ -628,24 +639,20 @@ class Database:
 
     def set_feed_template(self, feed_id: int, platform: str, title_format: str = None,
                          link_format: str = None, custom_format: str = None,
-                         use_embeds: bool = False, embed_color: str = None):
+                         use_embeds: bool = False, embed_color: str = None,
+                         include_image: bool = True):
         """Set custom template for a feed on a platform"""
         conn = self.get_connection()
         cursor = conn.cursor()
 
+        cursor.execute('DELETE FROM feed_templates WHERE feed_id = ? AND platform = ?',
+                       (feed_id, platform))
         cursor.execute('''
             INSERT INTO feed_templates (feed_id, platform, title_format, link_format,
-                                       custom_format, use_embeds, embed_color)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                title_format = ?,
-                link_format = ?,
-                custom_format = ?,
-                use_embeds = ?,
-                embed_color = ?
+                                       custom_format, use_embeds, embed_color, include_image)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (feed_id, platform, title_format, link_format, custom_format,
-              int(use_embeds), embed_color, title_format, link_format,
-              custom_format, int(use_embeds), embed_color))
+              int(use_embeds), embed_color, int(include_image)))
 
         conn.commit()
 
