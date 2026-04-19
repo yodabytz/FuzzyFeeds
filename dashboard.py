@@ -231,7 +231,9 @@ def connection_status_endpoint():
             "irc_servers": irc_servers,
             "matrix_status": "red",
             "discord_status": "red",
-            "telegram_status": "red"
+            "telegram_status": "red",
+            "mastodon_status": "red",
+            "bluesky_status": "red"
         })
     
     # Bot is running, check individual connection statuses
@@ -252,7 +254,19 @@ def connection_status_endpoint():
         telegram_status = "green" if telegram_bot_instance else "red"
     except:
         telegram_status = "red"
-    
+
+    try:
+        from config import enable_mastodon, mastodon_token
+        mastodon_status = "green" if enable_mastodon and mastodon_token else "red"
+    except:
+        mastodon_status = "red"
+
+    try:
+        from config import enable_bluesky, bluesky_app_password
+        bluesky_status = "green" if enable_bluesky and bluesky_app_password else "red"
+    except:
+        bluesky_status = "red"
+
     # IRC status from connection_state
     irc_servers = {}
     if config.server:
@@ -272,7 +286,9 @@ def connection_status_endpoint():
         "irc_servers": irc_servers,
         "matrix_status": matrix_status,
         "discord_status": discord_status,
-        "telegram_status": telegram_status
+        "telegram_status": telegram_status,
+        "mastodon_status": mastodon_status,
+        "bluesky_status": bluesky_status
     })
 
 def build_feed_tree(networks):
@@ -651,13 +667,21 @@ DASHBOARD_TEMPLATE = r"""
             <div id="telegram_status_container">
               <span class="status-dot {% if telegram_status=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>Telegram:</strong> telegram.org
             </div>
+            <div id="mastodon_status_container">
+              <span class="status-dot {% if mastodon_status=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>Mastodon:</strong> {{ mastodon_instance }}
+            </div>
+            <div id="bluesky_status_container">
+              <span class="status-dot {% if bluesky_status=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>Bluesky:</strong> bsky.social
+            </div>
             <hr>
             <div id="posted_counts">
               <strong>Feeds Posted:</strong><br>
               IRC: <span id="irc_posted">0</span><br>
               Matrix: <span id="matrix_posted">0</span><br>
               Discord: <span id="discord_posted">0</span><br>
-              Telegram: <span id="telegram_posted">0</span>
+              Telegram: <span id="telegram_posted">0</span><br>
+              Mastodon: <span id="mastodon_posted">0</span><br>
+              Bluesky: <span id="bluesky_posted">0</span>
             </div>
           </div>
         </div>
@@ -675,7 +699,9 @@ DASHBOARD_TEMPLATE = r"""
               IRC: <span id="irc_feeds">{{ irc_feeds_count }}</span> feeds across <span id="irc_chans">{{ irc_chans_count }}</span> channels<br>
               Matrix: <span id="matrix_feeds">{{ matrix_feeds_count }}</span> feeds across <span id="matrix_chans">{{ matrix_chans_count }}</span> rooms<br>
               Discord: <span id="discord_feeds">{{ discord_feeds_count }}</span> feeds across <span id="discord_chans">{{ discord_chans_count }}</span> channels<br>
-              Telegram: <span id="telegram_feeds">{{ telegram_feeds_count }}</span> feeds across <span id="telegram_chans">{{ telegram_chans_count }}</span> chats
+              Telegram: <span id="telegram_feeds">{{ telegram_feeds_count }}</span> feeds across <span id="telegram_chans">{{ telegram_chans_count }}</span> chats<br>
+              Mastodon: <span id="mastodon_feeds">{{ mastodon_feeds_count }}</span> feeds<br>
+              Bluesky: <span id="bluesky_feeds">{{ bluesky_feeds_count }}</span> feeds
             </div>
           </div>
         </div>
@@ -1371,6 +1397,8 @@ DASHBOARD_TEMPLATE = r"""
       document.getElementById('matrix_posted').innerText  = pc.Matrix || 0;
       document.getElementById('discord_posted').innerText = pc.Discord || 0;
       document.getElementById('telegram_posted').innerText = pc.Telegram || 0;
+      document.getElementById('mastodon_posted').innerText = pc.Mastodon || 0;
+      document.getElementById('bluesky_posted').innerText = pc.Bluesky || 0;
     };
     
     // Real-time connection status updates
@@ -1408,6 +1436,20 @@ DASHBOARD_TEMPLATE = r"""
           if (telegramContainer) {
             const telegramDotClass = data.telegram_status === 'green' ? 'status-green' : 'status-red';
             telegramContainer.innerHTML = `<span class="status-dot ${telegramDotClass}"></span><strong>Telegram:</strong> telegram.org`;
+          }
+
+          // Update Mastodon status dot
+          const mastodonContainer = document.getElementById('mastodon_status_container');
+          if (mastodonContainer) {
+            const mastodonDotClass = data.mastodon_status === 'green' ? 'status-green' : 'status-red';
+            mastodonContainer.innerHTML = `<span class="status-dot ${mastodonDotClass}"></span><strong>Mastodon:</strong> mastodon.social`;
+          }
+
+          // Update Bluesky status dot
+          const blueskyContainer = document.getElementById('bluesky_status_container');
+          if (blueskyContainer) {
+            const blueskyDotClass = data.bluesky_status === 'green' ? 'status-green' : 'status-red';
+            blueskyContainer.innerHTML = `<span class="status-dot ${blueskyDotClass}"></span><strong>Bluesky:</strong> bsky.social`;
           }
         })
         .catch(error => {
@@ -2558,6 +2600,18 @@ def index():
     except:
         telegram_status = "red"
 
+    try:
+        mastodon_status = "green" if config.enable_mastodon and getattr(config, 'mastodon_token', '') else "red"
+        mastodon_instance_display = getattr(config, 'mastodon_instance', '').replace('https://', '').rstrip('/') or 'not configured'
+    except:
+        mastodon_status = "red"
+        mastodon_instance_display = "not configured"
+
+    try:
+        bluesky_status = "green" if config.enable_bluesky and getattr(config, 'bluesky_app_password', '') else "red"
+    except:
+        bluesky_status = "red"
+
     # Core stats
     uptime_seconds = int(time.time() - start_time)
     days = uptime_seconds // 86400
@@ -2611,6 +2665,9 @@ def index():
     discord_chans_count = len(discord_channels)
     telegram_feeds_count = sum(len(v) for v in telegram_channels.values())
     telegram_chans_count = len(telegram_channels)
+
+    mastodon_feeds_count = len(feed.channel_feeds.get("mastodon", {}))
+    bluesky_feeds_count = len(feed.channel_feeds.get("bluesky", {}))
 
     # Webhooks
     try:
@@ -2666,6 +2723,11 @@ def index():
         telegram_chans_count=telegram_chans_count,
         telegram_status=telegram_status,
         telegram_chats=telegram_channels,
+        mastodon_status=mastodon_status,
+        mastodon_instance=mastodon_instance_display,
+        mastodon_feeds_count=mastodon_feeds_count,
+        bluesky_status=bluesky_status,
+        bluesky_feeds_count=bluesky_feeds_count,
         webhooks=webhooks_view,
         webhook_feeds_total=webhook_feeds_total
     )
