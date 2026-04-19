@@ -308,8 +308,13 @@ def build_feed_tree(networks):
             server, channel = "Discord", key
         elif key.startswith("@") or (key.startswith("-") and key[1:].isdigit()):
             server, channel = "Telegram", key
+        elif key == "mastodon":
+            server, channel = "Mastodon", "timeline"
+        elif key == "bluesky":
+            server, channel = "Bluesky", "timeline"
+        elif key.startswith("webhook|"):
+            server, channel = "Webhooks", key.split("|", 1)[1]
         else:
-            # Skip unknown formats
             continue
 
         tree.setdefault(server, {}).setdefault(channel, [])
@@ -323,6 +328,9 @@ def sort_feed_tree(feed_tree):
         if sl == "matrix":   return (2, sl)
         if sl == "discord":  return (3, sl)
         if sl == "telegram": return (4, sl)
+        if sl == "mastodon": return (5, sl)
+        if sl == "bluesky":  return (6, sl)
+        if sl == "webhooks": return (7, sl)
         return (1, sl)
     return sorted(feed_tree.items(), key=lambda x: order_key(x[0]))
 
@@ -417,13 +425,32 @@ def build_telegram_section_tree(tree):
             lines.append(subindent + conn2 + f'<span style="color:#9f7aea;">{f["feed_name"]}</span>: {f["link"]}')
     return "\n".join(lines)
 
+def build_generic_section_tree(name, tree, color="#d63384"):
+    """Generic section tree for platforms with simple feed lists (Mastodon, Bluesky, Webhooks)"""
+    lines = [f'<span style="color:{color}; font-weight:bold;">{name}</span>']
+    channels = sorted(tree.keys())
+    for ci, ch in enumerate(channels):
+        last_c = (ci == len(channels)-1)
+        conn = dash("└── ") if last_c else dash("├── ")
+        lines.append(conn + f'<span style="color:{color}; font-weight:bold;">{ch}</span>')
+        subindent = (dash("│")+"   " if not last_c else "    ")
+        for fi, f in enumerate(tree[ch]):
+            last_f = (fi == len(tree[ch])-1)
+            conn2 = dash("└── ") if last_f else dash("├── ")
+            lines.append(subindent + conn2 + f'<span style="color:#9f7aea;">{f["feed_name"]}</span>: {f["link"]}')
+    return "\n".join(lines)
+
+
 def build_unicode_tree(sorted_tree):
     parts = []
     irc_servers = {}
     matrix_rooms = {}
     discord_channels = {}
     telegram_channels = {}
-    
+    mastodon_feeds = {}
+    bluesky_feeds = {}
+    webhook_feeds = {}
+
     # Separate the different types of networks
     for srv, chans in sorted_tree:
         sl = srv.lower()
@@ -433,26 +460,44 @@ def build_unicode_tree(sorted_tree):
             discord_channels.update(chans)
         elif sl == "telegram":
             telegram_channels.update(chans)
+        elif sl == "mastodon":
+            mastodon_feeds.update(chans)
+        elif sl == "bluesky":
+            bluesky_feeds.update(chans)
+        elif sl == "webhooks":
+            webhook_feeds.update(chans)
         else:
             # This is an IRC server
             irc_servers[srv] = chans
-    
+
     # Build IRC networks first (they appear directly at root level)
     if irc_servers:
         parts.append(build_irc_networks_tree(irc_servers))
-    
+
     # Add Matrix section
     if matrix_rooms:
         parts.append(build_matrix_tree(matrix_rooms))
-    
-    # Add Discord section  
+
+    # Add Discord section
     if discord_channels:
         parts.append(build_discord_section_tree(discord_channels))
-    
+
     # Add Telegram section
     if telegram_channels:
         parts.append(build_telegram_section_tree(telegram_channels))
-    
+
+    # Add Mastodon section
+    if mastodon_feeds:
+        parts.append(build_generic_section_tree("Mastodon", mastodon_feeds, "#6364ff"))
+
+    # Add Bluesky section
+    if bluesky_feeds:
+        parts.append(build_generic_section_tree("Bluesky", bluesky_feeds, "#0085ff"))
+
+    # Add Webhooks section
+    if webhook_feeds:
+        parts.append(build_generic_section_tree("Webhooks", webhook_feeds, "#6c757d"))
+
     return "\n".join(parts)
 
 DASHBOARD_TEMPLATE = r"""
