@@ -1075,6 +1075,57 @@ DASHBOARD_TEMPLATE = r"""
       </div>
     </div>
 
+    <!-- Mastodon / Bluesky Cards -->
+    <div class="row">
+      <div class="col-lg-6 col-md-6 col-sm-12">
+        <div class="card">
+          <div class="card-header text-white" style="background-color:#6364ff;">Mastodon <small>({{ mastodon_instance }})</small></div>
+          <div class="card-body">
+            {% if mastodon_feed_list %}
+            <div class="table-responsive">
+              <table class="table table-sm table-bordered">
+                <thead>
+                  <tr><th>Feed</th><th>URL</th></tr>
+                </thead>
+                <tbody>
+                  {% for name, url in mastodon_feed_list.items() %}
+                    <tr><td>{{ name }}</td><td class="text-truncate" style="max-width:300px;">{{ url }}</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% else %}
+              <p>No Mastodon feeds configured. Add feeds under the <code>"mastodon"</code> key in <code>feeds.json</code>.</p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-6 col-md-6 col-sm-12">
+        <div class="card">
+          <div class="card-header text-white" style="background-color:#0085ff;">Bluesky <small>(bsky.social)</small></div>
+          <div class="card-body">
+            {% if bluesky_feed_list %}
+            <div class="table-responsive">
+              <table class="table table-sm table-bordered">
+                <thead>
+                  <tr><th>Feed</th><th>URL</th></tr>
+                </thead>
+                <tbody>
+                  {% for name, url in bluesky_feed_list.items() %}
+                    <tr><td>{{ name }}</td><td class="text-truncate" style="max-width:300px;">{{ url }}</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% else %}
+              <p>No Bluesky feeds configured. Add feeds under the <code>"bluesky"</code> key in <code>feeds.json</code>.</p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Webhooks (collapsible) -->
     <div class="row">
       <div class="col-md-12">
@@ -2773,6 +2824,8 @@ def index():
         mastodon_feeds_count=mastodon_feeds_count,
         bluesky_status=bluesky_status,
         bluesky_feeds_count=bluesky_feeds_count,
+        mastodon_feed_list=feed.channel_feeds.get("mastodon", {}),
+        bluesky_feed_list=feed.channel_feeds.get("bluesky", {}),
         webhooks=webhooks_view,
         webhook_feeds_total=webhook_feeds_total
     )
