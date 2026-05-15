@@ -192,32 +192,29 @@ def save_posted_links():
     save_json(POSTED_LINKS_FILE, posted_links)
 
 def cleanup_old_posted_links():
-    """Remove posted link entries older than 1 month to prevent file bloat"""
+    """Cap posted_links to the last 500 entries per channel to prevent file bloat.
+
+    Previous logic (cleanup at >20, keep half) was too aggressive — active
+    platforms got pruned to ~10 entries per polling cycle, which let old feed
+    items reappear and re-post once they were no longer remembered. 500 covers
+    weeks of normal turnover even on busy channels.
+    """
     global posted_links
     if not os.path.exists(POSTED_LINKS_FILE):
         return
-    
-    one_month_ago = time.time() - (30 * 24 * 60 * 60)  # 30 days in seconds
+
+    MAX_LINKS_PER_CHANNEL = 500
     cleaned = False
-    
+
     for channel in list(posted_links.keys()):
-        if channel not in posted_links:
-            continue
-            
         original_count = len(posted_links[channel])
-        # Since we don't store timestamps with links, we'll use a heuristic:
-        # Keep only the most recent half of the links for each channel
-        # This is a reasonable approximation for cleanup
-        if original_count > 20:  # Only cleanup if there are many links
-            keep_count = max(10, original_count // 2)  # Keep at least 10, or half
-            posted_links[channel] = posted_links[channel][-keep_count:]
-            if len(posted_links[channel]) < original_count:
-                cleaned = True
-                logging.info(f"Cleaned {original_count - len(posted_links[channel])} old entries from {channel}")
-    
+        if original_count > MAX_LINKS_PER_CHANNEL:
+            posted_links[channel] = posted_links[channel][-MAX_LINKS_PER_CHANNEL:]
+            cleaned = True
+            logging.info(f"Capped {channel} from {original_count} to {MAX_LINKS_PER_CHANNEL} entries")
+
     if cleaned:
         save_posted_links()
-        logging.info("Completed cleanup of old posted links")
 
 def remove_duplicates_from_posted_links():
     """Remove duplicate entries from posted_links while preserving order"""
