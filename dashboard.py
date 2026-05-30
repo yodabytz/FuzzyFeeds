@@ -510,266 +510,487 @@ DASHBOARD_TEMPLATE = r"""
   <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
   <link href="https://fonts.googleapis.com/css2?family=Passion+One&family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
+          integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4"
+          crossorigin="anonymous"></script>
   <style>
+    /* ============ DESIGN TOKENS ============ */
     :root {
-      --bg-color: #ffffff;
-      --text-color: #000000;
+      --bg-color: #f4f5f9;
+      --bg-elevated: #ffffff;
+      --text-color: #1a1d29;
+      --text-muted: #6c7293;
       --card-bg: #ffffff;
-      --card-border: #dee2e6;
-      --tree-bg: #f8f9fa;
-      --navbar-bg: #343a40;
+      --card-border: #e6e8f0;
+      --tree-bg: #f8f9fc;
+      --navbar-bg: #ffffff;
+      --navbar-border: #e6e8f0;
+      --navbar-text: #1a1d29;
+      --sidebar-bg: #ffffff;
+      --sidebar-border: #e6e8f0;
+      --sidebar-link: #4b5168;
+      --sidebar-link-hover-bg: #f1ecff;
+      --sidebar-link-active-bg: #ede5ff;
+      --sidebar-link-active-text: #7c3aed;
       --table-bg: #ffffff;
-      --table-stripe: #f8f9fa;
+      --table-stripe: #f8f9fc;
+      --shadow-sm: 0 1px 2px rgba(20, 25, 50, 0.04), 0 1px 1px rgba(20, 25, 50, 0.02);
+      --shadow-md: 0 4px 12px rgba(20, 25, 50, 0.05), 0 2px 4px rgba(20, 25, 50, 0.03);
+      --accent: #7c3aed;
+      --accent-soft: #ede5ff;
+      --accent-rgb: 124, 58, 237;
     }
-    
+
     [data-theme="dark"] {
-      --bg-color: #2d3436;
-      --text-color: #ffffff;
-      --card-bg: #3d4446;
-      --card-border: #5a6268;
-      --tree-bg: #3d4446;
-      --navbar-bg: #1e2124;
-      --table-bg: #3d4446;
-      --table-stripe: #4a5258;
+      --bg-color: #0f1117;
+      --bg-elevated: #161922;
+      --text-color: #e7e9f1;
+      --text-muted: #8a90a8;
+      --card-bg: #1a1e2a;
+      --card-border: #262b3b;
+      --tree-bg: #11141c;
+      --navbar-bg: #11141c;
+      --navbar-border: #1f2433;
+      --navbar-text: #e7e9f1;
+      --sidebar-bg: #11141c;
+      --sidebar-border: #1f2433;
+      --sidebar-link: #a4abc4;
+      --sidebar-link-hover-bg: #1c2030;
+      --sidebar-link-active-bg: #2a1f4a;
+      --sidebar-link-active-text: #c4a8ff;
+      --table-bg: #1a1e2a;
+      --table-stripe: #1f2432;
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+      --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.35), 0 2px 4px rgba(0, 0, 0, 0.2);
+      --accent: #a78bfa;
+      --accent-soft: #2a1f4a;
+      --accent-rgb: 167, 139, 250;
     }
-    
-    body { 
-      font-family: 'Montserrat', sans-serif; 
-      padding-top:60px;
+
+    * { box-sizing: border-box; }
+
+    body {
+      font-family: 'Montserrat', sans-serif;
+      margin: 0;
+      padding-top: 64px;
       background-color: var(--bg-color);
       color: var(--text-color);
-      transition: background-color 0.3s ease, color 0.3s ease;
+      transition: background-color 0.25s ease, color 0.25s ease;
+      -webkit-font-smoothing: antialiased;
     }
-    h1 { font-family:'Passion One',sans-serif;font-size:3rem; color: var(--text-color);}
-    .card { 
-      margin-bottom:20px;
-      border-radius:15px;
-      box-shadow:0 4px 8px rgba(0,0,0,0.1);
+
+    h1, h2, h3, h4, h5 { color: var(--text-color); }
+    h1 { font-family: 'Passion One', sans-serif; font-size: 2.4rem; margin: 0; letter-spacing: 0.5px; }
+
+    a { color: var(--accent); }
+    a:hover { color: var(--accent); text-decoration: none; opacity: 0.85; }
+
+    /* ============ TOP BAR ============ */
+    .topbar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: 64px;
+      background: var(--navbar-bg);
+      border-bottom: 1px solid var(--navbar-border);
+      display: flex;
+      align-items: center;
+      padding: 0 24px;
+      z-index: 1030;
+      box-shadow: var(--shadow-sm);
+    }
+    .topbar .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--navbar-text);
+      font-family: 'Passion One', sans-serif;
+      font-size: 1.6rem;
+      letter-spacing: 0.5px;
+    }
+    .topbar .brand img { width: 36px; height: 36px; border-radius: 8px; }
+    .topbar .brand .accent { color: var(--accent); }
+    .topbar .spacer { flex: 1; }
+    .topbar .topbar-actions { display: flex; align-items: center; gap: 16px; }
+
+    /* ============ APP SHELL ============ */
+    .app-shell {
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr) 320px;
+      gap: 24px;
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 24px 24px 48px 24px;
+      align-items: start;
+    }
+
+    /* ============ SIDEBAR ============ */
+    .sidebar {
+      position: sticky;
+      top: 88px;
+      background: var(--sidebar-bg);
+      border: 1px solid var(--sidebar-border);
+      border-radius: 14px;
+      padding: 14px 10px;
+      box-shadow: var(--shadow-sm);
+      max-height: calc(100vh - 104px);
+      overflow-y: auto;
+    }
+    .sidebar .nav-title {
+      font-size: 0.7rem;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      padding: 6px 10px 10px;
+      font-weight: 700;
+    }
+    .sidebar a.nav-link {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      margin: 2px 0;
+      color: var(--sidebar-link);
+      border-radius: 9px;
+      font-size: 0.92rem;
+      font-weight: 500;
+      text-decoration: none;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+    .sidebar a.nav-link:hover {
+      background: var(--sidebar-link-hover-bg);
+      color: var(--text-color);
+    }
+    .sidebar a.nav-link.active {
+      background: var(--sidebar-link-active-bg);
+      color: var(--sidebar-link-active-text);
+      font-weight: 600;
+    }
+    .sidebar a.nav-link .nav-icon {
+      width: 18px;
+      display: inline-flex;
+      justify-content: center;
+      font-size: 0.95rem;
+      opacity: 0.85;
+    }
+
+    /* ============ MAIN CONTENT ============ */
+    .main-content { min-width: 0; }
+    .page-hero {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 22px;
+      padding: 20px 22px;
+      background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.10), rgba(var(--accent-rgb), 0.02));
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+    }
+    .page-hero img { width: 64px; height: 64px; border-radius: 12px; }
+    .page-hero .hero-text h1 { font-size: 1.9rem; }
+    .page-hero .hero-text p { color: var(--text-muted); margin: 2px 0 0 0; font-size: 0.95rem; }
+
+    /* ============ RIGHT RAIL ============ */
+    .right-rail {
+      position: sticky;
+      top: 88px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      max-height: calc(100vh - 104px);
+      overflow-y: auto;
+    }
+    .right-rail .card { margin-bottom: 0; }
+
+    /* ============ CARDS ============ */
+    .card {
+      margin-bottom: 18px;
+      border-radius: 14px;
       background-color: var(--card-bg);
       border: 1px solid var(--card-border);
       color: var(--text-color);
+      box-shadow: var(--shadow-sm);
+      overflow: hidden;
     }
     .card-header {
-      color: #ffffff !important;
-    }
-    pre.tree { 
-      background: var(--tree-bg);
-      padding:15px;
-      border:1px solid var(--card-border);
-      border-radius:5px;
-      white-space:pre-wrap;
-      font-family:monospace;
-      font-size:14px;
-      color: var(--text-color);
-    }
-    .status-dot { height:10px;width:10px;border-radius:50%;display:inline-block;margin-right:5px;}
-    .status-green{background-color:green;} .status-red{background-color:red;}
-    #goTop{position:fixed;bottom:20px;right:20px;background:#007bff;color:white;padding:10px 15px;border-radius:50%;cursor:pointer;}
-    
-    /* Dark mode toggle */
-    .theme-toggle {
+      color: var(--text-color) !important;
+      background: transparent !important;
+      border-bottom: 1px solid var(--card-border);
+      padding: 14px 18px;
+      font-weight: 600;
+      font-size: 0.98rem;
       display: flex;
       align-items: center;
-      margin-left: auto;
-      margin-right: 10px;
+      gap: 10px;
     }
-    .theme-toggle label {
-      margin: 0 10px 0 0;
-      color: #ffffff;
-      font-size: 0.9rem;
+    .card-header::before {
+      content: "";
+      width: 4px;
+      height: 18px;
+      border-radius: 3px;
+      background: var(--accent);
     }
-    .switch {
-      position: relative;
+    .card-header.bg-primary::before { background: #4f8cff; }
+    .card-header.bg-success::before { background: #22c55e; }
+    .card-header.bg-info::before    { background: #06b6d4; }
+    .card-header.bg-warning::before { background: #f59e0b; }
+    .card-header.bg-danger::before  { background: #ef4444; }
+    .card-header.bg-secondary::before { background: #94a3b8; }
+    .card-header.bg-dark::before    { background: var(--accent); }
+    .card-header small { color: var(--text-muted); font-weight: 500; }
+    .card-body { padding: 16px 18px; color: var(--text-color); }
+    .card-title { color: var(--text-color); font-size: 1.4rem; font-weight: 600; }
+    .card-text  { color: var(--text-color); }
+
+    /* Inputs inside cards */
+    .card .form-control, .card .form-control-sm {
+      background-color: var(--bg-elevated);
+      color: var(--text-color);
+      border-color: var(--card-border);
+    }
+    .card .form-control:focus, .card .form-control-sm:focus {
+      background-color: var(--bg-elevated);
+      color: var(--text-color);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 0.15rem rgba(var(--accent-rgb), 0.25);
+    }
+    [data-theme="dark"] .card .form-control::placeholder { color: var(--text-muted); }
+
+    /* ============ TREE ============ */
+    pre.tree {
+      background: var(--tree-bg);
+      padding: 16px;
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      white-space: pre-wrap;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 13px;
+      color: var(--text-color);
+      line-height: 1.55;
+    }
+
+    /* ============ STATUS DOTS ============ */
+    .status-dot {
+      height: 10px; width: 10px;
+      border-radius: 50%;
       display: inline-block;
-      width: 50px;
-      height: 24px;
+      margin-right: 6px;
+      box-shadow: 0 0 0 2px rgba(0,0,0,0.05);
     }
-    .switch input {
-      opacity: 0;
-      width: 0;
-      height: 0;
+    .status-green { background-color: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,0.18); }
+    .status-red   { background-color: #ef4444; box-shadow: 0 0 0 3px rgba(239,68,68,0.18); }
+
+    /* ============ GO TOP ============ */
+    #goTop {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: var(--accent);
+      color: white;
+      width: 44px;
+      height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      cursor: pointer;
+      box-shadow: 0 8px 24px rgba(var(--accent-rgb), 0.4);
+      font-size: 1.2rem;
+      transition: transform 0.15s ease;
     }
+    #goTop:hover { transform: translateY(-2px); }
+
+    /* ============ THEME TOGGLE ============ */
+    .theme-toggle { display: flex; align-items: center; gap: 10px; }
+    .theme-toggle label { margin: 0; color: var(--text-muted); font-size: 0.85rem; }
+    .switch { position: relative; display: inline-block; width: 46px; height: 24px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
     .slider {
       position: absolute;
       cursor: pointer;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background-color: #ccc;
-      transition: .4s;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #d3d6e0;
+      transition: 0.25s;
       border-radius: 24px;
     }
     .slider:before {
       position: absolute;
       content: "";
-      height: 18px;
-      width: 18px;
-      left: 3px;
-      bottom: 3px;
+      height: 18px; width: 18px;
+      left: 3px; bottom: 3px;
       background-color: white;
-      transition: .4s;
+      transition: 0.25s;
       border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
     }
-    input:checked + .slider {
-      background-color: #007bff;
-    }
-    input:checked + .slider:before {
-      transform: translateX(26px);
-    }
-    
-    /* Table styling for dark mode */
+    input:checked + .slider { background-color: var(--accent); }
+    input:checked + .slider:before { transform: translateX(22px); }
+
+    /* ============ TABLES ============ */
     .table {
       background-color: var(--table-bg);
       color: var(--text-color);
+      margin-bottom: 0;
     }
-    .table td, .table th { 
-      padding: 0.5rem; 
-      font-size: 0.875rem; 
-      word-wrap: break-word; 
+    .table thead th {
+      border-top: none;
+      border-bottom: 1px solid var(--card-border);
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+    }
+    .table td, .table th {
+      padding: 0.6rem 0.75rem;
+      font-size: 0.875rem;
+      word-wrap: break-word;
       overflow-wrap: break-word;
       background-color: var(--table-bg);
       color: var(--text-color);
       border-color: var(--card-border);
+      vertical-align: middle;
     }
-    .table-striped tbody tr:nth-of-type(odd) {
-      background-color: var(--table-stripe);
+    .table-striped tbody tr:nth-of-type(odd) { background-color: var(--table-stripe); }
+    .table-striped tbody tr:nth-of-type(odd) td { background-color: var(--table-stripe); }
+    .table td:first-child { max-width: 220px; white-space: normal; }
+    .table-hover tbody tr:hover { background-color: rgba(var(--accent-rgb), 0.06); }
+    .table-hover tbody tr:hover td { background-color: rgba(var(--accent-rgb), 0.06); }
+
+    /* ============ BUTTONS ============ */
+    .btn { border-radius: 9px; font-weight: 500; }
+    .btn-primary { background-color: var(--accent); border-color: var(--accent); }
+    .btn-primary:hover { background-color: var(--accent); border-color: var(--accent); opacity: 0.9; }
+
+    /* ============ ERRORS PRE ============ */
+    #errors {
+      color: var(--text-color);
+      background-color: var(--tree-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 12px;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 12px;
     }
-    .table td:first-child { 
-      max-width: 200px; 
-      white-space: normal;
+
+    /* ============ FOOTER ============ */
+    .footer {
+      text-align: center;
+      padding: 24px 0;
+      margin-top: 36px;
+      border-top: 1px solid var(--card-border);
+      color: var(--text-muted);
     }
-    
-    /* Responsive table containers */
+    .footer p { margin: 0; font-size: 0.85rem; }
+
+    /* ============ COLLAPSE CHEVRON ============ */
+    .card-header[data-toggle="collapse"] { cursor: pointer; user-select: none; }
+    .card-header[data-toggle="collapse"]::after {
+      content: "▾";
+      margin-left: auto;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      transition: transform 0.2s ease;
+    }
+    .card-header[data-toggle="collapse"].collapsed::after { transform: rotate(-90deg); }
+
+    /* ============ RESPONSIVE ============ */
+    @media (max-width: 1200px) {
+      .app-shell { grid-template-columns: 200px minmax(0, 1fr); }
+      .right-rail { display: none; }
+    }
+    @media (max-width: 900px) {
+      .app-shell { grid-template-columns: 1fr; padding: 16px; }
+      .sidebar { position: static; max-height: none; }
+      .page-hero { flex-direction: column; text-align: center; }
+    }
     @media (max-width: 768px) {
       .col-md-4 { margin-bottom: 1rem; }
       .table-responsive { font-size: 0.8rem; }
     }
-    
-    /* Dark mode navbar */
-    [data-theme="dark"] .navbar-dark {
-      background-color: var(--navbar-bg) !important;
-    }
-    
-    /* Fix error logs text color in dark mode */
-    #errors {
-      color: var(--text-color);
-      background-color: var(--tree-bg);
-    }
 
-    /* Footer styling */
-    .footer {
-      text-align: center;
-      padding: 20px 0;
-      margin-top: 40px;
-      border-top: 1px solid var(--card-border);
-      color: var(--text-color);
-    }
-    .footer p {
-      margin: 0;
-      font-size: 0.9rem;
+    /* Sidebar scrollbar */
+    .sidebar::-webkit-scrollbar, .right-rail::-webkit-scrollbar { width: 6px; }
+    .sidebar::-webkit-scrollbar-thumb, .right-rail::-webkit-scrollbar-thumb {
+      background: var(--card-border);
+      border-radius: 3px;
     }
   </style>
 </head>
 <body>
-  <nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top">
-    <span class="navbar-brand mb-0 h1">FuzzyFeeds Dashboard</span>
-    <div class="theme-toggle">
-      <label for="theme-switch">Dark Mode</label>
-      <label class="switch">
-        <input type="checkbox" id="theme-switch">
-        <span class="slider"></span>
-      </label>
+  <nav class="topbar">
+    <div class="brand">
+      <img src="/static/images/fuzzyfeeds-logo-sm.png" alt="FuzzyFeeds">
+      <span>Fuzzy<span class="accent">Feeds</span></span>
     </div>
-    <button id="clear_logs_btn" class="btn btn-danger ml-auto">Clear Logs</button>
+    <div class="spacer"></div>
+    <div class="topbar-actions">
+      <div class="theme-toggle">
+        <label for="theme-switch">Dark</label>
+        <label class="switch">
+          <input type="checkbox" id="theme-switch">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <button id="clear_logs_btn" class="btn btn-danger btn-sm">Clear Logs</button>
+    </div>
   </nav>
 
-  <div class="container">
-    <h1 class="mt-4">
-      <img src="/static/images/fuzzyfeeds-logo-sm.png" width="100" height="100" alt="Logo">
-      FuzzyFeeds Analytics Dashboard
-    </h1>
-    <p class="lead">Monitor uptime, feeds, subscriptions, and errors.</p>
+  <div class="app-shell">
+    <aside class="sidebar" id="sideNav">
+      <div class="nav-title">Dashboard</div>
+      <a href="#section-overview" class="nav-link"><span class="nav-icon">⌂</span>Overview</a>
+      <a href="#section-activity" class="nav-link"><span class="nav-icon">📈</span>Activity</a>
+      <a href="#section-analytics" class="nav-link"><span class="nav-icon">📊</span>Analytics</a>
+      <a href="#section-history" class="nav-link"><span class="nav-icon">🕒</span>History</a>
+      <a href="#section-health" class="nav-link"><span class="nav-icon">🩺</span>Feed Health</a>
+      <a href="#section-feedmgmt" class="nav-link"><span class="nav-icon">⚙</span>Feed Management</a>
+      <div class="nav-title">Platforms</div>
+      <a href="#section-irc-matrix" class="nav-link"><span class="nav-icon">💬</span>Chat Rooms</a>
+      <a href="#section-mastodon-bluesky" class="nav-link"><span class="nav-icon">🐘</span>Social</a>
+      <a href="#section-webhooks" class="nav-link"><span class="nav-icon">🔗</span>Webhooks</a>
+      <div class="nav-title">Tools</div>
+      <a href="#section-scheduling" class="nav-link"><span class="nav-icon">⏱</span>Scheduling</a>
+      <a href="#section-preferences" class="nav-link"><span class="nav-icon">👤</span>User Prefs</a>
+      <a href="#section-templates" class="nav-link"><span class="nav-icon">📄</span>Templates</a>
+      <a href="#section-tree" class="nav-link"><span class="nav-icon">🌳</span>Feed Tree</a>
+      <a href="#section-command" class="nav-link"><span class="nav-icon">⌘</span>Command</a>
+      <a href="#section-errors" class="nav-link"><span class="nav-icon">⚠</span>Errors</a>
+    </aside>
 
-    <div class="row">
-      <!-- Stats Card -->
-      <div class="col-md-4">
-        <div class="card">
-          <div class="card-header bg-primary text-white">Stats</div>
-          <div class="card-body">
-            <h5 id="uptime" class="card-title">Uptime: {{ uptime }}</h5>
-            <div id="irc_status_container">
-              {% for srv in irc_servers %}
-                <div><span class="status-dot {% if irc_status[srv]=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>IRC:</strong> {{ srv }}</div>
-              {% endfor %}
-            </div>
-            <div id="matrix_status_container">
-              <span class="status-dot {% if matrix_status=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>Matrix:</strong> {{ matrix_server }}
-            </div>
-            <div id="discord_status_container">
-              <span class="status-dot {% if discord_status=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>Discord:</strong> {{ discord_server }}
-            </div>
-            <div id="telegram_status_container">
-              <span class="status-dot {% if telegram_status=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>Telegram:</strong> telegram.org
-            </div>
-            <div id="mastodon_status_container">
-              <span class="status-dot {% if mastodon_status=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>Mastodon:</strong> {{ mastodon_instance }}
-            </div>
-            <div id="bluesky_status_container">
-              <span class="status-dot {% if bluesky_status=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>Bluesky:</strong> bsky.social
-            </div>
-            <hr>
-            <div id="posted_counts">
-              <strong>Feeds Posted:</strong><br>
-              IRC: <span id="irc_posted">0</span><br>
-              Matrix: <span id="matrix_posted">0</span><br>
-              Discord: <span id="discord_posted">0</span><br>
-              Telegram: <span id="telegram_posted">0</span><br>
-              Mastodon: <span id="mastodon_posted">0</span><br>
-              Bluesky: <span id="bluesky_posted">0</span>
-            </div>
-          </div>
+    <main class="main-content">
+      <header class="page-hero" id="section-overview">
+        <img src="/static/images/fuzzyfeeds-logo-sm.png" alt="Logo">
+        <div class="hero-text">
+          <h1>FuzzyFeeds Analytics</h1>
+          <p>Monitor uptime, feeds, subscriptions, and errors.</p>
         </div>
-      </div>
+      </header>
 
-      <!-- Total Channel Feeds Card -->
-      <div class="col-md-4">
+    <!-- Activity Chart -->
+    <div class="row" id="section-activity">
+      <div class="col-md-12">
         <div class="card">
-          <div class="card-header bg-success text-white">Total Channel Feeds</div>
-          <div class="card-body">
-            <h5 id="total_feeds" class="card-title">{{ total_feeds }} feeds</h5>
-            <p class="card-text">Across <span id="total_channels">{{ total_channels }}</span> channels/rooms.</p>
-            <hr>
-            <div id="feed_totals">
-              IRC: <span id="irc_feeds">{{ irc_feeds_count }}</span> feeds across <span id="irc_chans">{{ irc_chans_count }}</span> channels<br>
-              Matrix: <span id="matrix_feeds">{{ matrix_feeds_count }}</span> feeds across <span id="matrix_chans">{{ matrix_chans_count }}</span> rooms<br>
-              Discord: <span id="discord_feeds">{{ discord_feeds_count }}</span> feeds across <span id="discord_chans">{{ discord_chans_count }}</span> channels<br>
-              Telegram: <span id="telegram_feeds">{{ telegram_feeds_count }}</span> feeds across <span id="telegram_chans">{{ telegram_chans_count }}</span> chats<br>
-              Mastodon: <span id="mastodon_feeds">{{ mastodon_feeds_count }}</span> feeds<br>
-              Bluesky: <span id="bluesky_feeds">{{ bluesky_feeds_count }}</span> feeds
-            </div>
+          <div class="card-header bg-primary text-white">
+            <span>Posts Activity</span>
+            <small id="activityTotalLabel" style="margin-left:auto;"></small>
+            <select id="activityRange" class="form-control form-control-sm" style="width:auto; margin-left:10px;">
+              <option value="7">7 days</option>
+              <option value="14" selected>14 days</option>
+              <option value="30">30 days</option>
+              <option value="60">60 days</option>
+            </select>
           </div>
-        </div>
-      </div>
-
-      <!-- User Subscriptions Card -->
-      <div class="col-md-4">
-        <div class="card">
-          <div class="card-header bg-info text-white">User Subscriptions</div>
           <div class="card-body">
-            <h5 id="total_subscriptions" class="card-title">{{ total_subscriptions }} total</h5>
-            <p class="card-text" style="font-size:0.9em;">
-              {% for user, subs in subscriptions.items() %}
-                {{ user }}: {{ subs|length }}<br/>
-              {% endfor %}
-            </p>
+            <div style="position:relative; height:280px;">
+              <canvas id="activityChart"></canvas>
+            </div>
           </div>
         </div>
       </div>
     </div>
 
     <!-- Feed Analytics Section -->
-    <div class="row">
+    <div class="row" id="section-analytics">
       <div class="col-md-12">
         <div class="card">
           <div class="card-header bg-warning text-dark" style="cursor: pointer;" data-toggle="collapse" data-target="#analyticsCollapse">
@@ -810,7 +1031,7 @@ DASHBOARD_TEMPLATE = r"""
     </div>
 
     <!-- Feed History Search -->
-    <div class="row">
+    <div class="row" id="section-history">
       <div class="col-md-12">
         <div class="card">
           <div class="card-header bg-info text-white" style="cursor: pointer;" data-toggle="collapse" data-target="#historyCollapse">
@@ -859,7 +1080,7 @@ DASHBOARD_TEMPLATE = r"""
     </div>
 
     <!-- Feed Health Monitor -->
-    <div class="row">
+    <div class="row" id="section-health">
       <div class="col-md-12">
         <div class="card">
           <div class="card-header bg-danger text-white" style="cursor: pointer;" data-toggle="collapse" data-target="#healthCollapse">
@@ -907,7 +1128,7 @@ DASHBOARD_TEMPLATE = r"""
     </div>
 
     <!-- Feed Management -->
-    <div class="row">
+    <div class="row" id="section-feedmgmt">
       <div class="col-md-12">
         <div class="card">
           <div class="card-header bg-success text-white" style="cursor: pointer;" data-toggle="collapse" data-target="#feedMgmtCollapse">
@@ -974,7 +1195,7 @@ DASHBOARD_TEMPLATE = r"""
     </div>
 
     <!-- IRC / Matrix / Discord / Telegram Tables -->
-    <div class="row">
+    <div class="row" id="section-irc-matrix">
       <div class="col-lg-3 col-md-6 col-sm-12">
         <div class="card">
           <div class="card-header bg-primary text-white">IRC Channels</div>
@@ -1076,7 +1297,7 @@ DASHBOARD_TEMPLATE = r"""
     </div>
 
     <!-- Mastodon / Bluesky Cards -->
-    <div class="row">
+    <div class="row" id="section-mastodon-bluesky">
       <div class="col-lg-6 col-md-6 col-sm-12">
         <div class="card">
           <div class="card-header text-white" style="background-color:#6364ff;">Mastodon <small>({{ mastodon_instance }})</small></div>
@@ -1127,7 +1348,7 @@ DASHBOARD_TEMPLATE = r"""
     </div>
 
     <!-- Webhooks (collapsible) -->
-    <div class="row">
+    <div class="row" id="section-webhooks">
       <div class="col-md-12">
         <div class="card">
           <div class="card-header bg-secondary text-white" style="cursor: pointer;" data-toggle="collapse" data-target="#webhooksCollapse">
@@ -1201,7 +1422,7 @@ DASHBOARD_TEMPLATE = r"""
     </div>
 
     <!-- Feed Scheduling Management -->
-    <div class="row">
+    <div class="row" id="section-scheduling">
       <div class="col-md-12">
         <div class="card">
           <div class="card-header bg-success text-white" style="cursor: pointer;" data-toggle="collapse" data-target="#schedulingCollapse">
@@ -1264,7 +1485,7 @@ DASHBOARD_TEMPLATE = r"""
     </div>
 
     <!-- User Preferences Management -->
-    <div class="row">
+    <div class="row" id="section-preferences">
       <div class="col-md-12">
         <div class="card">
           <div class="card-header bg-info text-white" style="cursor: pointer;" data-toggle="collapse" data-target="#preferencesCollapse">
@@ -1306,7 +1527,7 @@ DASHBOARD_TEMPLATE = r"""
     </div>
 
     <!-- Feed Templates Management -->
-    <div class="row">
+    <div class="row" id="section-templates">
       <div class="col-md-12">
         <div class="card">
           <div class="card-header bg-warning text-dark" style="cursor: pointer;" data-toggle="collapse" data-target="#templatesCollapse">
@@ -1368,7 +1589,7 @@ DASHBOARD_TEMPLATE = r"""
     </div>
 
     <!-- Fuzzy Tree -->
-    <div class="row">
+    <div class="row" id="section-tree">
       <div class="col-md-12">
         <div class="card">
           <div class="card-header bg-dark text-white">Fuzzy Tree</div>
@@ -1380,7 +1601,7 @@ DASHBOARD_TEMPLATE = r"""
     </div>
 
     <!-- Command Interface -->
-    <div class="row">
+    <div class="row" id="section-command">
       <div class="col-md-12">
         <div class="card">
           <div class="card-header bg-primary text-white">
@@ -1402,7 +1623,7 @@ DASHBOARD_TEMPLATE = r"""
     </div>
 
     <!-- Errors -->
-    <div class="row">
+    <div class="row" id="section-errors">
       <div class="col-md-12">
         <div class="card">
           <div class="card-header bg-danger text-white">Errors</div>
@@ -1412,6 +1633,79 @@ DASHBOARD_TEMPLATE = r"""
         </div>
       </div>
     </div>
+
+    </main>
+
+    <aside class="right-rail">
+      <!-- Stats Card -->
+      <div class="card">
+        <div class="card-header bg-primary text-white">Status</div>
+        <div class="card-body">
+          <h5 id="uptime" class="card-title">Uptime: {{ uptime }}</h5>
+          <div id="irc_status_container">
+            {% for srv in irc_servers %}
+              <div><span class="status-dot {% if irc_status[srv]=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>IRC:</strong> {{ srv }}</div>
+            {% endfor %}
+          </div>
+          <div id="matrix_status_container">
+            <span class="status-dot {% if matrix_status=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>Matrix:</strong> {{ matrix_server }}
+          </div>
+          <div id="discord_status_container">
+            <span class="status-dot {% if discord_status=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>Discord:</strong> {{ discord_server }}
+          </div>
+          <div id="telegram_status_container">
+            <span class="status-dot {% if telegram_status=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>Telegram:</strong> telegram.org
+          </div>
+          <div id="mastodon_status_container">
+            <span class="status-dot {% if mastodon_status=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>Mastodon:</strong> {{ mastodon_instance }}
+          </div>
+          <div id="bluesky_status_container">
+            <span class="status-dot {% if bluesky_status=='green' %}status-green{% else %}status-red{% endif %}"></span><strong>Bluesky:</strong> bsky.social
+          </div>
+          <hr>
+          <div id="posted_counts">
+            <strong>Feeds Posted:</strong><br>
+            IRC: <span id="irc_posted">0</span><br>
+            Matrix: <span id="matrix_posted">0</span><br>
+            Discord: <span id="discord_posted">0</span><br>
+            Telegram: <span id="telegram_posted">0</span><br>
+            Mastodon: <span id="mastodon_posted">0</span><br>
+            Bluesky: <span id="bluesky_posted">0</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Total Channel Feeds Card -->
+      <div class="card">
+        <div class="card-header bg-success text-white">Total Channel Feeds</div>
+        <div class="card-body">
+          <h5 id="total_feeds" class="card-title">{{ total_feeds }} feeds</h5>
+          <p class="card-text">Across <span id="total_channels">{{ total_channels }}</span> channels/rooms.</p>
+          <hr>
+          <div id="feed_totals">
+            IRC: <span id="irc_feeds">{{ irc_feeds_count }}</span> feeds across <span id="irc_chans">{{ irc_chans_count }}</span> channels<br>
+            Matrix: <span id="matrix_feeds">{{ matrix_feeds_count }}</span> feeds across <span id="matrix_chans">{{ matrix_chans_count }}</span> rooms<br>
+            Discord: <span id="discord_feeds">{{ discord_feeds_count }}</span> feeds across <span id="discord_chans">{{ discord_chans_count }}</span> channels<br>
+            Telegram: <span id="telegram_feeds">{{ telegram_feeds_count }}</span> feeds across <span id="telegram_chans">{{ telegram_chans_count }}</span> chats<br>
+            Mastodon: <span id="mastodon_feeds">{{ mastodon_feeds_count }}</span> feeds<br>
+            Bluesky: <span id="bluesky_feeds">{{ bluesky_feeds_count }}</span> feeds
+          </div>
+        </div>
+      </div>
+
+      <!-- User Subscriptions Card -->
+      <div class="card">
+        <div class="card-header bg-info text-white">User Subscriptions</div>
+        <div class="card-body">
+          <h5 id="total_subscriptions" class="card-title">{{ total_subscriptions }} total</h5>
+          <p class="card-text" style="font-size:0.9em;">
+            {% for user, subs in subscriptions.items() %}
+              {{ user }}: {{ subs|length }}<br/>
+            {% endfor %}
+          </p>
+        </div>
+      </div>
+    </aside>
 
   </div>
   <div id="goTop" onclick="window.scrollTo({top: 0, behavior: 'smooth'});">⇧</div>
@@ -2622,6 +2916,157 @@ DASHBOARD_TEMPLATE = r"""
         $(this).prev('.card-header').find('.fa-chevron-up').removeClass('fa-chevron-up').addClass('fa-chevron-down');
       });
     });
+
+    // Activity chart (Chart.js)
+    (function() {
+      if (typeof Chart === 'undefined') return;
+      const canvas = document.getElementById('activityChart');
+      if (!canvas) return;
+      const rangeSelect = document.getElementById('activityRange');
+      const totalLabel = document.getElementById('activityTotalLabel');
+
+      const PALETTE = {
+        irc:      '#4f8cff',
+        matrix:   '#22c55e',
+        discord:  '#5865f2',
+        telegram: '#06b6d4',
+        mastodon: '#6364ff',
+        bluesky:  '#0085ff',
+        webhook:  '#94a3b8',
+      };
+      const PRETTY = {
+        irc: 'IRC', matrix: 'Matrix', discord: 'Discord',
+        telegram: 'Telegram', mastodon: 'Mastodon',
+        bluesky: 'Bluesky', webhook: 'Webhooks',
+      };
+
+      let chart = null;
+
+      function gridColor() {
+        const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        return dark ? 'rgba(255,255,255,0.06)' : 'rgba(20,25,50,0.08)';
+      }
+      function tickColor() {
+        const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        return dark ? '#a4abc4' : '#6c7293';
+      }
+
+      function hexToRgba(hex, alpha) {
+        const m = hex.replace('#', '');
+        const r = parseInt(m.substring(0, 2), 16);
+        const g = parseInt(m.substring(2, 4), 16);
+        const b = parseInt(m.substring(4, 6), 16);
+        return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+      }
+      function buildDatasets(series) {
+        return Object.keys(series).map(p => {
+          const color = PALETTE[p] || '#7c3aed';
+          return {
+            label: PRETTY[p] || p,
+            data: series[p],
+            borderColor: color,
+            backgroundColor: hexToRgba(color, 0.18),
+            borderWidth: 2,
+            tension: 0.35,
+            fill: true,
+            pointRadius: 2,
+            pointHoverRadius: 5,
+            pointBackgroundColor: color,
+            pointBorderColor: color,
+            spanGaps: true,
+          };
+        });
+      }
+
+      async function load(days) {
+        try {
+          const r = await fetch('/activity_chart_data?days=' + days);
+          const data = await r.json();
+          const total = (data.total || []).reduce((a, b) => a + b, 0);
+          if (totalLabel) totalLabel.textContent = total + ' posts';
+          const datasets = buildDatasets(data.series || {});
+          if (chart) {
+            chart.data.labels = data.labels;
+            chart.data.datasets = datasets;
+            chart.options.scales.x.grid.color = gridColor();
+            chart.options.scales.y.grid.color = gridColor();
+            chart.options.scales.x.ticks.color = tickColor();
+            chart.options.scales.y.ticks.color = tickColor();
+            chart.options.plugins.legend.labels.color = tickColor();
+            chart.update();
+          } else {
+            chart = new Chart(canvas.getContext('2d'), {
+              type: 'line',
+              data: { labels: data.labels, datasets: datasets },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                  legend: { position: 'bottom', labels: { color: tickColor(), boxWidth: 12, padding: 14, usePointStyle: true } },
+                  tooltip: { mode: 'index', intersect: false },
+                },
+                scales: {
+                  x: { grid: { color: gridColor() }, ticks: { color: tickColor(), maxRotation: 0, autoSkip: true, maxTicksLimit: 10 } },
+                  y: { beginAtZero: true, grid: { color: gridColor() }, ticks: { color: tickColor(), precision: 0 } },
+                },
+              },
+            });
+          }
+        } catch (e) {
+          console.error('activity chart load failed', e);
+        }
+      }
+
+      function currentRange() { return rangeSelect ? parseInt(rangeSelect.value, 10) || 14 : 14; }
+      if (rangeSelect) rangeSelect.addEventListener('change', () => load(currentRange()));
+      load(currentRange());
+      setInterval(() => load(currentRange()), 60000);
+
+      // Re-tint axes/legend on theme switch
+      const themeSwitchEl = document.getElementById('theme-switch');
+      if (themeSwitchEl) themeSwitchEl.addEventListener('change', () => {
+        if (!chart) return;
+        chart.options.scales.x.grid.color = gridColor();
+        chart.options.scales.y.grid.color = gridColor();
+        chart.options.scales.x.ticks.color = tickColor();
+        chart.options.scales.y.ticks.color = tickColor();
+        chart.options.plugins.legend.labels.color = tickColor();
+        chart.update();
+      });
+    })();
+
+    // Sidebar nav: smooth-scroll with offset for the fixed topbar + active highlighting
+    (function() {
+      const TOPBAR_OFFSET = 80;
+      const navLinks = document.querySelectorAll('.sidebar a.nav-link[href^="#"]');
+      const sections = Array.from(navLinks)
+        .map(a => document.querySelector(a.getAttribute('href')))
+        .filter(Boolean);
+
+      navLinks.forEach(link => {
+        link.addEventListener('click', function(e) {
+          const targetId = link.getAttribute('href');
+          const target = document.querySelector(targetId);
+          if (!target) return;
+          e.preventDefault();
+          const y = target.getBoundingClientRect().top + window.pageYOffset - TOPBAR_OFFSET;
+          window.scrollTo({ top: y, behavior: 'smooth' });
+          history.replaceState(null, '', targetId);
+        });
+      });
+
+      function setActive() {
+        const scrollY = window.pageYOffset + TOPBAR_OFFSET + 4;
+        let activeIdx = 0;
+        sections.forEach((sec, idx) => {
+          if (sec.offsetTop <= scrollY) activeIdx = idx;
+        });
+        navLinks.forEach((l, i) => l.classList.toggle('active', i === activeIdx));
+      }
+      setActive();
+      window.addEventListener('scroll', setActive, { passive: true });
+    })();
   </script>
 </body>
 </html>
@@ -2868,6 +3313,53 @@ def analytics_data():
             "broken_feeds": [],
             "stale_feeds": []
         })
+
+@app.route('/activity_chart_data')
+@requires_auth
+def activity_chart_data():
+    """Daily post counts per platform for the last N days (default 14)."""
+    try:
+        from database import get_db
+        import datetime as _dt
+        days = max(1, min(int(request.args.get('days', 14)), 60))
+        db = get_db()
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT date(posted_at) AS day, platform, COUNT(*) AS n
+            FROM feed_history
+            WHERE posted_at >= datetime('now', ?)
+            GROUP BY day, platform
+            ORDER BY day ASC
+        ''', (f'-{days} days',))
+        rows = cursor.fetchall()
+
+        today = _dt.date.today()
+        labels = [(today - _dt.timedelta(days=i)).isoformat() for i in range(days - 1, -1, -1)]
+        platforms = ["irc", "matrix", "discord", "telegram", "mastodon", "bluesky", "webhook"]
+        series = {p: [0] * days for p in platforms}
+        label_index = {d: i for i, d in enumerate(labels)}
+
+        for row in rows:
+            day = row['day'] if isinstance(row, dict) or hasattr(row, 'keys') else row[0]
+            plat = (row['platform'] if hasattr(row, 'keys') else row[1]) or ''
+            n = row['n'] if hasattr(row, 'keys') else row[2]
+            plat = plat.lower().strip()
+            if plat.startswith('webhook'):
+                plat = 'webhook'
+            if plat in series and day in label_index:
+                series[plat][label_index[day]] += int(n)
+
+        total = [sum(series[p][i] for p in platforms) for i in range(days)]
+        return jsonify({
+            "labels": labels,
+            "series": series,
+            "total": total,
+            "days": days,
+        })
+    except Exception as e:
+        logging.error(f"Activity chart data error: {e}")
+        return jsonify({"labels": [], "series": {}, "total": [], "days": 0})
 
 @app.route('/search_history', methods=['POST'])
 @requires_auth

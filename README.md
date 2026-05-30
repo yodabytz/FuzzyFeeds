@@ -1,6 +1,6 @@
 # FuzzyFeeds - Multi-Platform RSS Bot
 
-**Version 1.2.3**
+**Version 1.2.4**
 
 🌐 **Official Website:** [https://www.fuzzyfeeds.com](https://www.fuzzyfeeds.com)
 
@@ -264,6 +264,23 @@ FuzzyFeeds includes comprehensive proxy support for bypassing IP blocks and enha
 See `PROXY_README.md` for detailed proxy configuration instructions and use cases.
 
 ## Recent Updates & Fixes
+
+**Version 1.2.4 (May 30, 2026):**
+- ✅ **Dashboard Redesign**: Modern three-zone control-panel layout
+  - Fixed top bar with brand mark, dark-mode toggle, and Clear Logs action
+  - Sticky left sidebar with grouped anchor links (Dashboard / Platforms / Tools) and scroll-spy active highlighting
+  - Main content column hosts all existing sections in a single readable column
+  - Sticky right rail surfaces the at-a-glance cards: connection status, total channel feeds, and user subscriptions
+  - Refreshed card styling — rounded corners, subtle shadows, per-section accent bars
+  - Both light and dark themes reworked with a unified purple-accent palette (`#7c3aed` light, `#a78bfa` dark)
+  - Responsive: right rail hides under 1200px, sidebar collapses above the main column under 900px
+- ✅ **Posts Activity Chart**: New time-series line chart pinned beneath the page hero
+  - Filled, smooth-tension line series per platform (IRC, Matrix, Discord, Telegram, Mastodon, Bluesky, Webhooks)
+  - Range selector (7 / 14 / 30 / 60 days) and live total counter in the card header
+  - Auto-refreshes every 60 seconds and re-tints axes/legend when the theme toggle is flipped
+  - Backed by a new `/activity_chart_data` endpoint that aggregates `feed_history.posted_at` directly from SQLite
+- ✅ **Chart.js with SRI**: Loaded from jsDelivr with Subresource Integrity to guard against CDN compromise
+- ✅ **Section anchors**: Every dashboard section now has a stable `id` so deep links from the sidebar (and elsewhere) jump cleanly with topbar-aware offset
 
 **Version 1.2.3 (April 16, 2026):**
 - ✅ **Mastodon Integration**: Outbound posts to a Mastodon account using an instance access token
