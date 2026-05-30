@@ -24,6 +24,35 @@ logging.basicConfig(level=logging.INFO)
 # Startup feeds counter file
 STARTUP_FEEDS_FILE = os.path.join(os.path.dirname(__file__), "startup_feeds_count.json")
 
+def _record_history_to_db(feed_name, url, chan, platform, title, link):
+    """Best-effort write to feed_history so the dashboard activity chart has data.
+
+    Lazily creates the feeds row if it's missing (the JSON-based feed store is
+    the source of truth; the DB row exists only to satisfy the feed_history
+    foreign key). Silent on any failure — must never interrupt polling.
+    """
+    try:
+        from database import get_db
+        db = get_db()
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT id FROM feeds WHERE name = ? AND channel = ?', (feed_name, chan))
+        row = cursor.fetchone()
+        if row is not None:
+            feed_id = row['id'] if hasattr(row, 'keys') else row[0]
+        else:
+            feed_id = db.add_feed(feed_name, url, chan, platform)
+            if not feed_id:
+                cursor.execute('SELECT id FROM feeds WHERE name = ? AND channel = ?', (feed_name, chan))
+                r = cursor.fetchone()
+                feed_id = (r['id'] if hasattr(r, 'keys') else r[0]) if r else None
+        if feed_id:
+            db.add_to_history(feed_id=feed_id, title=title, link=link,
+                              channel=chan, platform=platform)
+    except Exception as e:
+        logging.debug(f"feed_history write skipped for {feed_name}@{chan}: {e}")
+
+
 def increment_startup_feeds_counter(platform):
     """Increment the startup feeds counter for the given platform"""
     try:
@@ -99,6 +128,7 @@ def poll_feeds(irc_send=None, matrix_send=None, discord_send=None, telegram_send
 
                 # Mark as posted
                 mark_link_posted(chan, link)
+                _record_history_to_db(feed_name, url, chan, chan_type, title, link)
 
                 # Prepare public messages
                 title_msg = f"{feed_name}: {title}"
