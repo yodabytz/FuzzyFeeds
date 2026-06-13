@@ -14,7 +14,7 @@ except ImportError:
     logging.warning("Proxy support not available for HTTP requests")
     PROXY_AVAILABLE = False
 
-feedparser.USER_AGENT = "FuzzyFeedsBot/1.0 (+https://github.com/YourUser/YourRepo)"
+feedparser.USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) FuzzyFeeds/1.0"
 
 FEEDS_FILE = os.path.join(os.path.dirname(__file__), "feeds.json")
 SUBSCRIPTIONS_FILE = "subscriptions.json"
@@ -47,7 +47,7 @@ class FeedStore:
 
 def parse_with_custom_user_agent(url):
     headers = {
-        "User-Agent": "FuzzyFeedsBot/1.0 (+https://github.com/YourUser/YourRepo)"
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) FuzzyFeeds/1.0"
     }
     try:
         # Check if URL should bypass proxy (whitelisted)

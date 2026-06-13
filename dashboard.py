@@ -3001,10 +3001,10 @@ DASHBOARD_TEMPLATE = r"""
               options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
+                interaction: { mode: 'nearest', intersect: false, axis: 'xy' },
                 plugins: {
                   legend: { position: 'bottom', labels: { color: tickColor(), boxWidth: 12, padding: 14, usePointStyle: true } },
-                  tooltip: { mode: 'index', intersect: false },
+                  tooltip: { mode: 'nearest', intersect: false, axis: 'xy' },
                 },
                 scales: {
                   x: { grid: { color: gridColor() }, ticks: { color: tickColor(), maxRotation: 0, autoSkip: true, maxTicksLimit: 10 } },
@@ -3898,6 +3898,12 @@ def add_feed():
             feeds[channel][name] = url
             with open(feeds_file, 'w') as f:
                 json.dump(feeds, f, indent=4)
+
+        try:
+            from proxy_utils import add_to_runtime_whitelist
+            add_to_runtime_whitelist(url)
+        except Exception as e:
+            logging.debug(f"runtime whitelist update skipped: {e}")
 
         return jsonify({'success': True, 'feed_id': feed_id, 'message': f'Feed {name} added to {channel}'})
     except Exception as e:

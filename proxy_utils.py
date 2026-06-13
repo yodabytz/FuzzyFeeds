@@ -4,6 +4,8 @@ Proxy utility module for FuzzyFeeds
 Supports SOCKS4, SOCKS5, HTTP, and HTTPS proxies
 """
 
+import json
+import os
 import socket
 import socks
 import urllib.request
@@ -12,7 +14,7 @@ import ssl
 import logging
 from urllib.parse import urlparse
 from config import (
-    enable_proxy, proxy_type, proxy_host, proxy_port, 
+    enable_proxy, proxy_type, proxy_host, proxy_port,
     proxy_username, proxy_password,
     proxy_irc, proxy_http, proxy_matrix, proxy_discord
 )
@@ -29,6 +31,68 @@ try:
 except ImportError:
     proxy_whitelist = []
 
+# Runtime whitelist — domains added automatically when a feed is registered,
+# so newly-added feeds bypass the SOCKS proxy by default (a lot of feed hosts
+# block Tor exit nodes). The static config whitelist still applies.
+RUNTIME_WHITELIST_FILE = os.path.join(os.path.dirname(__file__), "proxy_whitelist.json")
+
+
+def _extract_domain(url):
+    """Return the lowercase host of a URL, with port and a leading 'www.' stripped."""
+    try:
+        host = urlparse(url).netloc.lower()
+        if ':' in host:
+            host = host.split(':')[0]
+        if host.startswith('www.'):
+            host = host[4:]
+        return host or None
+    except Exception:
+        return None
+
+
+def _load_runtime_whitelist():
+    """Read the runtime whitelist JSON. Returns an empty list if missing or unreadable."""
+    try:
+        with open(RUNTIME_WHITELIST_FILE, 'r') as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return [str(d).lower() for d in data if d]
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        logging.error(f"Error reading runtime proxy whitelist: {e}")
+    return []
+
+
+def add_to_runtime_whitelist(url):
+    """Add a feed URL's domain to the runtime whitelist so it bypasses the proxy.
+
+    Idempotent: silently no-ops if the domain is already covered by either
+    the static config whitelist or the runtime file. Safe to call from any
+    feed-adding code path; failure is logged but never raised.
+    """
+    domain = _extract_domain(url)
+    if not domain:
+        return False
+    try:
+        for d in proxy_whitelist:
+            d = str(d).lower()
+            if domain == d or domain.endswith('.' + d):
+                return False
+        current = _load_runtime_whitelist()
+        if domain in current:
+            return False
+        current.append(domain)
+        tmp_path = RUNTIME_WHITELIST_FILE + '.tmp'
+        with open(tmp_path, 'w') as f:
+            json.dump(sorted(current), f, indent=2)
+        os.replace(tmp_path, RUNTIME_WHITELIST_FILE)
+        logging.info(f"Added '{domain}' to runtime proxy whitelist (from {url})")
+        return True
+    except Exception as e:
+        logging.error(f"Error updating runtime proxy whitelist for {url}: {e}")
+        return False
+
 def is_url_whitelisted(url):
     """
     Check if a URL's domain is in the proxy whitelist
@@ -39,22 +103,23 @@ def is_url_whitelisted(url):
     Returns:
         bool: True if the domain should bypass proxy, False otherwise
     """
-    if not proxy_whitelist:
-        return False
-    
     try:
         domain = urlparse(url).netloc.lower()
         # Remove port if present
         if ':' in domain:
             domain = domain.split(':')[0]
-        
+
+        combined = list(proxy_whitelist) + _load_runtime_whitelist()
+        if not combined:
+            return False
+
         # Check if domain or any parent domain is in whitelist
-        for whitelisted_domain in proxy_whitelist:
-            whitelisted_domain = whitelisted_domain.lower()
+        for whitelisted_domain in combined:
+            whitelisted_domain = str(whitelisted_domain).lower()
             if domain == whitelisted_domain or domain.endswith('.' + whitelisted_domain):
                 logging.info(f"URL {url} bypassing proxy (whitelisted domain: {whitelisted_domain})")
                 return True
-        
+
         return False
     except Exception as e:
         logging.error(f"Error checking whitelist for {url}: {e}")

@@ -254,6 +254,11 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             feed.subscriptions[user_key] = {}
         feed.subscriptions[user_key][sub_name] = feed_url
         feed.save_subscriptions()
+        try:
+            from proxy_utils import add_to_runtime_whitelist
+            add_to_runtime_whitelist(feed_url)
+        except Exception as e:
+            logging.debug(f"runtime whitelist update skipped: {e}")
         send_private_message_fn(user, f"Subscribed to feed: {sub_name} ({feed_url})")
 
     elif lower_message.startswith("!unsub"):
@@ -387,6 +392,11 @@ def handle_centralized_command(integration, send_message_fn, send_private_messag
             feed.channel_feeds[key] = {}
         feed.channel_feeds[key][feed_name] = feed_url
         feed.save_feeds()
+        try:
+            from proxy_utils import add_to_runtime_whitelist
+            add_to_runtime_whitelist(feed_url)
+        except Exception as e:
+            logging.debug(f"runtime whitelist update skipped: {e}")
         send_message_fn(response_target(actual_channel, integration), f"Feed added: {feed_name} ({feed_url})")
         logging.info(f"User {user_key} added feed '{feed_name}' to {key}")
 
